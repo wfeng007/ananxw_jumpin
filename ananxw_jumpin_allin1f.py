@@ -17,6 +17,8 @@
 # 可以快捷键唤起展示的；
 # 支持钉在桌面最前端，全局热键换出与隐藏；
 # TODO:托盘功能；
+#   [ ]:基本托盘；
+#   [ ]:托盘中提供：工作目录，关闭按钮；
 # 提供基本的提示发送与结果展示界面；
 # 可支持多轮交互；
 # 可支持富文本范围内容展示；
@@ -39,6 +41,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QTextBrowser,
     QLabel,
+    QStyleOption,
 )
 from PySide6.QtGui import (
     QKeySequence,
@@ -47,6 +50,8 @@ from PySide6.QtGui import (
     QTextDocument,
     QTextCursor,
     QMouseEvent,
+    QPainter,
+    QColor,
 )
 from PySide6.QtCore import Qt, QEvent, QObject, QSize,QThread,Signal,Slot
 # from PySide6.QtWebEngineWidgets import QWebEngineView
@@ -82,13 +87,40 @@ from dotenv import load_dotenv, find_dotenv
 __version__ = "0.1.0"
 _ = load_dotenv(find_dotenv())  # 读取本地 .env 文件，里面定义了 OPENAI_API_KEY
  
-class CallableWrapper:
-        def __init__(self, callable_obj:Callable):
-            print(f"new CallableWrapper:{callable_obj}")
-            self.callable:Callable = callable_obj
+       
+class AnanxwJumpinConfig:     
+    MSGSHOWINGPANEL_QSS="""
+    QFrame {
+        border: 1px solid #ccc;
+        border-radius: 5px;
+        background-color: #f9f9f9;
+    }
+    QTextBrowser {
+        background-color: #e0e0e0;
+        border: 1px solid #ccc;
+        border-radius: 3px;
+        padding: 5px;
+    }
+    QTextBrowser[contentOwnerType="ROW_CONTENT_OWNER_TYPE_USER"] {
+        background-color: #e0e0e0;
+        margin-left: 200px; /* 模拟右对齐，实际最好脚本中用layout实现对齐； */
+    }
+    QTextBrowser[contentOwnerType="ROW_CONTENT_OWNER_TYPE_AGENT"] {
+        background-color: #e6e6fa;
+    }
+    
+    """
+    
+    MAIN_WINDOWS_QSS ="""
+    QWidget#jumpin_main_window {
+        /*background-color: #d4f2e7; 这个是特殊背景，用来调试界面样式*/
+        background-color: #fff;
+        border-radius: 10px;
+    }
+    """
 
 
-class AAXSSimpleAIConnAgent:
+class AAXWSimpleAIConnAgent:
    
     """
     连接LLM/Agent的工具类，支持流式获取响应。
@@ -142,13 +174,13 @@ class AIhread(QThread):
     #newContent,id 对应：ShowingPanel.appendToContentById 等回调
     updateUI = Signal(str,str)  
 
-    def __init__(self,text:str,uiCellId:str,llmagent:AAXSSimpleAIConnAgent):
+    def __init__(self,text:str,uiCellId:str,llmagent:AAXWSimpleAIConnAgent):
         super().__init__()
         
         # self.mutex = QMutex()
         self.text:str=text
         self.uiId:str=uiCellId
-        self.llmagent:AAXSSimpleAIConnAgent=llmagent
+        self.llmagent:AAXWSimpleAIConnAgent=llmagent
         
     def run(self):
         self.msleep(500)  # 执行前先等界面渲染
@@ -341,23 +373,23 @@ class AAXWScrollPanel(QFrame):  # 暂时先外面套一层QFrame
     提供了为RowContent追加内容的方式，支持流式获取文本追加到Row中。
     """
     
-    DEFLAUT_STYLE = """ 
+    DEFAULT_STYLE = """ 
+    QTextBrowser {
+        background-color: #a0a0a0;
+        border: 1px solid #ccc;
+        border-radius: 5px;
+        padding: 5px;
+    }
     QFrame {
         border: 1px solid #ccc;
         border-radius: 5px;
         background-color: #f9f9f9;
     }
-    QTextBrowser {
-        background-color: #f9f9f9;
-        border: 1px solid #ccc;
-        border-radius: 2px;
-        padding: 8px;
-    }
     """
 
     # }
 
-    def __init__(self, mainWindow: "AAXWJumpinMainWindow", qss:str=DEFLAUT_STYLE ,parent=None):
+    def __init__(self, mainWindow: "AAXWJumpinMainWindow", qss:str=DEFAULT_STYLE ,parent=None):
         """
         当前控件展示与布局结构：
         AAXWScrollPanel->QVBoxLayout->QScrollArea->QWidget(scrollWidget)->
@@ -392,9 +424,14 @@ class AAXWScrollPanel(QFrame):  # 暂时先外面套一层QFrame
 
     # 用特殊符号最为追加站位标记
     MARKER = "[💬➡️🏁]"
-    ROWBLOCKNAME_PREFIX = "row_block_name"
-
-    def addRowContent(self, content, rowId, contentOwner="unknown", isAtTop=True):
+    ROW_BLOCK_NAME_PREFIX = "row_block_name"
+    # 区分展示内容行的类型
+    ROW_CONTENT_OWNER_TYPE_USER="ROW_CONTENT_OWNER_TYPE_USER"
+    ROW_CONTENT_OWNER_TYPE_AGENT="ROW_CONTENT_OWNER_TYPE_AGENT"
+    ROW_CONTENT_OWNER_TYPE_SYSTEM="ROW_CONTENT_OWNER_TYPE_SYSTEM"
+    
+    def addRowContent(self, content, rowId, contentOwner="unknown", 
+                      contentOwnerType=ROW_CONTENT_OWNER_TYPE_SYSTEM ,isAtTop=True):
         """
         在scrollLayout上添加一个内容行，默认使用QTextBrowser。
         默认在顶端加入；
@@ -403,10 +440,11 @@ class AAXWScrollPanel(QFrame):  # 暂时先外面套一层QFrame
         # 添加 QTextBrowser 并设置 objectName 和自定义属性 id
         tb = QTextBrowser()
         tb.setObjectName(
-            f"{self.ROWBLOCKNAME_PREFIX}_{rowId}"
+            f"{self.ROW_BLOCK_NAME_PREFIX}_{rowId}"
         )  # message row background
         tb.setProperty("id", rowId)
         tb.setProperty("contentOwner", contentOwner)
+        tb.setProperty("contentOwnerType", contentOwnerType)
         # 高度先限定，然后根据内部变化
         tb.setVerticalScrollBarPolicy(
             Qt.ScrollBarAlwaysOff
@@ -416,31 +454,26 @@ class AAXWScrollPanel(QFrame):  # 暂时先外面套一层QFrame
         )  # 可以暂时设置为不出现tb级别滚轮
         # tb.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
-        # 样式设置
-        # 根据 id 设置不同的背景颜色
-        if rowId % 2 == 0:
-            tb.setStyleSheet("background-color: #f0f0f0;")
-        else:
-            tb.setStyleSheet("background-color: #e0e0e0;")
-
         #
         # 默认文本等内容
         # 使用TextDocument来写入内容。
         doc = QTextDocument()
         tb.setDocument(doc)
 
-        # 是不是这里先用
-        # TODO初始化大小样式等比较好？
+        # TODO 初始化tb大小等
 
         ###
         # 连接文档内容变化信号与调整大小的槽函数
         ###
         tb.document().contentsChanged.connect(lambda: self._adjustRowBlockSize(tb))
+        #
+        
         # 设置文本变更调整;
         initial_text = content
         doc.setHtml(initial_text)
         tb.append(self.MARKER)  # 这里增加一个追加内容用的特别Marker
         #
+
 
         # 一般写法 self.scroll_layout.addWidget(tb)
         if isAtTop:
@@ -454,8 +487,8 @@ class AAXWScrollPanel(QFrame):  # 暂时先外面套一层QFrame
         在指定Rowid的Row中追加内容
         """
         # 查找对应的 QTextBrowser 并追加内容
-        tb: QTextBrowser = self.scrollWidget.findChild(
-            QTextBrowser, f"{self.ROWBLOCKNAME_PREFIX}_{rowId}"
+        tb: QTextBrowser = self.scrollWidget.findChild( #TODO 这个搜索子控件的写法是否要优化？
+            QTextBrowser, f"{self.ROW_BLOCK_NAME_PREFIX}_{rowId}"
         )  # 用名字查找元素
         if tb is not None:
             current_text = tb.toHtml()
@@ -480,7 +513,7 @@ class AAXWScrollPanel(QFrame):  # 暂时先外面套一层QFrame
             else:
                 print("not found marker:" + self.MARKER)
         else:
-            print("not found tb by name:" + f"{self.ROWBLOCKNAME_PREFIX}_{rowId}")
+            print("not found tb by name:" + f"{self.ROW_BLOCK_NAME_PREFIX}_{rowId}")
 
     # 
     # Panel的内部基于scroll-widget增加组件后的期望尺寸；
@@ -491,7 +524,7 @@ class AAXWScrollPanel(QFrame):  # 暂时先外面套一层QFrame
         sws = self.scrollArea.widget().size()
         total_height = 0
 
-        # FIXME: 简单大致计算一下margin，实际在外层vboxlayout中增加的部件都要计算
+        # TODO: 简单大致计算一下margin，实际在外层vboxlayout中增加的部件都要计算
         rmargins = self.scrollLayout.contentsMargins()
         total_height += rmargins.top() + rmargins.bottom()
         smargins = self.layout().contentsMargins()
@@ -499,7 +532,7 @@ class AAXWScrollPanel(QFrame):  # 暂时先外面套一层QFrame
         #
 
         total_height += sws.height()
-        print(f"expectantHeight:{total_height}")
+        # print(f"expectantHeight:{total_height}")
         return total_height
         pass
 
@@ -514,14 +547,15 @@ class AAXWScrollPanel(QFrame):  # 暂时先外面套一层QFrame
 
         # 在主窗口的中心 widget（容器 widget）中查找 QTextBrowser
         # 实际可以参考 这个查找代码：text_browser = self.centralWidget().findChild(QTextBrowser)
-        tb = changedTextBrowser
+        tb:QTextBrowser = changedTextBrowser
         # 获取 QTextBrowser 的文档对象
         doc = tb.document()
         # 获取 QTextBrowser 的内容边距
         margins = tb.contentsMargins()
-        # 计算文档高度加上上下边距得到总高度
-        height = (
-            doc.size().height() + margins.top() * 2 + margins.bottom() * 2
+        #  计算文档高度加上上下边距得到总高度
+        # TODO 这里计算的不对，所有tb都需要根据内容来计算高度，获取内容应该。
+        expectantHeight = (
+            doc.size().height() + margins.top() + margins.bottom() + 10 #预期行高增加1行？
         )  # 多增加点margins
 
         # 设置 QTextBrowser 高度对应到size策略
@@ -532,7 +566,8 @@ class AAXWScrollPanel(QFrame):  # 暂时先外面套一层QFrame
 
         # fixed对应fixed策略
         # 调整Row tb高度
-        tb.setFixedHeight(height)
+        if expectantHeight<20: expectantHeight=20
+        tb.setFixedHeight(expectantHeight)
         self.mainWindow.adjustHeight()
 
     #
@@ -541,7 +576,7 @@ class AAXWScrollPanel(QFrame):  # 暂时先外面套一层QFrame
     def eventFilter(self, obj, event):
         if obj is self and event.type() == QEvent.Type.Resize:
             # 调整 QTextBrowser 的大小
-            self._adjustRowBlockSize()
+            self._adjustRowBlockSize() #会调整所有tb的大小。这里用的是setFixedHeight
             return True
         return super().eventFilter(obj, event)
 
@@ -563,11 +598,18 @@ class AAXWJumpinMainWindow(QWidget):
         self.init_ui()
         self.installTabBlocker()
         self.installAppHotKey()
-        self.llmagent=AAXSSimpleAIConnAgent()
+        self.llmagent=AAXWSimpleAIConnAgent()
+    
 
-    # self.input_box.setInputMask("9999")  # 只允许输入四位数字
+    
     def init_ui(self):
-        mainVBoxLayout = QVBoxLayout()  # 界面主布局，垂直上下布局；
+        
+        self.setObjectName("jumpin_main_window")
+        self.setStyleSheet(AnanxwJumpinConfig.MAIN_WINDOWS_QSS)
+        # self.repaint()
+        
+        # 界面主布局，垂直上下布局；
+        mainVBoxLayout = QVBoxLayout()  
 
         # 输入用组件套装的容器布局
         # 输入操作面板 水平布局
@@ -593,15 +635,12 @@ class AAXWJumpinMainWindow(QWidget):
         self.funcButtonRight = QPushButton("⏎", self)
         self.funcButtonRight.clicked.connect(self.rightButtonClicked)
 
-        #  暂时不用额外垂直布局；
-        # self.input_layout = QVBoxLayout()
-        # self.input_layout.addWidget(self.promptInputEdit)
-        # self.input_layout.setContentsMargins(0, 0, 0, 0)  # 设置内边距
-
         # 展示面板
         # 创建 QWebEngineView
         # self.showingPanelWebView = QWebEngineView(parent=self) #跟影藏动作冲突？ visble
-        self.msgShowingPanel = AAXWScrollPanel(mainWindow=self, parent=self)
+        msgShowingPanel=AnanxwJumpinConfig.MSGSHOWINGPANEL_QSS
+        self.msgShowingPanel = AAXWScrollPanel(mainWindow=self, qss=msgShowingPanel,parent=self)
+        
         #
         # 组件到主布局
         inputKitLayout.addWidget(self.funcButtonLeft)
@@ -625,7 +664,8 @@ class AAXWJumpinMainWindow(QWidget):
         self.setMinimumSize(600, 120)  # 限定大小
         self.setMaximumSize(600, self.MAX_HEIGHT)
         # self.setWindowFlags(Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint)
-        self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
+        self.setWindowFlags(self.windowFlags()|Qt.WindowType.FramelessWindowHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         # self.setWindowFlags( Qt.WindowType.Dialog)
         # self.setWindowFlags(Qt.WindowStaysOnTopHint) #多次唤起会卡住，需要关闭。
         # self.setWindowModality(Qt.WindowModality.ApplicationModal)
@@ -641,6 +681,30 @@ class AAXWJumpinMainWindow(QWidget):
         self.promptInputEdit.setFocus()
 
         # self.showText()
+    #
+    # TODO 之后还是改为主窗口中加1个widget作为伪主窗口的面板，基于此定制以及绘制异形主窗口。
+    #      暂时使用重绘简单实现。
+    def paintEvent(self, event):    
+        #为主窗口 绘制圆角 这里只取了qss的背景色
+        
+        # qss获取
+        opt = QStyleOption()
+        opt.initFrom(self) #加载自己对应qss
+        # 获取 QSS 中定义的背景颜色
+        bg_color = opt.palette.window().color()
+        ##
+        
+        #绘制
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        rect = self.rect()
+        # painter.setBrush(QColor(255, 255, 255)) 
+        painter.setBrush(bg_color) 
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawRoundedRect(rect, 20, 20)
+    #   
+    # ui初始化 end
+    ##
 
     ##
     # 装载关联快捷键
@@ -697,36 +761,35 @@ class AAXWJumpinMainWindow(QWidget):
         print("Right button clicked!")
 
         text = self.promptInputEdit.text()
-        # self.addContent(text)
-        # dictContent = {"title": "title", "description": text}
         rid = int(time.time() * 1000)
         self.msgShowingPanel.addRowContent(
-            content=text, rowId=rid, contentOwner="user_xiaowang"
+            content=text, rowId=rid, contentOwner="user_xiaowang",
+            contentOwnerType=AAXWScrollPanel.ROW_CONTENT_OWNER_TYPE_USER,
         )
         
         rrid = int(time.time() * 1000)
         self.msgShowingPanel.addRowContent(
-            content="", rowId=rrid, contentOwner="assistant_aaxw"
+            content="", rowId=rrid, contentOwner="assistant_aaxw",
+            contentOwnerType=AAXWScrollPanel.ROW_CONTENT_OWNER_TYPE_AGENT,
         )
         
+        #
         #生成异步处理AI操作的线程
+        #注入要用来执行的ai引擎以及 问题文本+ ui组件id
+        #FIXME 执行时需要基于资源，暂时锁定输入框；
+        #TODO 多重提交，多线程处理还没很好的做，会崩溃；
         self.thread = AIhread(text,rrid,self.llmagent)
         # 绑定界面更新的回调方法
         self.thread.updateUI.connect(self.msgShowingPanel.appendToContentById) 
         # 启动
         self.thread.start()
+        #
         
+        #同步方式调用: 界面会hang住。
+        # self.llmagent.send_request(text, 
+        #             lambda content:self.msgShowingPanel.appendToContentById(content,rrid ))
+        #
         
-        # self.thread = AIhread(text,
-        #     funcWrapper=CallableWrapper(
-        #         (lambda text: self.msgShowingPanel.appendToContentById(text,rrid))
-        #     )
-        # )
-        # self.thread.updateUI.connect(self.llmagent.send_requestWrapped)
-        # self.thread.start()
-        # self.llmagent.send_request(prompt=text,
-        #     func=(lambda text: self.msgShowingPanel.appendToContentById(text,rrid))
-        # )
         self.promptInputEdit.clear()
         self._logInput()
 
@@ -736,20 +799,11 @@ class AAXWJumpinMainWindow(QWidget):
 
     def toggleHidden(self):
         if not self.isHidden():
-            # if self.windowFlags() & Qt.WindowType.WindowStaysOnTopHint:
-            #     self.setWindowFlags(
-            #         self.windowFlags() & ~Qt.WindowType.WindowStaysOnTopHint
-            #     )
+ 
             self.setStaysOnTop(isToOn=False)
             self.hide()
         else:
             # self.setVisible(True)
-
-            # if (self.windowFlags() & Qt.WindowType.WindowStaysOnTopHint) == 0:
-            #     self.setWindowFlags(
-            #         self.windowFlags() | Qt.WindowType.WindowStaysOnTopHint
-            #     )
-            
             self.setStaysOnTop(isToOn=True)
             self.show()
             self.promptInputEdit.setFocus()
@@ -757,8 +811,7 @@ class AAXWJumpinMainWindow(QWidget):
             # self.activateWindow() #也会有点影像
 
             # self.promptInputEdit.setFocus()
-            # hwnd = win32gui.FindWindow(None, self.windowTitle())
-            # win32gui.SetForegroundWindow(hwnd)
+
 
     ##
     # 切换钉在最前台 功能
