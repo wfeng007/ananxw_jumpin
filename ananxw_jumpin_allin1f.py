@@ -49,7 +49,7 @@ from PySide6.QtGui import (
     QMouseEvent,
 )
 from PySide6.QtCore import Qt, QEvent, QObject, QSize,QThread,Signal,Slot
-from PySide6.QtWebEngineWidgets import QWebEngineView
+# from PySide6.QtWebEngineWidgets import QWebEngineView
 
 # from PyQt5.QtWidgets import (
 #         QApplication, QFrame,QWidget,
@@ -68,20 +68,28 @@ from pynput import keyboard
 from langchain_openai import ChatOpenAI
 from langchain.prompts import PromptTemplate
 
-
+import time
 
 # 加载环境变量 #openai 的key读取
 from dotenv import load_dotenv, find_dotenv
 
-import time
+# except (ModuleNotFoundError, ImportError):
+#     print(
+#         "python库导导入失败。 \n"
+#         "")
+#     sys.exit(0)
 
+__version__ = "0.1.0"
+_ = load_dotenv(find_dotenv())  # 读取本地 .env 文件，里面定义了 OPENAI_API_KEY
+ 
 class CallableWrapper:
         def __init__(self, callable_obj:Callable):
             print(f"new CallableWrapper:{callable_obj}")
             self.callable:Callable = callable_obj
 
+
 class AAXSSimpleAIConnAgent:
-    _ = load_dotenv(find_dotenv())  # 读取本地 .env 文件，里面定义了 OPENAI_API_KEY
+   
     """
     连接LLM/Agent的工具类，支持流式获取响应。
     """
@@ -97,7 +105,7 @@ class AAXSSimpleAIConnAgent:
             self.llm = ChatOpenAI(streaming=True, model_name=model_name,temperature=0)
         else:
             self.llm = ChatOpenAI(openai_api_key=api_key, streaming=True, model_name=model_name,temperature=0)
-    # @Slot(str, Callable[[str], None])
+    #
     def send_request(self, prompt: str, func: Callable[[str], None]):
         """
         发送请求到LLM，并通过回调函数处理流式返回的数据。
@@ -127,40 +135,37 @@ class AAXSSimpleAIConnAgent:
                 time.sleep(0.1)
                 func(msgChunk.content)
                 
-    def send_requestWrapped(self, text: str, funcWrapper: CallableWrapper):
-        print(f"str:{text} \n funcWrapper:{funcWrapper}")
-        self.send_request(text, funcWrapper.callable)
-
-
-# 线程模拟来
+# 线程异步处理AI IO任务。
 class AIhread(QThread):
     
-    updateUI = Signal(str,CallableWrapper)  # 信号定义 与方法对应
+    #[x]FIXME 这里不应该专递递函数，而是直接在run中执行，需要更新界面的部分才emit出去。
+    #newContent,id 对应：ShowingPanel.appendToContentById 等回调
+    updateUI = Signal(str,str)  
 
-    def __init__(self,text:str,funcWrapper:CallableWrapper):
+    def __init__(self,text:str,uiCellId:str,llmagent:AAXSSimpleAIConnAgent):
         super().__init__()
+        
         # self.mutex = QMutex()
-        self.text=text
-        self.funcWrapper=funcWrapper
-
+        self.text:str=text
+        self.uiId:str=uiCellId
+        self.llmagent:AAXSSimpleAIConnAgent=llmagent
+        
     def run(self):
         self.msleep(500)  # 执行前先等界面渲染
         # self.mutex.lock()
-        print(f"thread inner str:{self.text} \n funcWrapper:{str(self.funcWrapper)}")
-        self.updateUI.emit(self.text, self.funcWrapper)
+        print(f"thread inner str:{self.text} \n")
+        self.llmagent.send_request(self.text, self.callUpdateUI)
         # self.mutex.unlock()
+        
+    def callUpdateUI(self,newContent:str):
+        # print(f"streaming, emitL{newContent} id:{self.uiId}")
+        
+        #
+        # 最好强制类型转换。self.uiId:str 或 str(self.uiId)
+        # 
+        self.updateUI.emit(str(newContent), str(self.uiId)) 
+        
 
-# 示例用法
-# def handle_stream(text: str):
-#     print(text, end='', flush=True)
-
-# if __name__ == "__main__":
-#     # 假设这里有一个有效的API密钥
-#     api_key = "your_openai_api_key_here"
-#     agent = AAXSSimpleAIConnAgent(api_key)
-#     agent.send_request("Hello, how are you today?", handle_stream)
-    
-    
 
 ##
 # 操作钩子，侦听回调；
@@ -335,8 +340,24 @@ class AAXWScrollPanel(QFrame):  # 暂时先外面套一层QFrame
     内部聚合了vbxlayout，增加content时默认使用TextBrowser用作Row展示。
     提供了为RowContent追加内容的方式，支持流式获取文本追加到Row中。
     """
+    
+    DEFLAUT_STYLE = """ 
+    QFrame {
+        border: 1px solid #ccc;
+        border-radius: 5px;
+        background-color: #f9f9f9;
+    }
+    QTextBrowser {
+        background-color: #f9f9f9;
+        border: 1px solid #ccc;
+        border-radius: 2px;
+        padding: 8px;
+    }
+    """
 
-    def __init__(self, mainWindow: "AAXWJumpinMainWindow", parent=None):
+    # }
+
+    def __init__(self, mainWindow: "AAXWJumpinMainWindow", qss:str=DEFLAUT_STYLE ,parent=None):
         """
         当前控件展示与布局结构：
         AAXWScrollPanel->QVBoxLayout->QScrollArea->QWidget(scrollWidget)->
@@ -344,16 +365,8 @@ class AAXWScrollPanel(QFrame):  # 暂时先外面套一层QFrame
         super().__init__(parent)
         self.mainWindow = mainWindow
         self.setFrameShape(QFrame.StyledPanel)
-        self.setFrameShadow(QFrame.Raised)
-        self.setStyleSheet(
-            """
-        QFrame {
-            border: 1px solid #ccc;
-            border-radius: 5px;
-            background-color: #f9f9f9;
-        }
-        """
-        )
+        # self.setFrameShadow(QFrame.Raised) #阴影凸起
+        self.setStyleSheet(qss)
 
         # 主要设定可垂直追加的Area+Layout
         # 结构顺序为scroll_area->scroll_widget->scroll_layout
@@ -469,6 +482,7 @@ class AAXWScrollPanel(QFrame):  # 暂时先外面套一层QFrame
         else:
             print("not found tb by name:" + f"{self.ROWBLOCKNAME_PREFIX}_{rowId}")
 
+    # 
     # Panel的内部基于scroll-widget增加组件后的期望尺寸；
     def expectantHeight(self):
 
@@ -547,7 +561,6 @@ class AAXWJumpinMainWindow(QWidget):
     def __init__(self):
         super().__init__()
         self.init_ui()
-        # self.installGlobalHotkeyFilter()
         self.installTabBlocker()
         self.installAppHotKey()
         self.llmagent=AAXSSimpleAIConnAgent()
@@ -634,18 +647,12 @@ class AAXWJumpinMainWindow(QWidget):
     # 或特殊按键处理器
     ##
     def installAppHotKey(self):
-        # # 创建快捷键
-        # shortcut = QShortcut(QKeySequence("Alt+z"), self)
-        # shortcut.activated.connect(self.toggle_visibility)
+        # 创建一般快捷键
 
         # 一般快捷键关闭（临时） install installEventFilter
         shortcut = QShortcut(QKeySequence("Alt+c"), self)  # 这里已经关联self
         shortcut.activated.connect(self.closeWindow)  # 不要加括号，指向方法；
 
-        # 没用啊
-        # app=QApplication.instance()
-        # gbShortcut = QShortcut(QKeySequence("Alt+Z"), app)
-        # shortcut.activated.connect(self.toggleMainWindVisi)
 
     def installTabBlocker(self):
         #
@@ -702,13 +709,21 @@ class AAXWJumpinMainWindow(QWidget):
             content="", rowId=rrid, contentOwner="assistant_aaxw"
         )
         
-        self.thread = AIhread(text,
-            funcWrapper=CallableWrapper(
-                (lambda text: self.msgShowingPanel.appendToContentById(text,rrid))
-            )
-        )
-        self.thread.updateUI.connect(self.llmagent.send_requestWrapped)
+        #生成异步处理AI操作的线程
+        self.thread = AIhread(text,rrid,self.llmagent)
+        # 绑定界面更新的回调方法
+        self.thread.updateUI.connect(self.msgShowingPanel.appendToContentById) 
+        # 启动
         self.thread.start()
+        
+        
+        # self.thread = AIhread(text,
+        #     funcWrapper=CallableWrapper(
+        #         (lambda text: self.msgShowingPanel.appendToContentById(text,rrid))
+        #     )
+        # )
+        # self.thread.updateUI.connect(self.llmagent.send_requestWrapped)
+        # self.thread.start()
         # self.llmagent.send_request(prompt=text,
         #     func=(lambda text: self.msgShowingPanel.appendToContentById(text,rrid))
         # )
