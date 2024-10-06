@@ -28,10 +28,11 @@
 #
 
 # import win32gui
-import sys, time
+import sys, os,time
 from typing import Callable
 from PySide6.QtWidgets import (
     QApplication,
+    QSystemTrayIcon,
     QFrame,
     QWidget,
     QScrollArea,
@@ -42,7 +43,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QTextBrowser,
     QLabel,
-    QStyleOption,
+    QStyleOption,QMenu
 )
 from PySide6.QtGui import (
     QKeySequence,
@@ -53,6 +54,8 @@ from PySide6.QtGui import (
     QMouseEvent,
     QPainter,
     QColor,
+    QIcon,QGuiApplication,
+    QImage,QPixmap,
 )
 from PySide6.QtCore import Qt, QEvent, QObject, QSize,QThread,Signal,Slot
 # from PySide6.QtWebEngineWidgets import QWebEngineView
@@ -626,7 +629,7 @@ class AAXWJumpinMainWindow(QWidget):
         # 定义输入操作面板
         # 左侧功能按钮
         self.funcButtonLeft = QPushButton("Toggle", self)
-        self.funcButtonLeft.clicked.connect(self.toggleDisplay)
+        self.funcButtonLeft.clicked.connect(self.toggleLeftFunc)
 
         # 中间输入框
         self.promptInputEdit = AAXWJumpinInputLineEdit(self)
@@ -739,7 +742,7 @@ class AAXWJumpinMainWindow(QWidget):
     # 主界面或主要控件，基本行为封装
     # input行为除外；
     ###
-    def toggleDisplay(self):
+    def toggleLeftFunc(self):
         # 切换显示文本还是Unicode字符
         if self.funcButtonLeft.text() == "Toggle":
             self.showUnicode()
@@ -904,13 +907,76 @@ class AAXWGlobalShortcut:
     def stop(self):
         self.hotkey.stop()
 
+class AAXWJumpinTrayKit(QSystemTrayIcon):
+    def __init__(self, main_window:AAXWJumpinMainWindow):
+        super().__init__()
+        
+        self.setToolTip("ANANXW Jumpin!")
+        
+        # self.setIcon(QIcon("icon.png"))
+        qimg:QImage=self._get32QImg("./icon.png")
+        pixmap = QPixmap.fromImage(qimg) #QIcon 可接受QPixmap；用QImage有问题。
+        self.setIcon( QIcon(pixmap))
+        
+        self.menu = QMenu()
+        self.show_main_action = self.menu.addAction("切换展示主界面(ALT+Z)")
+        self.close_main_action = self.menu.addAction("关闭ANANXW(ALT+C)")
+        self.setContextMenu(self.menu)
+        self.show_main_action.triggered.connect(self.toggleHiddenMainWindow)
+        self.close_main_action.triggered.connect(self.closeMainWindow)
+        
+        # 添加打开指定目录的菜单选项
+        self.open_directory_action = self.menu.addAction("工作目录")
+        self.open_directory_action.triggered.connect(self.open_directory)
+        
+        self.mainWindow:AAXWJumpinMainWindow = main_window
+        
+    
+    def toggleHiddenMainWindow(self):
+        self.mainWindow.toggleHidden()
+
+    def closeMainWindow(self):
+        #这里是不是应该关闭窗口外同时关闭app：app.quit()
+        #FIXME 如果主窗口是hidden状态，则不能退出，或者偶尔不能退出。
+        self.mainWindow.closeWindow()
+        
+        
+    
+    def open_directory(self):
+        # 这里指定要打开的目录路径
+        # directory_path = "./"
+        # 打开当前程序所在目录
+        current_directory = os.path.dirname(os.path.abspath(sys.argv[0]))
+        directory_path=current_directory
+        if os.path.exists(directory_path):
+            os.startfile(directory_path)
+        else:
+            print(f"指定的目录不存在：{directory_path}")
+    
+        
+    def _get32QImg(self,image_path):
+        
+        #
+        # 直接用QImage  改变尺寸 scaled_qimage = qimage.scaled(32, 32)
+        #
+        # # 使用 QImage 从文件读入
+        qimage = QImage(image_path)
+        # 改变尺寸
+        scaled_qimage = qimage.scaled(8, 8)
+        qimg=scaled_qimage
+        return qimg
+    
+
+
 
 def main():
     try:
         app = QApplication(sys.argv)
         window = AAXWJumpinMainWindow()
+        tray=AAXWJumpinTrayKit(window)
         gst = AAXWGlobalShortcut(window)
         gst.start()
+        tray.show()
         window.show()
         window.raise_()
         sys.exit(app.exec())
