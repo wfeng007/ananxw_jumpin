@@ -19,6 +19,7 @@
 # TODO:托盘功能；
 #   [ ]:基本托盘；
 #   [ ]:托盘中提供：工作目录，关闭按钮；
+# TODO 增加工作目录配置与维护，基本文件系统能力。
 # 提供基本的提示发送与结果展示界面；
 # 可支持多轮交互；
 # 可支持富文本范围内容展示；
@@ -87,7 +88,8 @@ from dotenv import load_dotenv, find_dotenv
 __version__ = "0.1.0"
 _ = load_dotenv(find_dotenv())  # 读取本地 .env 文件，里面定义了 OPENAI_API_KEY
  
-       
+
+# 基本config信息，剥离出可配置项
 class AnanxwJumpinConfig:     
     MSGSHOWINGPANEL_QSS="""
     QFrame {
@@ -107,6 +109,7 @@ class AnanxwJumpinConfig:
     }
     QTextBrowser[contentOwnerType="ROW_CONTENT_OWNER_TYPE_AGENT"] {
         background-color: #e6e6fa;
+        color: #00008b;
     }
     
     """
@@ -392,7 +395,7 @@ class AAXWScrollPanel(QFrame):  # 暂时先外面套一层QFrame
     def __init__(self, mainWindow: "AAXWJumpinMainWindow", qss:str=DEFAULT_STYLE ,parent=None):
         """
         当前控件展示与布局结构：
-        AAXWScrollPanel->QVBoxLayout->QScrollArea->QWidget(scrollWidget)->
+        AAXWScrollPanel->QVBoxLayout->QScrollArea->QWidget(scrollWidget)-> TB等
         """
         super().__init__(parent)
         self.mainWindow = mainWindow
