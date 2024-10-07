@@ -7,18 +7,15 @@
 #
 
 #
-# 小王的ai节点,快速提示词快速入口，投入ai吧！ANAN也是只狗狗。。。
+# 小王的ai节点,快速提示词快速入口，投入ai吧！ANAN其实也是只狗狗。。。
 # An AI Node of XiaoWang ， jumpin ! AnAn is a dog...
 #
 #
 
-# pip install PySide6
 # 一个提示符操作界面
 # 可以快捷键唤起展示的；
 # 支持钉在桌面最前端，全局热键换出与隐藏；
-# TODO:托盘功能；
-#   [ ]:基本托盘；
-#   [ ]:托盘中提供：工作目录，关闭按钮；
+# [x]:托盘功能；
 # TODO 增加工作目录配置与维护，基本文件系统能力。
 # 提供基本的提示发送与结果展示界面；
 # 可支持多轮交互；
@@ -27,9 +24,10 @@
 # 
 #
 
-# import win32gui
 import sys, os,time
 from typing import Callable
+#pyside6
+from PySide6.QtCore import Qt, QEvent, QObject,QThread,Signal
 from PySide6.QtWidgets import (
     QApplication,
     QSystemTrayIcon,
@@ -42,58 +40,44 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QTextBrowser,
-    QLabel,
     QStyleOption,QMenu
 )
 from PySide6.QtGui import (
     QKeySequence,
     QShortcut,
-    QAction,
+    # QAction,
     QTextDocument,
     QTextCursor,
     QMouseEvent,
     QPainter,
-    QColor,
-    QIcon,QGuiApplication,
+    QIcon,
     QImage,QPixmap,
 )
-from PySide6.QtCore import Qt, QEvent, QObject, QSize,QThread,Signal,Slot
-# from PySide6.QtWebEngineWidgets import QWebEngineView
+# WebEngineView用hide()方式时会崩溃，默认展示框用了textbrowser
+# from PySide6.QtWebEngineWidgets import QWebEngineView 
 
-# from PyQt5.QtWidgets import (
-#         QApplication, QFrame,QWidget,
-#         QHBoxLayout,QVBoxLayout,QSizePolicy,
-#         QLineEdit ,QPushButton,
-#         QLabel,QShortcut,QAction
-#         )
-# from PyQt5.QtGui import QKeySequence
-# from PyQt5.QtCore import Qt, QEvent,QObject
-# from PyQt5.QtWebEngineWidgets import QWebEngineView
-# import global_hotkeys as hotkey
+# pynput 用于全局键盘事件
 from pynput import keyboard
 
 
-# ai
+# ai相关
 from langchain_openai import ChatOpenAI
 from langchain.prompts import PromptTemplate
 
-import time
 
 # 加载环境变量 #openai 的key读取
 from dotenv import load_dotenv, find_dotenv
 
-# except (ModuleNotFoundError, ImportError):
-#     print(
-#         "python库导导入失败。 \n"
-#         "")
-#     sys.exit(0)
 
-__version__ = "0.1.0"
+# 环境变量，用于openai key等；
 _ = load_dotenv(find_dotenv())  # 读取本地 .env 文件，里面定义了 OPENAI_API_KEY
+
+# 版本
+__version__ = "0.2.0"
  
 
-# 基本config信息，剥离出可配置项
-class AnanxwJumpinConfig:     
+# 基本config信息，与默认配置；
+class AAXWJumpinConfig:     
     MSGSHOWINGPANEL_QSS="""
     QFrame {
         border: 1px solid #ccc;
@@ -125,7 +109,9 @@ class AnanxwJumpinConfig:
     }
     """
 
-
+#
+# AI相关
+#
 class AAXWSimpleAIConnAgent:
    
     """
@@ -144,13 +130,14 @@ class AAXWSimpleAIConnAgent:
         else:
             self.llm = ChatOpenAI(openai_api_key=api_key, streaming=True, model_name=model_name,temperature=0)
     #
-    def send_request(self, prompt: str, func: Callable[[str], None]):
+    def sendRequestStream(self, prompt: str, func: Callable[[str], None]):
         """
         发送请求到LLM，并通过回调函数处理流式返回的数据。
         
         :param prompt: 提供给LLM的提示文本。
         :param callback: 用于处理每次接收到的部分响应的回调函数。
         """
+        
         templateStr="""
         你的额名字AnAn jumpin是一个AI入口助理;
         请关注用户跟你说的内容，和善的回答用户，与用户要求。
@@ -161,11 +148,6 @@ class AAXWSimpleAIConnAgent:
         """
         template = PromptTemplate.from_template(templateStr)
         
-        # for token in self.llm.stream(template.format(message=prompt)):
-            
-        #     if 'choices' in token and len(token['choices']) > 0 and 'text' in token['choices'][0]:
-        #         text = token['choices'][0]['text']
-        #         func(text)
         # 在流式模式下，每次迭代都会返回一部分文本
         # 每次返回都执行回调
         for msgChunk in self.llm.stream(template.format(message=prompt)):
@@ -176,8 +158,7 @@ class AAXWSimpleAIConnAgent:
 # 线程异步处理AI IO任务。
 class AIhread(QThread):
     
-    #[x]FIXME 这里不应该专递递函数，而是直接在run中执行，需要更新界面的部分才emit出去。
-    #newContent,id 对应：ShowingPanel.appendToContentById 等回调
+    #newContent,id 对应：ShowingPanel.appendToContentById 回调
     updateUI = Signal(str,str)  
 
     def __init__(self,text:str,uiCellId:str,llmagent:AAXWSimpleAIConnAgent):
@@ -191,11 +172,13 @@ class AIhread(QThread):
     def run(self):
         self.msleep(500)  # 执行前先等界面渲染
         # self.mutex.lock()
-        print(f"thread inner str:{self.text} \n")
-        self.llmagent.send_request(self.text, self.callUpdateUI)
+        # print(f"thread inner str:{self.text} \n")
+        self.llmagent.sendRequestStream(self.text, self.callUpdateUI)
         # self.mutex.unlock()
         
     def callUpdateUI(self,newContent:str):
+        
+        #
         # print(f"streaming, emitL{newContent} id:{self.uiId}")
         
         #
@@ -206,13 +189,12 @@ class AIhread(QThread):
 
 
 ##
-# 操作钩子，侦听回调；
+# 界面组件相关
 ##
 #
-# ***blocker这样的过滤器，如果在类中的方法执行，则需要保存为属性。
-# 框架wieght.installEventFilter()时，并不会保持这个对象，只是获取其eventFilter方法。
-# [ ]:eventFilter 如果只有input需要也可以考虑直接在需要的Input中实现？
-class TabBlocker(QObject):
+# [x]:暂时单独放在input edit之外实现，
+# TODO 之后考虑放在插件机制剥离实现？ 不分功能比如tab键的控制似乎可能不属于基础功能；
+class EditEventFilter(QObject):
     """
     拦截 Tab 键，并替换为特定的功能；主要作用于InputEdit；
     Tab:
@@ -220,73 +202,78 @@ class TabBlocker(QObject):
 
     def __init__(self, mainWindow):
         super().__init__()
-        print("TabBlocker 初始化")
         self.manwindow: AAXWJumpinMainWindow = mainWindow
 
     def eventFilter(self, obj, event):
+        # Tab按键改为控制左侧按钮按下执行 （该也可以考虑改为组合键control+Tab，似）
         if event.type() == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Tab:
-            print("Tab 键被按下，但被TabBlocker过滤")
+            # print("Tab 键被按下")
             self.manwindow.funcButtonLeft.click()  # 点击左侧按钮
             return True  # 被过滤
+        #
         return False
 
+
 class AAXWJumpinInputLineEdit(QLineEdit):
-    """ """
+    """ 
+    主要指令，提示信息，对话信息输入框； 
+    """
 
     def __init__(self, mainWindow, parent=None):
         super().__init__(parent)
         self.mainWindow: AAXWJumpinMainWindow = mainWindow
+        # 额外的事件处理器，如优先处理如Tab按下
+        self.editEventHandler=EditEventFilter(self.mainWindow)
+        self.installEventFilter(self.editEventHandler)
+        
+        # 初始化鼠标事件，主要完抓握InputEdit移动整体窗口
         self._initMouseProperties()
 
+
     # 定制化 PromptInputLineEdit key输入回调
+    # TODO: 是否应该将ctrl/alt 按下后再按字母键的这种情况过先过滤掉？防止额外输入本来的快捷操作。
     def keyPressEvent(self, event):
 
-        # tab
-        # self.input_box.hasFocus() and
-        if event.key() == Qt.Key_Tab:
-            self.on_tab_pressed()
-            event.ignore()
-        else:
-            # 调用父类的 keyPressEvent 处理其他按键事件
-            super().keyPressEvent(event)
+        #对于LineEdit，如果不用EventFilter这块无效。
+        # if event.key() == Qt.Key_Tab:
+        #     self.on_tab_pressed() 
+        #     event.ignore()
+        
+        # 调用父类的 keyPressEvent 处理其他按键事件
+        super().keyPressEvent(event)
 
-            # 检查是否按下了上下左右箭头键
-            if event.key() == Qt.Key_Up:
-                self.on_up_pressed()
-            elif event.key() == Qt.Key_Down:
-                self.on_down_pressed()
-            elif event.key() == Qt.Key_Left:
-                self.on_left_pressed()
-            elif event.key() == Qt.Key_Right:
-                self.on_right_pressed()
+        # 检查是否按下了上下左右箭头键
+        if event.key() == Qt.Key_Up:
+            self.onUpPressed()
+        elif event.key() == Qt.Key_Down:
+            self.onDownPressed()
+        elif event.key() == Qt.Key_Left:
+            self.onLeftPressed()
+        elif event.key() == Qt.Key_Right:
+            self.onRightPressed()
 
     #
     # input相关基本行为封装
     #
-    def on_tab_pressed(self):
-        # 在这里实现你的功能
-        print("Tab 键被按下")
-        # 示例：清空文本框内容
-        self.mainWindow.funcButtonLeft.click()
-
-    def on_up_pressed(self):
+    def onUpPressed(self):
         # 在这里实现向上的功能
         print("向上箭头键被按下")
 
-    def on_down_pressed(self):
+    def onDownPressed(self):
         # 在这里实现向下的功能
         print("向下箭头键被按下")
 
-    def on_left_pressed(self):
+    def onLeftPressed(self):
         # 在这里实现向左的功能
         print("向左箭头键被按下")
 
-    def on_right_pressed(self):
+    def onRightPressed(self):
         # 在这里实现向右的功能
         print("向右箭头键被按下")
 
     ##
     # TODO:这个鼠标按下移动的功能要优化。输入框有输入文字的局域可能会冲突。需要考虑在实际input外面加个面板，input自适应。
+    #   同时，也需要封装一个完整的复合的InputKit包含左右工具按钮组，以及可能的浮动提示框等界面；
     # class AutoWidthLineEdit(QLineEdit):
     #     def __init__(self, parent=None):
     #         super().__init__(parent)
@@ -303,52 +290,32 @@ class AAXWJumpinInputLineEdit(QLineEdit):
     ##
     def _initMouseProperties(self):
         self.setMouseTracking(True)
-        self.is_dragging = False
-        self.drag_start_pos = None
+        self.isDragging = False #抓握拖动状态
+        self.dragStartPos = None
 
     def mousePressEvent(self, event: QMouseEvent):
         if event.button() == Qt.LeftButton:
-            self.is_dragging = True
-            self.drag_start_pos = event.globalPosition().toPoint()
+            self.isDragging = True
+            self.dragStartPos = event.globalPosition().toPoint()
         else:
             super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QMouseEvent):
-        if self.is_dragging:
-            if self.drag_start_pos:
-                delta = event.globalPosition().toPoint() - self.drag_start_pos
+        if self.isDragging:
+            if self.dragStartPos:
+                delta = event.globalPosition().toPoint() - self.dragStartPos
                 self.window().move(self.window().pos() + delta)
-                self.drag_start_pos = event.globalPosition().toPoint()
+                self.dragStartPos = event.globalPosition().toPoint()
         else:
             super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent):
         if event.button() == Qt.LeftButton:
-            self.is_dragging = False
-            self.drag_start_pos = None
+            self.isDragging = False
+            self.dragStartPos = None
         super().mouseReleaseEvent(event)
 
-    # def mousePressEvent(self, event):
-    #     if event.button() == Qt.LeftButton:
-    #         self.is_dragging = True
-    #         self.drag_start_pos = event.globalPos()
-    #     else:
-    #         super().mousePressEvent(event)
 
-    # def mouseMoveEvent(self, event):
-    #     if self.is_dragging:
-    #         if self.drag_start_pos:
-    #             delta = event.globalPos() - self.drag_start_pos
-    #             self.window().move(self.window().pos() + delta)
-    #             self.drag_start_pos = event.globalPos()
-    #     else:
-    #         super().mouseMoveEvent(event)
-
-    # def mouseReleaseEvent(self, event):
-    #     if event.button() == Qt.LeftButton:
-    #         self.is_dragging = False
-    #         self.drag_start_pos = None
-    #     super().mouseReleaseEvent(event)
 
 
 class AAXWVBoxLayout(QVBoxLayout):
@@ -373,9 +340,9 @@ class AAXWVBoxLayout(QVBoxLayout):
 
 class AAXWScrollPanel(QFrame):  # 暂时先外面套一层QFrame
     """
-    垂直方向以列表样式，可追加内容的展示面板；
+    垂直方向以列表样式可追加内容的展示面板；
     内容所在Row部件会根据内容调整高度；
-    内部聚合了vbxlayout，增加content时默认使用TextBrowser用作Row展示。
+    内部聚合了定制的vbxlayout，增加content时默认使用TextBrowser用作Row展示。
     提供了为RowContent追加内容的方式，支持流式获取文本追加到Row中。
     """
     
@@ -412,23 +379,19 @@ class AAXWScrollPanel(QFrame):  # 暂时先外面套一层QFrame
         self.scrollArea.setWidgetResizable(True)
         self.scrollArea.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.scrollArea.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.scrollWidget = (
-            QWidget()
-        )  # 其实scrollWidget就是断开与内部的联动，转而hint复合外层？
+        #
+        self.scrollWidget = QWidget()
         # scrollArea-scrollWidget
         self.scrollArea.setWidget(self.scrollWidget)
         self.scrollLayout: AAXWVBoxLayout = AAXWVBoxLayout(self.scrollWidget)
-        # self.scrollLayout = QVBoxLayout(self.scrollWidget)
         self.scrollLayout.setAlignment(Qt.AlignTop)  # 设置加入的部件为顶端对齐
-
-        # 可直接控制scroll_widget来控制尺寸等？
         # 使用scroll_layout来添加元素，应用布局；
+        
+        # panel层布局
+        panelLayout = QVBoxLayout(self)
+        panelLayout.addWidget(self.scrollArea)  # 加上scroll_area
 
-        # 外部widget添加布局
-        layout = QVBoxLayout(self)
-        layout.addWidget(self.scrollArea)  # 加上外部的scroll_area
-
-    # 用特殊符号最为追加站位标记
+    # 用特殊符号最为追加占位标记
     MARKER = "[💬➡️🏁]"
     ROW_BLOCK_NAME_PREFIX = "row_block_name"
     # 区分展示内容行的类型
@@ -436,11 +399,13 @@ class AAXWScrollPanel(QFrame):  # 暂时先外面套一层QFrame
     ROW_CONTENT_OWNER_TYPE_AGENT="ROW_CONTENT_OWNER_TYPE_AGENT"
     ROW_CONTENT_OWNER_TYPE_SYSTEM="ROW_CONTENT_OWNER_TYPE_SYSTEM"
     
+    #TODO:考虑提供一定的扩展性，Row组件创建创建不一定是TB，内容填入的展示方式，方便插件化。
     def addRowContent(self, content, rowId, contentOwner="unknown", 
                       contentOwnerType=ROW_CONTENT_OWNER_TYPE_SYSTEM ,isAtTop=True):
         """
         在scrollLayout上添加一个内容行，默认使用QTextBrowser。
         默认在顶端加入；
+        rowId 表示内容行的唯一标识，用于后续查找，组件定位；
         """
 
         # 添加 QTextBrowser 并设置 objectName 和自定义属性 id
@@ -451,44 +416,39 @@ class AAXWScrollPanel(QFrame):  # 暂时先外面套一层QFrame
         tb.setProperty("id", rowId)
         tb.setProperty("contentOwner", contentOwner)
         tb.setProperty("contentOwnerType", contentOwnerType)
-        # 高度先限定，然后根据内部变化
+        # 高度先限定，然后根据内部变化，关闭滚动条
         tb.setVerticalScrollBarPolicy(
             Qt.ScrollBarAlwaysOff
-        )  # 可以暂时设置为不出现tb级别滚轮
+        )  
         tb.setHorizontalScrollBarPolicy(
             Qt.ScrollBarAlwaysOff
-        )  # 可以暂时设置为不出现tb级别滚轮
+        )  
         # tb.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
         #
         # 默认文本等内容
-        # 使用TextDocument来写入内容。
         doc = QTextDocument()
         tb.setDocument(doc)
-
-        # TODO 初始化tb大小等
-
         ###
         # 连接文档内容变化信号与调整大小的槽函数
         ###
         tb.document().contentsChanged.connect(lambda: self._adjustRowBlockSize(tb))
         #
-        
-        # 设置文本变更调整;
+    
+        # 初始化文本内容;
         initial_text = content
         doc.setHtml(initial_text)
         tb.append(self.MARKER)  # 这里增加一个追加内容用的特别Marker
         #
 
-
-        # 一般写法 self.scroll_layout.addWidget(tb)
+        # 加入列表
         if isAtTop:
             self.scrollLayout.addWidgetAtTop(tb)  # 这里每次在头部加layout定制了
         else:
             self.scrollLayout.addWidget(tb)
 
     #  支持流式写入内容
-    def appendToContentById(self, text, rowId: str):
+    def appendContentByRowId(self, text, rowId: str):
         """
         在指定Rowid的Row中追加内容
         """
@@ -540,16 +500,15 @@ class AAXWScrollPanel(QFrame):  # 暂时先外面套一层QFrame
         total_height += sws.height()
         # print(f"expectantHeight:{total_height}")
         return total_height
-        pass
 
-    def scrollWidgetSize(self):
-        return self.scrollArea.widget().size()
+    # def scrollWidgetSize(self):
+    #     return self.scrollArea.widget().size()
 
     # 定义调整 QTextBrowser 大小的槽函数
     def _adjustRowBlockSize(self, changedTextBrowser):
 
         # 重新计算内部尺寸 #从上往下重新触发绘制计算，保证Hint等计算适当。
-        # self.updateGeometry() #似乎没效果
+        # self.updateGeometry() 
 
         # 在主窗口的中心 widget（容器 widget）中查找 QTextBrowser
         # 实际可以参考 这个查找代码：text_browser = self.centralWidget().findChild(QTextBrowser)
@@ -564,32 +523,19 @@ class AAXWScrollPanel(QFrame):  # 暂时先外面套一层QFrame
             doc.size().height() + margins.top() + margins.bottom() + 10 #预期行高增加1行？
         )  # 多增加点margins
 
-        # 设置 QTextBrowser 高度对应到size策略
-        # 设置 QTextBrowser 的最小高度为计算得到的总高度
-        # text_browser.setMinimumHeight(height)
-        # 设置 QTextBrowser 的最大高度也为计算得到的总高度
-        # text_browser.setMaximumHeight(height)
-
-        # fixed对应fixed策略
+        # 使用fixed的尺寸策略
         # 调整Row tb高度
         if expectantHeight<20: expectantHeight=20
         tb.setFixedHeight(expectantHeight)
+        
+        #FIXME: mainWindow的调整策略需要重新实现。每次增加内容就变更主窗口尺寸有问题。
         self.mainWindow.adjustHeight()
 
     #
-    # 事件过滤器，需要时可以install到外部大窗口上。
-    # 默认可能也不用，防止外部窗口也上下拉动。
-    def eventFilter(self, obj, event):
-        if obj is self and event.type() == QEvent.Type.Resize:
-            # 调整 QTextBrowser 的大小
-            self._adjustRowBlockSize() #会调整所有tb的大小。这里用的是setFixedHeight
-            return True
-        return super().eventFilter(obj, event)
-
-    # def addWidget(self,qw:Widgt):
-    #     super().add
-
-    pass  # AAXWScrollPanel
+    # 可增加事件过滤器，需要时可以install到外部大窗口上。比如QEvent.Type.Resize事件触发动作。
+    # 
+    
+    pass  # AAXWScrollPanel end
 
 
 class AAXWJumpinMainWindow(QWidget):
@@ -602,16 +548,13 @@ class AAXWJumpinMainWindow(QWidget):
     def __init__(self):
         super().__init__()
         self.init_ui()
-        self.installTabBlocker()
         self.installAppHotKey()
         self.llmagent=AAXWSimpleAIConnAgent()
-    
-
     
     def init_ui(self):
         
         self.setObjectName("jumpin_main_window")
-        self.setStyleSheet(AnanxwJumpinConfig.MAIN_WINDOWS_QSS)
+        self.setStyleSheet(AAXWJumpinConfig.MAIN_WINDOWS_QSS)
         # self.repaint()
         
         # 界面主布局，垂直上下布局；
@@ -642,18 +585,13 @@ class AAXWJumpinMainWindow(QWidget):
         self.funcButtonRight.clicked.connect(self.rightButtonClicked)
 
         # 展示面板
-        # 创建 QWebEngineView
-        # self.showingPanelWebView = QWebEngineView(parent=self) #跟影藏动作冲突？ visble
-        msgShowingPanel=AnanxwJumpinConfig.MSGSHOWINGPANEL_QSS
+        msgShowingPanel=AAXWJumpinConfig.MSGSHOWINGPANEL_QSS
         self.msgShowingPanel = AAXWScrollPanel(mainWindow=self, qss=msgShowingPanel,parent=self)
         
-        #
-        # 组件到主布局
+        
+        # 输入条增加组件
         inputKitLayout.addWidget(self.funcButtonLeft)
-        # 竖线分割线
-        # main_layout.addStretch()
-        inputKitLayout.addWidget(self._createAcrossLine())
-        # promptKitLayout.addLayout(self.input_layout)
+        inputKitLayout.addWidget(self._createAcrossLine()) # 竖线分割线
         inputKitLayout.addWidget(self.promptInputEdit)
         inputKitLayout.addWidget(self._createAcrossLine())
         inputKitLayout.addWidget(self.funcButtonRight)
@@ -669,24 +607,23 @@ class AAXWJumpinMainWindow(QWidget):
         # self.setGeometry(300, 300, 600, 120)
         self.setMinimumSize(600, 120)  # 限定大小
         self.setMaximumSize(600, self.MAX_HEIGHT)
+        
         # self.setWindowFlags(Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint)
-        self.setWindowFlags(self.windowFlags()|Qt.WindowType.FramelessWindowHint)
+        self.setWindowFlags(self.windowFlags()| Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        # self.setWindowFlags( Qt.WindowType.Dialog)
-        # self.setWindowFlags(Qt.WindowStaysOnTopHint) #多次唤起会卡住，需要关闭。
-        # self.setWindowModality(Qt.WindowModality.ApplicationModal)
+         # self.setWindowFlags(self.windowFlags()| Qt.WindowType.WindowStaysOnTopHint) #默认钉在最上层
+        
 
         # 设置窗口大小策略
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
 
         # 初始高度为 200 像素
-        # self.setFixedHeight(200) #这个应该跟随整元素吧。 不设置高度限制？设置为不能人工设定高度即可？
-        # self.showingPanelWebView.setFixedHeight(200) #
+        # self.setFixedHeight(200) 
+        self.resize(self.width(), 200)
 
         # 初始焦点在input上
         self.promptInputEdit.setFocus()
 
-        # self.showText()
     #
     # TODO 之后还是改为主窗口中加1个widget作为伪主窗口的面板，基于此定制以及绘制异形主窗口。
     #      暂时使用重绘简单实现。
@@ -723,12 +660,6 @@ class AAXWJumpinMainWindow(QWidget):
         shortcut = QShortcut(QKeySequence("Alt+c"), self)  # 这里已经关联self
         shortcut.activated.connect(self.closeWindow)  # 不要加括号，指向方法；
 
-
-    def installTabBlocker(self):
-        #
-        self.blocker = TabBlocker(self)
-        self.promptInputEdit.installEventFilter(self.blocker)
-
     #
     # 关联安装全局过滤器GlobalHotkeyFilter 监听事件
     #
@@ -739,7 +670,7 @@ class AAXWJumpinMainWindow(QWidget):
     ##
 
     ###
-    # 主界面或主要控件，基本行为封装
+    # 主界面与主要空控件基本行为封装
     # input行为除外；
     ###
     def toggleLeftFunc(self):
@@ -786,7 +717,7 @@ class AAXWJumpinMainWindow(QWidget):
         #TODO 多重提交，多线程处理还没很好的做，会崩溃；
         self.thread = AIhread(text,rrid,self.llmagent)
         # 绑定界面更新的回调方法
-        self.thread.updateUI.connect(self.msgShowingPanel.appendToContentById) 
+        self.thread.updateUI.connect(self.msgShowingPanel.appendContentByRowId) 
         # 启动
         self.thread.start()
         #
@@ -850,11 +781,9 @@ class AAXWJumpinMainWindow(QWidget):
     def closeWindow(self):
         self.close()
 
-    # def show_window(self):
-    #     self.show()
 
     #
-    #       根据内部部件大小调整主窗口自身大小；还是本来就有这个设置？
+    # 根据内部部件大小调整主窗口自身大小；还是本来就有这个设置？
     def adjustHeight(self):
 
         # print(f"showing panel  height :{self.msgShowingPanel.height()}")
@@ -901,8 +830,6 @@ class AAXWGlobalShortcut:
 
     def start(self):
         self.hotkey.start()
-        # self.widget.show()
-        # sys.exit(self.app.exec())
 
     def stop(self):
         self.hotkey.stop()
@@ -966,26 +893,24 @@ class AAXWJumpinTrayKit(QSystemTrayIcon):
         qimg=scaled_qimage
         return qimg
     
-
-
-
 def main():
+    agstool=None
     try:
         app = QApplication(sys.argv)
         window = AAXWJumpinMainWindow()
         tray=AAXWJumpinTrayKit(window)
-        gst = AAXWGlobalShortcut(window)
-        gst.start()
+        agstool = AAXWGlobalShortcut(window)
+        agstool.start()
         tray.show()
         window.show()
         window.raise_()
         sys.exit(app.exec())
-    except Exception as e:  # 如果不用处理e 可以简化为except Exception: 或 except: 即可
-        print("except")
-        print("Exception:", e)
+    except Exception as e:  
+        print("Main Exception:", e)
+        raise e
     finally:
-        gst.stop()
-
+        if agstool:agstool.stop()
+        
 
 if __name__ == "__main__":
     main()
