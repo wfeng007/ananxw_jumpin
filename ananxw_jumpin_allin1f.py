@@ -117,19 +117,27 @@ class AAXWSimpleAIConnAgent:
     """
     连接LLM/Agent的工具类，支持流式获取响应。
     """
-
-    def __init__(self, api_key: str=None, model_name: str = "gpt-4o-mini"):
+    
+    def __init__(self, api_key:str =None, model_name: str = "gpt-4o-mini"): # type: ignore
         """
         初始化OpenAI连接代理。
         
         :param api_key: OpenAI API密钥。
         :param model_name: 使用的模型名称。
         """
-        if api_key is None:
-            self.llm = ChatOpenAI(streaming=True, model_name=model_name,temperature=0)
-        else:
-            self.llm = ChatOpenAI(openai_api_key=api_key, streaming=True, model_name=model_name,temperature=0)
-    #
+        # 创建 ChatOpenAI 实例时使用关键字参数
+        chat_params = {
+            "streaming": True,
+            "temperature": 0,
+            "model": model_name  # 使用 'model' 而不是 'model_name'
+        }
+        
+        if api_key is not None:
+            chat_params["api_key"] = api_key  # 使用 'api_key' 而不是 'openai_api_key'
+        
+        self.llm = ChatOpenAI(**chat_params)
+
+
     def sendRequestStream(self, prompt: str, func: Callable[[str], None]):
         """
         发送请求到LLM，并通过回调函数处理流式返回的数据。
@@ -153,10 +161,10 @@ class AAXWSimpleAIConnAgent:
         for msgChunk in self.llm.stream(template.format(message=prompt)):
             if msgChunk is not None and msgChunk.content != '':
                 time.sleep(0.1)
-                func(msgChunk.content)
+                func(str(msgChunk.content))
                 
 # 线程异步处理AI IO任务。
-class AIhread(QThread):
+class AIThread(QThread):
     
     #newContent,id 对应：ShowingPanel.appendToContentById 回调
     updateUI = Signal(str,str)  
@@ -243,13 +251,13 @@ class AAXWJumpinInputLineEdit(QLineEdit):
         super().keyPressEvent(event)
 
         # 检查是否按下了上下左右箭头键
-        if event.key() == Qt.Key_Up:
+        if event.key() == Qt.Key.Key_Up:
             self.onUpPressed()
-        elif event.key() == Qt.Key_Down:
+        elif event.key() == Qt.Key.Key_Down:
             self.onDownPressed()
-        elif event.key() == Qt.Key_Left:
+        elif event.key() == Qt.Key.Key_Left:
             self.onLeftPressed()
-        elif event.key() == Qt.Key_Right:
+        elif event.key() == Qt.Key.Key_Right:
             self.onRightPressed()
 
     #
@@ -294,7 +302,7 @@ class AAXWJumpinInputLineEdit(QLineEdit):
         self.dragStartPos = None
 
     def mousePressEvent(self, event: QMouseEvent):
-        if event.button() == Qt.LeftButton:
+        if event.button() == Qt.MouseButton.LeftButton:
             self.isDragging = True
             self.dragStartPos = event.globalPosition().toPoint()
         else:
@@ -310,7 +318,7 @@ class AAXWJumpinInputLineEdit(QLineEdit):
             super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent):
-        if event.button() == Qt.LeftButton:
+        if event.button() == Qt.MouseButton.LeftButton:
             self.isDragging = False
             self.dragStartPos = None
         super().mouseReleaseEvent(event)
@@ -369,7 +377,7 @@ class AAXWScrollPanel(QFrame):  # 暂时先外面套一层QFrame
         """
         super().__init__(parent)
         self.mainWindow = mainWindow
-        self.setFrameShape(QFrame.StyledPanel)
+        self.setFrameShape(QFrame.Shape.StyledPanel)
         # self.setFrameShadow(QFrame.Raised) #阴影凸起
         self.setStyleSheet(qss)
 
@@ -377,14 +385,14 @@ class AAXWScrollPanel(QFrame):  # 暂时先外面套一层QFrame
         # 结构顺序为scroll_area->scroll_widget->scroll_layout
         self.scrollArea = QScrollArea()  # ScrollArea 聊天内容展示区域
         self.scrollArea.setWidgetResizable(True)
-        self.scrollArea.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.scrollArea.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.scrollArea.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.scrollArea.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         #
         self.scrollWidget = QWidget()
         # scrollArea-scrollWidget
         self.scrollArea.setWidget(self.scrollWidget)
         self.scrollLayout: AAXWVBoxLayout = AAXWVBoxLayout(self.scrollWidget)
-        self.scrollLayout.setAlignment(Qt.AlignTop)  # 设置加入的部件为顶端对齐
+        self.scrollLayout.setAlignment(Qt.AlignmentFlag.AlignTop)  # 设置加入的部件为顶端对齐
         # 使用scroll_layout来添加元素，应用布局；
         
         # panel层布局
@@ -418,10 +426,10 @@ class AAXWScrollPanel(QFrame):  # 暂时先外面套一层QFrame
         tb.setProperty("contentOwnerType", contentOwnerType)
         # 高度先限定，然后根据内部变化，关闭滚动条
         tb.setVerticalScrollBarPolicy(
-            Qt.ScrollBarAlwaysOff
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         )  
         tb.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarAlwaysOff
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         )  
         # tb.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
@@ -453,9 +461,10 @@ class AAXWScrollPanel(QFrame):  # 暂时先外面套一层QFrame
         在指定Rowid的Row中追加内容
         """
         # 查找对应的 QTextBrowser 并追加内容
+        # 用名字查找元素
         tb: QTextBrowser = self.scrollWidget.findChild( #TODO 这个搜索子控件的写法是否要优化？
             QTextBrowser, f"{self.ROW_BLOCK_NAME_PREFIX}_{rowId}"
-        )  # 用名字查找元素
+        )  # type: ignore  #这里放的就是TB 
         if tb is not None:
             current_text = tb.toHtml()
             # print("-" * 20)
@@ -519,14 +528,14 @@ class AAXWScrollPanel(QFrame):  # 暂时先外面套一层QFrame
         margins = tb.contentsMargins()
         #  计算文档高度加上上下边距得到总高度
         # TODO 这里计算的不对，所有tb都需要根据内容来计算高度，获取内容应该。
-        expectantHeight = (
+        expectantHeight:int = int(
             doc.size().height() + margins.top() + margins.bottom() + 10 #预期行高增加1行？
         )  # 多增加点margins
 
         # 使用fixed的尺寸策略
         # 调整Row tb高度
         if expectantHeight<20: expectantHeight=20
-        tb.setFixedHeight(expectantHeight)
+        tb.setFixedHeight(int(expectantHeight))
         
         #FIXME: mainWindow的调整策略需要重新实现。每次增加内容就变更主窗口尺寸有问题。
         self.mainWindow.adjustHeight()
@@ -631,20 +640,23 @@ class AAXWJumpinMainWindow(QWidget):
         #为主窗口 绘制圆角 这里只取了qss的背景色
         
         # qss获取
-        opt = QStyleOption()
+        opt:QStyleOption = QStyleOption()
         opt.initFrom(self) #加载自己对应qss
+
         # 获取 QSS 中定义的背景颜色
-        bg_color = opt.palette.window().color()
+        # bg_color = opt.palette.window().color() #python层可能有类型问题
+        bg_color = self.palette().color(self.backgroundRole()) #
         ##
         
         #绘制
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         rect = self.rect()
         # painter.setBrush(QColor(255, 255, 255)) 
         painter.setBrush(bg_color) 
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawRoundedRect(rect, 20, 20)
+
     #   
     # ui初始化 end
     ##
@@ -659,9 +671,6 @@ class AAXWJumpinMainWindow(QWidget):
         # 一般快捷键关闭（临时） install installEventFilter
         shortcut = QShortcut(QKeySequence("Alt+c"), self)  # 这里已经关联self
         shortcut.activated.connect(self.closeWindow)  # 不要加括号，指向方法；
-
-    #
-    # 关联安装全局过滤器GlobalHotkeyFilter 监听事件
     #
     ##
     # 装载关联快捷键
@@ -715,11 +724,11 @@ class AAXWJumpinMainWindow(QWidget):
         #注入要用来执行的ai引擎以及 问题文本+ ui组件id
         #FIXME 执行时需要基于资源，暂时锁定输入框；
         #TODO 多重提交，多线程处理还没很好的做，会崩溃；
-        self.thread = AIhread(text,rrid,self.llmagent)
+        self.aiThread = AIThread(text,str(rrid),self.llmagent)
         # 绑定界面更新的回调方法
-        self.thread.updateUI.connect(self.msgShowingPanel.appendContentByRowId) 
+        self.aiThread.updateUI.connect(self.msgShowingPanel.appendContentByRowId) 
         # 启动
-        self.thread.start()
+        self.aiThread.start()
         #
         
         #同步方式调用: 界面会hang住。
