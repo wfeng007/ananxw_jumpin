@@ -73,7 +73,7 @@ from dotenv import load_dotenv, find_dotenv
 _ = load_dotenv(find_dotenv())  # 读取本地 .env 文件，里面定义了 OPENAI_API_KEY
 
 # 版本
-__version__ = "0.2.0"
+__version__ = "0.3.0"
  
 
 # 基本config信息，与默认配置；
@@ -98,15 +98,40 @@ class AAXWJumpinConfig:
         background-color: #e6e6fa;
         color: #00008b;
     }
-    
     """
     
-    MAIN_WINDOWS_QSS ="""
+    MAIN_WINDOWS_QSS = """
     QWidget#jumpin_main_window {
         /*background-color: #d4f2e7; 这个是特殊背景，用来调试界面样式*/
         background-color: #fff;
         border-radius: 10px;
     }
+    """
+
+    # 新增 INPUT_STYLE #非文本 而是 dict做法
+    # 需要拼接为文本 self.promptInputEdit.setStyleSheet("; ".join([f"{k}: {v}" for k, v in AAXWJumpinConfig.INPUT_STYLE.items()]))
+    INPUT_EDIT_QSS_DICT = {
+        "border": "1px solid gray",
+        "padding": "5px",
+        "border-radius": "5px",
+    }
+
+    # 新增 INPUT_PANEL_STYLE
+    INPUT_PANEL_QSS = """
+        AAXWInputPanel {
+            background-color: #f0f0f0;
+            border-radius: 10px;
+        }
+        QPushButton {
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            border-radius: 5px;
+        }
+        QPushButton:hover {
+            background-color: #45a049;
+        }
     """
 
 #
@@ -216,13 +241,13 @@ class EditEventFilter(QObject):
         # Tab按键改为控制左侧按钮按下执行 （该也可以考虑改为组合键control+Tab，似）
         if event.type() == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Tab:
             # print("Tab 键被按下")
-            self.manwindow.funcButtonLeft.click()  # 点击左侧按钮
+            self.manwindow.inputPanel.funcButtonLeft.click()  # 点击左侧按钮
             return True  # 被过滤
         #
         return False
 
 
-class AAXWJumpinInputLineEdit(QLineEdit):
+class AAXWInputLineEdit(QLineEdit):
     """ 
     主要指令，提示信息，对话信息输入框； 
     """
@@ -324,6 +349,91 @@ class AAXWJumpinInputLineEdit(QLineEdit):
         super().mouseReleaseEvent(event)
 
 
+
+class AAXWInputPanel(QWidget):
+    # sendRequest = Signal(str)
+
+    def __init__(self, mainWindow:'AAXWJumpinMainWindow',parent):
+        super().__init__(parent=parent)
+        self.mainWindow = mainWindow
+        self.init_ui()
+
+    def init_ui(self):
+        # 输入用组件套装的容器布局
+        # 输入操作面板 水平布局
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(5, 5, 5, 5)
+        layout.setSpacing(5)
+        #
+        # 定义输入操作面板
+        # 左侧功能按钮
+        self.funcButtonLeft = QPushButton("Toggle", self)
+        # 中间输入框
+        self.promptInputEdit = AAXWInputLineEdit(self.mainWindow, self)
+        # 右侧功能按钮
+        self.funcButtonRight = QPushButton("⏎", self)
+
+        layout.addWidget(self.funcButtonLeft)
+        layout.addWidget(self._createAcrossLine())
+        layout.addWidget(self.promptInputEdit)
+        layout.addWidget(self._createAcrossLine())
+        layout.addWidget(self.funcButtonRight)
+
+        # 使用 AAXWJumpinConfig 中定义的 INPUT_PANEL_STYLE
+        self.setStyleSheet(AAXWJumpinConfig.INPUT_PANEL_QSS)
+
+        # 为 promptInputEdit 设置样式
+        self.promptInputEdit.setStyleSheet("; ".join([f"{k}: {v}" for k, v in AAXWJumpinConfig.INPUT_EDIT_QSS_DICT.items()]))
+
+        self.funcButtonLeft.clicked.connect(self.toggleLeftFunc)
+        self.funcButtonRight.clicked.connect(self.rightButtonClicked)
+        self.promptInputEdit.returnPressed.connect(self.enterClicked)
+
+
+    ###
+    # 基本行为封装
+    ###
+    # 左侧
+    def toggleLeftFunc(self):
+        if self.funcButtonLeft.text() == "Toggle":
+            self.funcButtonLeft.setText("😊")
+        else:
+            self.funcButtonLeft.setText("😢")
+
+    # 异步操作emit做法
+    # def sendInputText(self):
+    #     text = self.promptInputEdit.text()
+    #     if text:
+    #         self.sendRequest.emit(text)
+    #         self.promptInputEdit.clear()
+    
+    # input 回车
+    def enterClicked(self):
+        # 处理回车事件
+        print("Enter key pressed!")
+        self.funcButtonRight.click()
+
+    # 右侧
+    def rightButtonClicked(self):
+        print("Right button clicked!")
+
+        text = self.promptInputEdit.text()
+        self.mainWindow.handleInputRequest(text)
+        
+        self.promptInputEdit.clear()
+        self._logInput()
+
+    #
+    def _logInput(self):
+        # 打印输入框中的内容
+        print(f"Input: {self.promptInputEdit.text()}")
+
+
+    def _createAcrossLine(self, shape: QFrame.Shape = QFrame.Shape.VLine):
+        line = QFrame()
+        line.setFrameShape(shape)
+        line.setFrameShadow(QFrame.Shadow.Sunken)
+        return line
 
 
 class AAXWVBoxLayout(QVBoxLayout):
@@ -547,6 +657,9 @@ class AAXWScrollPanel(QFrame):  # 暂时先外面套一层QFrame
     pass  # AAXWScrollPanel end
 
 
+
+
+
 class AAXWJumpinMainWindow(QWidget):
     """
     主窗口:
@@ -564,49 +677,17 @@ class AAXWJumpinMainWindow(QWidget):
         
         self.setObjectName("jumpin_main_window")
         self.setStyleSheet(AAXWJumpinConfig.MAIN_WINDOWS_QSS)
-        # self.repaint()
         
         # 界面主布局，垂直上下布局；
         mainVBoxLayout = QVBoxLayout()  
 
-        # 输入用组件套装的容器布局
-        # 输入操作面板 水平布局
-        inputKitLayout = QHBoxLayout()
-        inputKitLayout.setContentsMargins(5, 5, 5, 5)  # 设置外边距
-        inputKitLayout.setSpacing(5)  # 设置组件之间的间距
+        self.inputPanel = AAXWInputPanel(self,self)
+        # self.inputPanel.sendRequest.connect(self.handleInputRequest)
 
-        # 组件定义
+        msgShowingPanel = AAXWJumpinConfig.MSGSHOWINGPANEL_QSS
+        self.msgShowingPanel = AAXWScrollPanel(mainWindow=self, qss=msgShowingPanel, parent=self)
 
-        #
-        # 定义输入操作面板
-        # 左侧功能按钮
-        self.funcButtonLeft = QPushButton("Toggle", self)
-        self.funcButtonLeft.clicked.connect(self.toggleLeftFunc)
-
-        # 中间输入框
-        self.promptInputEdit = AAXWJumpinInputLineEdit(self)
-        self.promptInputEdit.setPlaceholderText("输入提示或指令")
-        self.promptInputEdit.setStyleSheet("border: 1px solid gray; padding: 5px;")
-        self.promptInputEdit.returnPressed.connect(self.enterClicked)  # 绑定回车事件
-
-        # 右侧功能按钮
-        self.funcButtonRight = QPushButton("⏎", self)
-        self.funcButtonRight.clicked.connect(self.rightButtonClicked)
-
-        # 展示面板
-        msgShowingPanel=AAXWJumpinConfig.MSGSHOWINGPANEL_QSS
-        self.msgShowingPanel = AAXWScrollPanel(mainWindow=self, qss=msgShowingPanel,parent=self)
-        
-        
-        # 输入条增加组件
-        inputKitLayout.addWidget(self.funcButtonLeft)
-        inputKitLayout.addWidget(self._createAcrossLine()) # 竖线分割线
-        inputKitLayout.addWidget(self.promptInputEdit)
-        inputKitLayout.addWidget(self._createAcrossLine())
-        inputKitLayout.addWidget(self.funcButtonRight)
-
-        # 设置窗口的布局
-        mainVBoxLayout.addLayout(inputKitLayout)
+        mainVBoxLayout.addWidget(self.inputPanel)
         mainVBoxLayout.addWidget(self._createAcrossLine(QFrame.Shape.HLine))
         mainVBoxLayout.addWidget(self.msgShowingPanel)  # showing panel
         self.setLayout(mainVBoxLayout)
@@ -617,7 +698,6 @@ class AAXWJumpinMainWindow(QWidget):
         self.setMinimumSize(600, 120)  # 限定大小
         self.setMaximumSize(600, self.MAX_HEIGHT)
         
-        # self.setWindowFlags(Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint)
         self.setWindowFlags(self.windowFlags()| Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
          # self.setWindowFlags(self.windowFlags()| Qt.WindowType.WindowStaysOnTopHint) #默认钉在最上层
@@ -630,8 +710,34 @@ class AAXWJumpinMainWindow(QWidget):
         # self.setFixedHeight(200) 
         self.resize(self.width(), 200)
 
-        # 初始焦点在input上
-        self.promptInputEdit.setFocus()
+        self.inputPanel.promptInputEdit.setFocus()
+
+    def handleInputRequest(self, text):
+        rid = int(time.time() * 1000)
+        self.msgShowingPanel.addRowContent(
+            content=text, rowId=rid, contentOwner="user_xiaowang",
+            contentOwnerType=AAXWScrollPanel.ROW_CONTENT_OWNER_TYPE_USER,
+        )
+        
+        rrid = int(time.time() * 1000)
+        self.msgShowingPanel.addRowContent(
+            content="", rowId=rrid, contentOwner="assistant_aaxw",
+            contentOwnerType=AAXWScrollPanel.ROW_CONTENT_OWNER_TYPE_AGENT,
+        )
+
+        #
+        #生成异步处理AI操作的线程
+        #注入要用来执行的ai引擎以及 问题文本+ ui组件id
+        #FIXME 执行时需要基于资源，暂时锁定输入框；
+        #TODO 多重提交，多线程处理还没很好的做，会崩溃；
+        self.aiThread = AIThread(text, str(rrid), self.llmagent)
+        self.aiThread.updateUI.connect(self.msgShowingPanel.appendContentByRowId)
+        self.aiThread.start()
+
+        #同步方式调用: 界面会hang住。
+        # self.llmagent.send_request(text, 
+        #      lambda content:self.msgShowingPanel.appendToContentById(content,rrid ))
+
 
     #
     # TODO 之后还是改为主窗口中加1个widget作为伪主窗口的面板，基于此定制以及绘制异形主窗口。
@@ -666,11 +772,12 @@ class AAXWJumpinMainWindow(QWidget):
     # 或特殊按键处理器
     ##
     def installAppHotKey(self):
-        # 创建一般快捷键
+        # 一般快捷键
 
-        # 一般快捷键关闭（临时） install installEventFilter
+        # 关闭（临时） install installEventFilter
         shortcut = QShortcut(QKeySequence("Alt+c"), self)  # 这里已经关联self
         shortcut.activated.connect(self.closeWindow)  # 不要加括号，指向方法；
+
     #
     ##
     # 装载关联快捷键
@@ -678,71 +785,9 @@ class AAXWJumpinMainWindow(QWidget):
     # end
     ##
 
-    ###
-    # 主界面与主要空控件基本行为封装
-    # input行为除外；
-    ###
-    def toggleLeftFunc(self):
-        # 切换显示文本还是Unicode字符
-        if self.funcButtonLeft.text() == "Toggle":
-            self.showUnicode()
-        else:
-            self.showText()
 
-    def showText(self):
-        # 显示空文本
-        self.funcButtonLeft.setText("Toggle")
-
-    def showUnicode(self):
-        # 显示Unicode字符笑脸
-        self.funcButtonLeft.setText("😊")
-
-    def enterClicked(self):
-        # 处理回车事件
-        print("Enter key pressed!")
-        self.funcButtonRight.click()
-
-    
-    def rightButtonClicked(self):
-        print("Right button clicked!")
-
-        text = self.promptInputEdit.text()
-        rid = int(time.time() * 1000)
-        self.msgShowingPanel.addRowContent(
-            content=text, rowId=rid, contentOwner="user_xiaowang",
-            contentOwnerType=AAXWScrollPanel.ROW_CONTENT_OWNER_TYPE_USER,
-        )
-        
-        rrid = int(time.time() * 1000)
-        self.msgShowingPanel.addRowContent(
-            content="", rowId=rrid, contentOwner="assistant_aaxw",
-            contentOwnerType=AAXWScrollPanel.ROW_CONTENT_OWNER_TYPE_AGENT,
-        )
-        
-        #
-        #生成异步处理AI操作的线程
-        #注入要用来执行的ai引擎以及 问题文本+ ui组件id
-        #FIXME 执行时需要基于资源，暂时锁定输入框；
-        #TODO 多重提交，多线程处理还没很好的做，会崩溃；
-        self.aiThread = AIThread(text,str(rrid),self.llmagent)
-        # 绑定界面更新的回调方法
-        self.aiThread.updateUI.connect(self.msgShowingPanel.appendContentByRowId) 
-        # 启动
-        self.aiThread.start()
-        #
-        
-        #同步方式调用: 界面会hang住。
-        # self.llmagent.send_request(text, 
-        #             lambda content:self.msgShowingPanel.appendToContentById(content,rrid ))
-        #
-        
-        self.promptInputEdit.clear()
-        self._logInput()
-
-    def _logInput(self):
-        # 打印输入框中的内容
-        print(f"Input: {self.promptInputEdit.text()}")
-
+    # 
+    # 切换隐藏
     def toggleHidden(self):
         if not self.isHidden():
  
@@ -752,12 +797,11 @@ class AAXWJumpinMainWindow(QWidget):
             # self.setVisible(True)
             self.setStaysOnTop(isToOn=True)
             self.show()
-            self.promptInputEdit.setFocus()
+            self.inputPanel.promptInputEdit.setFocus()
             # self.raise_() # 
             # self.activateWindow() #也会有点影像
 
             # self.promptInputEdit.setFocus()
-
 
     ##
     # 切换钉在最前台 功能
@@ -784,12 +828,9 @@ class AAXWJumpinMainWindow(QWidget):
     # 钉在最前台功能结束
     #
     
-    
-    
     # 关闭窗口方法
     def closeWindow(self):
         self.close()
-
 
     #
     # 根据内部部件大小调整主窗口自身大小；还是本来就有这个设置？
@@ -875,7 +916,6 @@ class AAXWJumpinTrayKit(QSystemTrayIcon):
         #这里是不是应该关闭窗口外同时关闭app：app.quit()
         #FIXME 如果主窗口是hidden状态，则不能退出，或者偶尔不能退出。
         self.mainWindow.closeWindow()
-        
         
     
     def open_directory(self):
