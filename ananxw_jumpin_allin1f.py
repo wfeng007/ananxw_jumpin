@@ -8,7 +8,7 @@
 
 #
 # 小王的ai节点,快速提示词快速入口，投入ai吧！ANAN其实也是只狗狗。。。
-# An AI Node of XiaoWang ， jumpin ! AnAn is a dog...
+# An AI Node of XiaoWang ， jumpin ! ANAN is a dog...
 #
 #
 
@@ -25,7 +25,14 @@
 #
 
 import sys, os,time
-from typing import Callable
+from typing import Callable, List
+from abc import ABC, abstractmethod
+
+try:
+    from typing import override #3.12+ #type:ignore
+except ImportError:
+    from typing_extensions import override #3.8+
+
 #pyside6
 from PySide6.QtCore import Qt, QEvent, QObject,QThread,Signal
 from PySide6.QtWidgets import (
@@ -63,6 +70,8 @@ from pynput import keyboard
 # ai相关
 from langchain_openai import ChatOpenAI
 from langchain.prompts import PromptTemplate
+from openai import OpenAI
+from openai.types.chat import ChatCompletionSystemMessageParam, ChatCompletionUserMessageParam
 
 
 # 加载环境变量 #openai 的key读取
@@ -137,8 +146,13 @@ class AAXWJumpinConfig:
 #
 # AI相关
 #
-class AAXWSimpleAIConnAgent:
-   
+class AbstractAIConnAgent(ABC):
+    @abstractmethod
+    def sendRequestStream(self, prompt: str, func: Callable[[str], None]):
+        # raise NotImplementedError("Subclasses must implement sendRequestStream method")
+        ...
+
+class AAXWSimpleAIConnAgent(AbstractAIConnAgent):
     """
     连接LLM/Agent的工具类，支持流式获取响应。
     """
@@ -162,7 +176,7 @@ class AAXWSimpleAIConnAgent:
         
         self.llm = ChatOpenAI(**chat_params)
 
-
+    @override
     def sendRequestStream(self, prompt: str, func: Callable[[str], None]):
         """
         发送请求到LLM，并通过回调函数处理流式返回的数据。
@@ -172,7 +186,7 @@ class AAXWSimpleAIConnAgent:
         """
         
         templateStr="""
-        你的额名字AnAn jumpin是一个AI入口助理;
+        你的名字是AnAn jumpin是一个AI入口助理;
         请关注用户跟你说的内容，和善的回答用户，与用户要求。
         如果用户说的不明确，请提示用户可以说的更明确。
         请用纯文本来回答，可以在段落后面增加<br/>标签。
@@ -188,19 +202,67 @@ class AAXWSimpleAIConnAgent:
                 time.sleep(0.1)
                 func(str(msgChunk.content))
                 
+
+class AAXWOllamaAIConnAgent(AbstractAIConnAgent):
+    def __init__(self, model_name: str = "llama3.2:3b"): #llama3.2:3b qwen2:1.5b qwen2.5:7b
+        self.client = OpenAI(
+            base_url="http://localhost:11434/v1",
+            api_key="ollama"
+        )
+        self.model_name = model_name
+
+    def list_models(self) -> List[str]:
+        """列出可用的Ollama模型"""
+        try:
+            models = self.client.models.list()
+            return [model.id for model in models.data]
+        except Exception as e:
+            raise Exception(f"Failed to list models: {str(e)}")
+
+    @override
+    def sendRequestStream(self, prompt: str, func: Callable[[str], None]):
+        """使用OpenAI API风格生成流式聊天完成"""
+        messages = [
+            ChatCompletionSystemMessageParam(content="You are a helpful assistant.", role="system"),
+            ChatCompletionUserMessageParam(content=prompt, role="user")
+        ]
+        try:
+            stream = self.client.chat.completions.create(
+                model=self.model_name,
+                messages=messages,
+                stream=True
+            )
+            for chunk in stream:
+                if chunk.choices[0].delta.content is not None:
+                    content = chunk.choices[0].delta.content
+                    func(content)
+        except Exception as e:
+            raise Exception(f"Failed to generate stream chat completion: {str(e)}")
+
+class AIConnAgentProxy(AbstractAIConnAgent):
+    def __init__(self, agent: AbstractAIConnAgent):
+        self.agent = agent
+
+    @override
+    def sendRequestStream(self, prompt: str, func: Callable[[str], None]):
+        return self.agent.sendRequestStream(prompt, func)
+
+    def set_agent(self, agent: AbstractAIConnAgent):
+        self.agent = agent
+
 # 线程异步处理AI IO任务。
 class AIThread(QThread):
     
     #newContent,id 对应：ShowingPanel.appendToContentById 回调
     updateUI = Signal(str,str)  
 
-    def __init__(self,text:str,uiCellId:str,llmagent:AAXWSimpleAIConnAgent):
+    def __init__(self,text:str,uiCellId:str,llmagent:AbstractAIConnAgent):
         super().__init__()
         
         # self.mutex = QMutex()
         self.text:str=text
         self.uiId:str=uiCellId
-        self.llmagent:AAXWSimpleAIConnAgent=llmagent
+        self.llmagent:AbstractAIConnAgent=llmagent
         
     def run(self):
         self.msleep(500)  # 执行前先等界面渲染
@@ -267,7 +329,7 @@ class AAXWInputLineEdit(QLineEdit):
     # TODO: 是否应该将ctrl/alt 按下后再按字母键的这种情况过先过滤掉？防止额外输入本来的快捷操作。
     def keyPressEvent(self, event):
 
-        #对于LineEdit，如果不用EventFilter这块无效。
+        #对于LineEdit，如果用EventFilter这块无效。
         # if event.key() == Qt.Key_Tab:
         #     self.on_tab_pressed() 
         #     event.ignore()
@@ -541,12 +603,15 @@ class AAXWScrollPanel(QFrame):  # 暂时先外面套一层QFrame
         tb.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         )  
+        tb.setAutoFormatting(QTextBrowser.AutoFormattingFlag.AutoNone) #取消自动格式化？
+        tb.setLineWrapMode(QTextBrowser.LineWrapMode.WidgetWidth) #换行方式
         # tb.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
         #
         # 默认文本等内容
         doc = QTextDocument()
         tb.setDocument(doc)
+        doc.setDefaultStyleSheet("p { white-space: pre-wrap; }") # doc样式。
         ###
         # 连接文档内容变化信号与调整大小的槽函数
         ###
@@ -671,7 +736,9 @@ class AAXWJumpinMainWindow(QWidget):
         super().__init__()
         self.init_ui()
         self.installAppHotKey()
-        self.llmagent=AAXWSimpleAIConnAgent()
+        # self.llmagent=AIConnAgentProxy(AAXWSimpleAIConnAgent())
+        self.llmagent=AIConnAgentProxy(AAXWOllamaAIConnAgent())
+
     
     def init_ui(self):
         
