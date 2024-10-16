@@ -25,8 +25,10 @@
 #
 
 import sys, os,time
-from typing import Callable, List
+from tkinter import Widget
+from typing import Callable, List, Dict, Type
 from abc import ABC, abstractmethod
+import markdown
 
 try:
     from typing import override #3.12+ #type:ignore
@@ -34,7 +36,7 @@ except ImportError:
     from typing_extensions import override #3.8+
 
 #pyside6
-from PySide6.QtCore import Qt, QEvent, QObject,QThread,Signal
+from PySide6.QtCore import Qt, QEvent, QObject,QThread,Signal, QTimer
 from PySide6.QtWidgets import (
     QApplication,
     QSystemTrayIcon,
@@ -60,6 +62,12 @@ from PySide6.QtGui import (
     QIcon,
     QImage,QPixmap,
 )
+
+from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton, 
+                               QPlainTextEdit, QLabel, QScrollArea, QTextBrowser)
+from PySide6.QtGui import QSyntaxHighlighter, QTextCharFormat, QColor, QTextCursor
+from PySide6.QtCore import QRegularExpression, Qt
+
 # WebEngineView用hide()方式时会崩溃，默认展示框用了textbrowser
 # from PySide6.QtWebEngineWidgets import QWebEngineView 
 
@@ -468,7 +476,7 @@ class AAXWInputPanel(QWidget):
     #     if text:
     #         self.sendRequest.emit(text)
     #         self.promptInputEdit.clear()
-    
+    # 
     # input 回车
     def enterClicked(self):
         # 处理回车事件
@@ -518,7 +526,425 @@ class AAXWVBoxLayout(QVBoxLayout):
                 self.addItem(item)
 
 
-class AAXWScrollPanel(QFrame):  # 暂时先外面套一层QFrame
+class ContentBlockStrategy(ABC):
+    #单例化的
+    strategies: Dict[str, Type['ContentBlockStrategy']] = {}
+
+
+    @classmethod
+    def register(cls, strategy_type: str):
+        def decorator(subclass):
+            cls.strategies[strategy_type] = subclass
+            return subclass
+        return decorator
+
+    @classmethod
+    def getStrategy(cls, strategy_type: str) -> 'ContentBlockStrategy':
+        strategy = cls.strategies.get(strategy_type)
+        if not strategy:
+            raise ValueError(f"Unknown strategy type: {strategy_type}")
+        return strategy()
+
+
+    #TODO 这里临时用执行期注入，其实策略也最有定义期注入。使用实例化策略保存定义期需要的属性；
+    #执行期可放入返回的
+    @staticmethod
+    @abstractmethod
+    def createWidget(rowId: str, contentOwner: str, contentOwnerType: str,
+                    mainWindow: QWidget, strategyWidget:QWidget) -> QWidget:
+        pass
+
+    @staticmethod
+    @abstractmethod
+    def insertContent(widget: QWidget, content: str):
+        pass
+
+    @staticmethod
+    @abstractmethod
+    def adjustSize(widget: QWidget):
+        pass
+    
+    
+#定义期初始化对象了，其实不一定好。要用最好在最外层控制使用注册
+@ContentBlockStrategy.register("text_browser") 
+class TextBrowserStrategy(ContentBlockStrategy):
+    # 用特殊符号最为追加占位标记
+    MARKER = "[💬➡️🏁]"
+    @staticmethod
+    @override
+    def createWidget(rowId: str, contentOwner: str, contentOwnerType: str, 
+                     mainWindow: 'AAXWJumpinMainWindow', strategyWidget: 'AAXWScrollPanel') -> QTextBrowser:
+        
+        tb = QTextBrowser()
+        tb.setObjectName(f"{AAXWScrollPanel.ROW_BLOCK_NAME_PREFIX}_{rowId}")
+        tb.setProperty("id", rowId)
+        tb.setProperty("contentOwner", contentOwner)
+        tb.setProperty("contentOwnerType", contentOwnerType)
+        # 高度先限定，然后根据内部变化，关闭滚动条
+        tb.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        tb.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+        # 关闭自动格式化？
+        tb.setAutoFormatting(QTextBrowser.AutoFormattingFlag.AutoNone)
+        tb.setLineWrapMode(QTextBrowser.LineWrapMode.WidgetWidth)
+
+        # 设置基本样式；
+        doc = QTextDocument()
+        tb.setDocument(doc)
+        doc.setDefaultStyleSheet("p { white-space: pre-wrap; }")
+
+
+        # 内容改变改变高度
+        tb.document().contentsChanged.connect(lambda: TextBrowserStrategy.adjustSize(tb))
+
+        #初始化空间
+        # initial_text = " "
+        # doc.setHtml(initial_text)
+        # tb.append(TextBrowserStrategy.MARKER)  # 这里增加一个追加内容用的特别Marker
+        TextBrowserStrategy.initContent(widget=tb,content=" ")
+
+        # 现在可以使用 main_window 和 panel 进行额外的设置或操作
+        tb.setProperty("mainWindow", mainWindow)
+        tb.setProperty("strategyWidget", strategyWidget)
+
+        return tb
+
+    @staticmethod
+    def initContent(widget: QTextBrowser, content: str):
+        tb=widget
+        doc=tb.document()
+         #初始化空间
+        initial_text = content
+        doc.setHtml(initial_text)
+        tb.append(TextBrowserStrategy.MARKER)  # 这里增加一个追加内容用的特别Marker
+
+    @staticmethod
+    @override
+    def insertContent(widget: QTextBrowser, content: str):
+        # 使用游标进行查找marker并更新平文
+        doc = widget.document()
+        cursor = doc.find(TextBrowserStrategy.MARKER)
+        if cursor:
+            cursor.movePosition(QTextCursor.MoveOperation.PreviousCharacter, 
+                                QTextCursor.MoveMode.MoveAnchor
+            )
+            cursor.insertHtml(f"{content}")  # 可以追加html但是会过滤掉不符合规范的比如div
+            widget.repaint()  # 非线程调用本方法，可能每次都要重绘，否则是完成完后一次性刷新。
+        else:
+            print("not found marker:" + TextBrowserStrategy.MARKER)
+
+    @staticmethod
+    @override
+    def adjustSize(widget: QTextBrowser):
+        
+        tb:QTextBrowser = widget
+        # 获取 QTextBrowser 的文档对象
+        doc = tb.document()
+        # 获取 QTextBrowser 的内容边距
+        margins = tb.contentsMargins()
+        #  计算文档高度加上上下边距得到总高度
+        # TODO 这里计算的不对，所有tb都需要根据内容来计算高度，获取内容应该。
+        expectantHeight:int = int(
+            doc.size().height() + margins.top() + margins.bottom() + 10 #预期行高增加1行？
+        )  # 多增加点margins
+
+        # 使用fixed的尺寸策略
+        # 调整Row tb高度
+        if expectantHeight<20: expectantHeight=20
+        tb.setFixedHeight(int(expectantHeight))
+
+
+        #同时调整主窗口高度；
+        mainWindow:"AAXWJumpinMainWindow"=tb.property("mainWindow")
+
+        # FIXME: mainWindow的调整策略需要重新实现。每次增加内容就变更主窗口尺寸有问题。
+        # mainWindow不为none，刚创建的tb没有mainWindow？
+        if mainWindow :mainWindow.adjustHeight()
+
+
+
+class PythonHighlighter(QSyntaxHighlighter):
+    def __init__(self, parent=None):
+        super().__init__(parent) #type: ignore
+        self.highlightingRules = []
+
+        # 设置关键字高亮规则
+        keywordFormat = QTextCharFormat()
+        keywordFormat.setForeground(QColor("#569CD6"))
+        keywords = ["def", "class", "for", "if", "else", "elif", "while", "return", "import", "from", "as", "try", "except", "finally"]
+        for word in keywords:
+            pattern = QRegularExpression(r'\b' + word + r'\b')
+            self.highlightingRules.append((pattern, keywordFormat))
+
+        # 设置字符串高亮规则
+        stringFormat = QTextCharFormat()
+        stringFormat.setForeground(QColor("#CE9178"))
+        self.highlightingRules.append((QRegularExpression("\".*\""), stringFormat))
+        self.highlightingRules.append((QRegularExpression("'.*'"), stringFormat))
+
+        # 设置注释高亮规则
+        commentFormat = QTextCharFormat()
+        commentFormat.setForeground(QColor("#6A9955"))
+        self.highlightingRules.append((QRegularExpression("#.*"), commentFormat))
+
+    def highlightBlock(self, text):
+        for pattern, format in self.highlightingRules:
+            expression = QRegularExpression(pattern)
+            it = expression.globalMatch(text)
+            while it.hasNext():
+                match = it.next()
+                self.setFormat(match.capturedStart(), match.capturedLength(), format)
+
+class CodeBlockWidget(QWidget):
+    def __init__(self, code, parent=None):
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+
+        # 添加顶部按钮布局
+        buttonLayout = QHBoxLayout()
+        buttonLayout.addStretch()
+        for _ in range(3):
+            button = QPushButton()
+            button.setFixedSize(20, 20)
+            buttonLayout.addWidget(button)
+        layout.addLayout(buttonLayout)
+
+        # 创建代码编辑器
+        self.codeEdit = QPlainTextEdit()
+        self.codeEdit.setReadOnly(True)
+        self.codeEdit.setStyleSheet("""
+            background-color: #1E1E1E;
+            color: #D4D4D4;
+            border: 1px solid #555555;
+            border-radius: 5px;
+        """)
+        self.codeEdit.setPlainText(code)
+        layout.addWidget(self.codeEdit)
+
+        # 应用代码高亮
+        self.highlighter = PythonHighlighter(self.codeEdit.document())
+
+        # 添加底部空白区域
+        layout.addWidget(QLabel())
+
+class CompoMarkdownContentBlock(QWidget):
+    # 基础QSS样式
+    BASE_QSS = """
+    QWidget {
+        background-color: #f0f0f0;
+        border: 1px solid #d0d0d0;
+        border-radius: 5px;
+    }
+    QScrollArea {
+        border: none;
+    }
+    """
+
+    # md的基本 CSS 样式
+    MARKDOWN_CONTENT_CSS = """
+    <style>
+        body {
+            font-family: "Microsoft YaHei", Arial, sans-serif;
+            line-height: 1.6;
+            padding: 20px;
+        }
+        /* ... 其他样式保持不变 ... */
+    </style>
+    """
+    #
+    # 内部类包装TB
+    #
+    class MarkdownInnerTextBrowser(QTextBrowser):
+        def __init__(self, parent=None):
+            super().__init__(parent)
+            self.setOpenExternalLinks(True)
+            self.setStyleSheet("""
+                border: 1px solid #555555;
+                border-radius: 5px;
+            """)
+    ## 内部类包装TB end
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.initUi()
+
+    def initUi(self):
+        """初始化UI组件"""
+        self.layout = QVBoxLayout(self) #type: ignore
+        self.scrollArea = QScrollArea(self)
+        self.contentWidget = QWidget()
+        self.contentLayout = QVBoxLayout(self.contentWidget)
+        
+        # 设置滚动区域
+        self.scrollArea.setWidget(self.contentWidget)
+        self.scrollArea.setWidgetResizable(True)
+        self.layout.addWidget(self.scrollArea)
+        
+        # 初始化当前显示组件
+        self.currentWidget = self.MarkdownInnerTextBrowser()
+        self.contentLayout.addWidget(self.currentWidget)
+        
+        # 初始化状态变量
+        self.isInCodeBlock = False
+        self.markdownContent = ""
+
+        # 应用基础样式
+        self.setStyleSheet(self.BASE_QSS)
+
+    def addContent(self, content):
+        """添加内容到显示区域"""
+        if content.startswith("```python"):
+            self.handleCodeBlockStart(content)
+        elif content.startswith("```") and self.isInCodeBlock:
+            self.handleCodeBlockEnd()
+        elif self.isInCodeBlock:
+            self.appendToCodeBlock(content)
+        else:
+            self.handleMarkdownContent(content)
+
+    def handleCodeBlockStart(self, content):
+        """处理代码块开始"""
+        self.isInCodeBlock = True
+        code = content.split("```python")[1].strip()
+        newWidget = CodeBlockWidget(code)
+        self.contentLayout.addWidget(newWidget)
+        self.currentWidget = newWidget
+        self.markdownContent = ""
+
+    def handleCodeBlockEnd(self):
+        """处理代码块结束"""
+        self.isInCodeBlock = False
+        newWidget = self.MarkdownInnerTextBrowser()
+        self.contentLayout.addWidget(newWidget)
+        self.currentWidget = newWidget
+        self.markdownContent = ""
+
+    def appendToCodeBlock(self, content):
+        """向代码块追加内容"""
+        if isinstance(self.currentWidget, CodeBlockWidget):
+            self.currentWidget.codeEdit.appendPlainText(content)
+        else:
+            print("警告：当前不在代码块中，但收到了代码块内容")
+
+    def handleMarkdownContent(self, content):
+        """处理Markdown内容"""
+        self.markdownContent += content
+        if not isinstance(self.currentWidget, self.MarkdownInnerTextBrowser):
+            newWidget = self.MarkdownInnerTextBrowser()
+            self.contentLayout.addWidget(newWidget)
+            self.currentWidget = newWidget
+        htmlContent = markdown.markdown(self.markdownContent, extensions=['extra', 'codehilite'])
+        fullHtml = f"{self.MARKDOWN_CONTENT_CSS}<body>{htmlContent}</body>"
+        self.currentWidget.setHtml(fullHtml)
+        self.currentWidget.moveCursor(QTextCursor.MoveOperation.End)
+        self.currentWidget.ensureCursorVisible()
+
+    def clear(self):
+        """清除所有内容"""
+        for i in reversed(range(self.contentLayout.count())): 
+            widget = self.contentLayout.itemAt(i).widget()
+            if widget is not None:
+                widget.deleteLater()
+        self.currentWidget = self.MarkdownInnerTextBrowser()
+        self.contentLayout.addWidget(self.currentWidget)
+        self.isInCodeBlock = False
+        self.markdownContent = ""
+
+    def setScrollBarEnabled(self, enabled):
+        """启用或禁用滚动条"""
+        if enabled:
+            self.scrollArea.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        else:
+            self.scrollArea.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+    def sizeHint(self):
+        """返回建议的尺寸"""
+        return self.contentWidget.sizeHint()
+
+@ContentBlockStrategy.register("compoMarkdownContentStrategy") 
+class CompoMarkdownContentStrategy(ContentBlockStrategy):
+    # Markdown 语法提示，可用AI提示词
+    MARKDOWN_PROMPT = """
+    本对话支持以下 Markdown 语法：
+    - 标题：使用 # 号（支持 1-6 级标题）
+      例如：# 一级标题
+            ## 二级标题
+    - 文本：这是普通文本
+    - 粗体：**粗体文本**
+    - 斜体：*斜体文本*
+    - 删除线：~~删除线文本~~
+    - 链接：[链接文本](URL)
+    - 图片：![替代文本](图片URL)
+    - 列表：
+      无序列表使用 - 
+      有序列表使用 1. 2. 3. 
+    - 代码：
+      行内代码：`代码`
+      代码块：使用 ```语言名 和 ``` 包裹
+    - 表格：使用 | 分隔列，使用 - 分隔表头
+      例如：
+      | 列1 | 列2 | 列3 |
+      |-----|-----|-----|
+      | A1  | B1  | C1  |
+    - 引用：> 引用文本
+    - 分割线：---
+    - 任务列表：
+      - [ ] 未完成任务
+      - [x] 已完成任务
+
+    Markdown 语法 注意：
+    1. Markdown 中使用单个换行不会产生新段落，如需新段落请使用两个换行。
+    2. 部分复杂格式（如表格内的样式）可能无法完全支持。
+    3. 代码块会使用特殊的格式和语法高亮显示，当前暂时仅支持python，其他代码格式先用普通文本提供。
+    """
+
+    @staticmethod
+    @override
+    def createWidget(rowId: str, contentOwner: str, contentOwnerType: str, 
+                     mainWindow: 'AAXWJumpinMainWindow', strategyWidget: 'AAXWScrollPanel') -> CompoMarkdownContentBlock:
+        
+        mdBlock = CompoMarkdownContentBlock()
+        mdBlock.setObjectName(f"{AAXWScrollPanel.ROW_BLOCK_NAME_PREFIX}_{rowId}")
+        mdBlock.setProperty("id", rowId)
+        mdBlock.setProperty("contentOwner", contentOwner)
+        mdBlock.setProperty("contentOwnerType", contentOwnerType)
+
+        # 禁用滚动条，由外部控制
+        mdBlock.setScrollBarEnabled(False)
+
+        # 设置属性以便后续操作
+        mdBlock.setProperty("mainWindow", mainWindow)
+        mdBlock.setProperty("strategyWidget", strategyWidget)
+
+        return mdBlock
+
+    @staticmethod
+    def initContent(widget: CompoMarkdownContentBlock, content: str):
+        widget.clear()
+        widget.addContent(content)
+
+    @staticmethod
+    @override
+    def insertContent(widget: CompoMarkdownContentBlock, content: str):
+        # 直接添加内容，不需要 MARKER
+        widget.addContent(content)
+
+    @staticmethod
+    @override
+    def adjustSize(widget: CompoMarkdownContentBlock):
+        # 获取内容的实际高度
+        contentHeight = widget.sizeHint().height()
+        
+        # 设置固定高度
+        widget.setFixedHeight(contentHeight)
+
+        # 调整主窗口高度
+        mainWindow: "AAXWJumpinMainWindow" = widget.property("mainWindow")
+        if mainWindow:
+            mainWindow.adjustHeight()
+
+
+class AAXWScrollPanel(QFrame):
     """
     垂直方向以列表样式可追加内容的展示面板；
     内容所在Row部件会根据内容调整高度；
@@ -540,9 +966,14 @@ class AAXWScrollPanel(QFrame):  # 暂时先外面套一层QFrame
     }
     """
 
-    # }
 
-    def __init__(self, mainWindow: "AAXWJumpinMainWindow", qss:str=DEFAULT_STYLE ,parent=None):
+    ROW_BLOCK_NAME_PREFIX = "row_block_name"
+    # 区分展示内容行的类型
+    ROW_CONTENT_OWNER_TYPE_USER="ROW_CONTENT_OWNER_TYPE_USER"
+    ROW_CONTENT_OWNER_TYPE_AGENT="ROW_CONTENT_OWNER_TYPE_AGENT"
+    ROW_CONTENT_OWNER_TYPE_SYSTEM="ROW_CONTENT_OWNER_TYPE_SYSTEM"
+
+    def __init__(self, mainWindow: "AAXWJumpinMainWindow", qss:str=DEFAULT_STYLE, parent=None, strategy_type="text_browser"):
         """
         当前控件展示与布局结构：
         AAXWScrollPanel->QVBoxLayout->QScrollArea->QWidget(scrollWidget)-> TB等
@@ -552,6 +983,8 @@ class AAXWScrollPanel(QFrame):  # 暂时先外面套一层QFrame
         self.setFrameShape(QFrame.Shape.StyledPanel)
         # self.setFrameShadow(QFrame.Raised) #阴影凸起
         self.setStyleSheet(qss)
+
+        self.strategy = ContentBlockStrategy.getStrategy(strategy_type)
 
         # 主要设定可垂直追加的Area+Layout
         # 结构顺序为scroll_area->scroll_widget->scroll_layout
@@ -566,109 +999,49 @@ class AAXWScrollPanel(QFrame):  # 暂时先外面套一层QFrame
         self.scrollLayout: AAXWVBoxLayout = AAXWVBoxLayout(self.scrollWidget)
         self.scrollLayout.setAlignment(Qt.AlignmentFlag.AlignTop)  # 设置加入的部件为顶端对齐
         # 使用scroll_layout来添加元素，应用布局；
-        
+
         # panel层布局
         panelLayout = QVBoxLayout(self)
         panelLayout.addWidget(self.scrollArea)  # 加上scroll_area
 
-    # 用特殊符号最为追加占位标记
-    MARKER = "[💬➡️🏁]"
-    ROW_BLOCK_NAME_PREFIX = "row_block_name"
-    # 区分展示内容行的类型
-    ROW_CONTENT_OWNER_TYPE_USER="ROW_CONTENT_OWNER_TYPE_USER"
-    ROW_CONTENT_OWNER_TYPE_AGENT="ROW_CONTENT_OWNER_TYPE_AGENT"
-    ROW_CONTENT_OWNER_TYPE_SYSTEM="ROW_CONTENT_OWNER_TYPE_SYSTEM"
-    
-    #TODO:考虑提供一定的扩展性，Row组件创建创建不一定是TB，内容填入的展示方式，方便插件化。
     def addRowContent(self, content, rowId, contentOwner="unknown", 
-                      contentOwnerType=ROW_CONTENT_OWNER_TYPE_SYSTEM ,isAtTop=True):
+                      contentOwnerType=ROW_CONTENT_OWNER_TYPE_SYSTEM, isAtTop=True):
         """
         在scrollLayout上添加一个内容行，默认使用QTextBrowser。
         默认在顶端加入；
         rowId 表示内容行的唯一标识，用于后续查找，组件定位；
         """
-
-        # 添加 QTextBrowser 并设置 objectName 和自定义属性 id
-        tb = QTextBrowser()
-        tb.setObjectName(
-            f"{self.ROW_BLOCK_NAME_PREFIX}_{rowId}"
-        )  # message row background
-        tb.setProperty("id", rowId)
-        tb.setProperty("contentOwner", contentOwner)
-        tb.setProperty("contentOwnerType", contentOwnerType)
-        # 高度先限定，然后根据内部变化，关闭滚动条
-        tb.setVerticalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
-        )  
-        tb.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
-        )  
-        tb.setAutoFormatting(QTextBrowser.AutoFormattingFlag.AutoNone) #取消自动格式化？
-        tb.setLineWrapMode(QTextBrowser.LineWrapMode.WidgetWidth) #换行方式
-        # tb.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-
-        #
-        # 默认文本等内容
-        doc = QTextDocument()
-        tb.setDocument(doc)
-        doc.setDefaultStyleSheet("p { white-space: pre-wrap; }") # doc样式。
-        ###
-        # 连接文档内容变化信号与调整大小的槽函数
-        ###
-        tb.document().contentsChanged.connect(lambda: self._adjustRowBlockSize(tb))
-        #
-    
-        # 初始化文本内容;
-        initial_text = content
-        doc.setHtml(initial_text)
-        tb.append(self.MARKER)  # 这里增加一个追加内容用的特别Marker
-        #
+        
+        widget = self.strategy.createWidget(rowId, contentOwner, contentOwnerType, self.mainWindow, self)
+        
+        self.strategy.insertContent(widget, content)
 
         # 加入列表
         if isAtTop:
-            self.scrollLayout.addWidgetAtTop(tb)  # 这里每次在头部加layout定制了
+            self.scrollLayout.addWidgetAtTop(widget)  # 这里每次在头部加layout定制了
         else:
-            self.scrollLayout.addWidget(tb)
+            self.scrollLayout.addWidget(widget)
 
-    #  支持流式写入内容
     def appendContentByRowId(self, text, rowId: str):
         """
         在指定Rowid的Row中追加内容
         """
-        # 查找对应的 QTextBrowser 并追加内容
+        # 查找对应的 QWidget 并追加内容
         # 用名字查找元素
-        tb: QTextBrowser = self.scrollWidget.findChild( #TODO 这个搜索子控件的写法是否要优化？
-            QTextBrowser, f"{self.ROW_BLOCK_NAME_PREFIX}_{rowId}"
-        )  # type: ignore  #这里放的就是TB 
-        if tb is not None:
-            current_text = tb.toHtml()
-            # print("-" * 20)
-            # print(current_text)
-            # 问题# tb.setHtml(current_text + text) #会重新解析html，写如text并按照原有内容的html样式融入。
-            # 问题# tb.append(text) #会遵循之前的html，跟current_text + text效果类似
-
-            # 使用游标进行查找marker并更新平文
-            doc = tb.document()
-            cursor: QTextCursor = doc.find(self.MARKER)
-            if cursor:
-                cursor.movePosition(
-                    QTextCursor.MoveOperation.PreviousCharacter,
-                    QTextCursor.MoveMode.MoveAnchor,
-                )
-                # cursor.insertText(text) #这个是按照平文方式来写，会把标签转义为转义字符形式。
-                cursor.insertHtml(
-                    f"{text}"
-                )  # 可以追加html但是会过滤掉不符合规范的比如div
-                tb.repaint()#非线程调用本方法，可能每次都要重绘，否则是完成完后一次性刷新。
-            else:
-                print("not found marker:" + self.MARKER)
+        widget = self.scrollWidget.findChild(
+            QWidget, f"{self.ROW_BLOCK_NAME_PREFIX}_{rowId}"
+        )
+        #TODO findChild 默认返回的是object，这里类型需要处理一下；
+        if widget:
+            self.strategy.insertContent(widget, text) #type:ignore
+            # self.strategy.adjustSize(widget) #type:ignore
+            # self.mainWindow.adjustHeight()
         else:
-            print("not found tb by name:" + f"{self.ROW_BLOCK_NAME_PREFIX}_{rowId}")
+            print(f"Not found widget by name: {self.ROW_BLOCK_NAME_PREFIX}_{rowId}")
 
     # 
     # Panel的内部基于scroll-widget增加组件后的期望尺寸；
     def expectantHeight(self):
-
         # 关键点是Panel，scrollArea的实际大小与 self.scrollArea.widget() 提供的大小即内部期望的大小是不一样的。
         # 默认Panel或scrollArea是根据外部来设定大小的。
         sws = self.scrollArea.widget().size()
@@ -688,37 +1061,11 @@ class AAXWScrollPanel(QFrame):  # 暂时先外面套一层QFrame
     # def scrollWidgetSize(self):
     #     return self.scrollArea.widget().size()
 
-    # 定义调整 QTextBrowser 大小的槽函数
-    def _adjustRowBlockSize(self, changedTextBrowser):
 
-        # 重新计算内部尺寸 #从上往下重新触发绘制计算，保证Hint等计算适当。
-        # self.updateGeometry() 
-
-        # 在主窗口的中心 widget（容器 widget）中查找 QTextBrowser
-        # 实际可以参考 这个查找代码：text_browser = self.centralWidget().findChild(QTextBrowser)
-        tb:QTextBrowser = changedTextBrowser
-        # 获取 QTextBrowser 的文档对象
-        doc = tb.document()
-        # 获取 QTextBrowser 的内容边距
-        margins = tb.contentsMargins()
-        #  计算文档高度加上上下边距得到总高度
-        # TODO 这里计算的不对，所有tb都需要根据内容来计算高度，获取内容应该。
-        expectantHeight:int = int(
-            doc.size().height() + margins.top() + margins.bottom() + 10 #预期行高增加1行？
-        )  # 多增加点margins
-
-        # 使用fixed的尺寸策略
-        # 调整Row tb高度
-        if expectantHeight<20: expectantHeight=20
-        tb.setFixedHeight(int(expectantHeight))
-        
-        #FIXME: mainWindow的调整策略需要重新实现。每次增加内容就变更主窗口尺寸有问题。
-        self.mainWindow.adjustHeight()
 
     #
     # 可增加事件过滤器，需要时可以install到外部大窗口上。比如QEvent.Type.Resize事件触发动作。
     # 
-    
     pass  # AAXWScrollPanel end
 
 
@@ -752,7 +1099,12 @@ class AAXWJumpinMainWindow(QWidget):
         # self.inputPanel.sendRequest.connect(self.handleInputRequest)
 
         msgShowingPanel = AAXWJumpinConfig.MSGSHOWINGPANEL_QSS
-        self.msgShowingPanel = AAXWScrollPanel(mainWindow=self, qss=msgShowingPanel, parent=self)
+        self.msgShowingPanel = AAXWScrollPanel(
+            mainWindow=self, 
+            qss=msgShowingPanel, 
+            parent=self,
+            strategy_type='compoMarkdownContentStrategy',
+        )
 
         mainVBoxLayout.addWidget(self.inputPanel)
         mainVBoxLayout.addWidget(self._createAcrossLine(QFrame.Shape.HLine))
@@ -780,12 +1132,19 @@ class AAXWJumpinMainWindow(QWidget):
         self.inputPanel.promptInputEdit.setFocus()
 
     def handleInputRequest(self, text):
+
+        # 用户输入容消息气泡与内容初始化
         rid = int(time.time() * 1000)
         self.msgShowingPanel.addRowContent(
             content=text, rowId=rid, contentOwner="user_xiaowang",
             contentOwnerType=AAXWScrollPanel.ROW_CONTENT_OWNER_TYPE_USER,
         )
         
+        # 等0.5秒；
+        # 等待0.5秒
+        # 使用QThread让当前主界面线程等待0.5秒
+        QThread.msleep(500)
+        # 反馈内容消息气泡与内容初始化
         rrid = int(time.time() * 1000)
         self.msgShowingPanel.addRowContent(
             content="", rowId=rrid, contentOwner="assistant_aaxw",
@@ -848,7 +1207,7 @@ class AAXWJumpinMainWindow(QWidget):
     #
     ##
     # 装载关联快捷键
-    # 或特殊按键处理器
+    # 特殊按键处理器
     # end
     ##
 
