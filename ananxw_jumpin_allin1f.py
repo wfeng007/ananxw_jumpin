@@ -17,6 +17,9 @@
 # 支持钉在桌面最前端，全局热键换出与隐藏；
 # [x]:托盘功能；
 # TODO 增加工作目录配置与维护，基本文件系统能力。
+# TODO 增加日志功能，默认标准输出中输出；支持工作目录生成日志；并根据时间与数量清理；
+# TODO 切换agent等；
+# 
 # 提供基本的提示发送与结果展示界面；
 # 可支持多轮交互；
 # 可支持富文本范围内容展示；
@@ -29,6 +32,7 @@ from tkinter import Widget
 from typing import Callable, List, Dict, Type
 from abc import ABC, abstractmethod
 import markdown
+from py import process
 
 try:
     from typing import override #3.12+ #type:ignore
@@ -36,7 +40,7 @@ except ImportError:
     from typing_extensions import override #3.8+
 
 #pyside6
-from PySide6.QtCore import Qt, QEvent, QObject,QThread,Signal, QTimer
+from PySide6.QtCore import Qt, QEvent, QObject,QThread,Signal, QTimer,QSize
 from PySide6.QtWidgets import (
     QApplication,
     QSystemTrayIcon,
@@ -60,7 +64,7 @@ from PySide6.QtGui import (
     QMouseEvent,
     QPainter,
     QIcon,
-    QImage,QPixmap,
+    QImage,QPixmap,QTextOption
 )
 
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton, 
@@ -556,6 +560,11 @@ class ContentBlockStrategy(ABC):
 
     @staticmethod
     @abstractmethod
+    def initContent(widget: QWidget,content:str) -> QWidget:
+        pass
+
+    @staticmethod
+    @abstractmethod
     def insertContent(widget: QWidget, content: str):
         pass
 
@@ -610,6 +619,7 @@ class TextBrowserStrategy(ContentBlockStrategy):
         return tb
 
     @staticmethod
+    @override
     def initContent(widget: QTextBrowser, content: str):
         tb=widget
         doc=tb.document()
@@ -695,49 +705,173 @@ class PythonHighlighter(QSyntaxHighlighter):
                 match = it.next()
                 self.setFormat(match.capturedStart(), match.capturedLength(), format)
 
-class CodeBlockWidget(QWidget):
-    def __init__(self, code, parent=None):
+class CodeBlockWidget(QWidget): #QWidget有站位，但是并不绘制出来。
+    def __init__(self, code, title="Unkown", parent=None):
         super().__init__(parent)
+        self.sizeChangedCallbacks = []
+        self.title = title
+
+        self.setStyleSheet("""
+            CodeBlockWidget {
+                background-color: #1E1E1E;
+                border-radius: 5px;
+                overflow: hidden;
+                /* border: 2px solid #FF00FF;  添加特殊颜色的边框用于调试 */
+            }
+        """)
+        
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
 
-        # 添加顶部按钮布局
-        buttonLayout = QHBoxLayout()
-        buttonLayout.addStretch()
-        for _ in range(3):
+        # 顶部按钮布局
+        topWidget = QWidget()
+        topWidget.setFixedHeight(30)
+        topWidget.setStyleSheet("""
+            background-color: #5D5D5D;
+            border: none;
+            border-top-left-radius: 5px;
+            border-top-right-radius: 5px;
+            border-bottom-left-radius: 0px;
+            border-bottom-right-radius: 0px;
+        """)
+        topLayout = QHBoxLayout(topWidget)
+        topLayout.setContentsMargins(10, 2, 10, 2)
+
+        # 添加标题标签
+        self.titleLabel = QLabel(self.title)
+        self.titleLabel.setStyleSheet("""
+            color: #FFA500; 
+            font-family: 'Courier New', monospace;
+            font-size: 16px;
+            font-weight: bold;
+        """) #亮橙色
+        topLayout.addWidget(self.titleLabel)
+
+        topLayout.addStretch()
+        for color in ['#ED6A5E', '#F4BF4F', '#61C554']:  # 红、黄、绿按钮
             button = QPushButton()
-            button.setFixedSize(20, 20)
-            buttonLayout.addWidget(button)
-        layout.addLayout(buttonLayout)
+            button.setFixedSize(15, 15)
+            button.setStyleSheet(f"""
+                background-color: {color};
+                border: 1px solid #1E1E1E;
+                border-radius: 3px;
+            """)
+            topLayout.addWidget(button)
+        layout.addWidget(topWidget)
 
-        # 创建代码编辑器
+        # 修改代码编辑器的设置
         self.codeEdit = QPlainTextEdit()
         self.codeEdit.setReadOnly(True)
         self.codeEdit.setStyleSheet("""
-            background-color: #1E1E1E;
-            color: #D4D4D4;
-            border: 1px solid #555555;
-            border-radius: 5px;
+            QPlainTextEdit {
+                background-color: #1E1E1E;
+                color: #D4D4D4;
+                border: none;
+                font-family: 'Courier New', monospace;
+                font-size: 12px;
+                border-radius: 0px;
+            }
         """)
+        self.codeEdit.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)  # 禁用自动换行
+        self.codeEdit.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        #不需要垂直滚动条
+        self.codeEdit.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.codeEdit.setPlainText(code)
         layout.addWidget(self.codeEdit)
 
         # 应用代码高亮
         self.highlighter = PythonHighlighter(self.codeEdit.document())
 
-        # 添加底部空白区域
-        layout.addWidget(QLabel())
+        # 底部空白区域
+        bottomWidget = QWidget()
+        bottomWidget.setFixedHeight(30)
+        bottomWidget.setStyleSheet("""
+            background-color: #5D5D5D;
+            border: none;
+            border-top-left-radius: 0px;
+            border-top-right-radius: 0px;
+            border-bottom-left-radius: 5px;
+            border-bottom-right-radius: 5px;
+        """)
+        layout.addWidget(bottomWidget)
 
-class CompoMarkdownContentBlock(QWidget):
+        # self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+        # self.codeEdit.textChanged.connect(self.adjustHeight)
+
+        #会基于sizeHint调整；
+        self.codeEdit.textChanged.connect(self.adjustSize)
+
+    def setTitle(self, title):
+        self.title = title
+        self.titleLabel.setText(title)
+
+    def registerSizeChangedCallbacks(self, callback):
+        self.sizeChangedCallbacks.append(callback)
+    def _triggerSizeChanged(self):
+        for callback in self.sizeChangedCallbacks:
+            callback()
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._triggerSizeChanged()
+
+    def adjustSize(self) -> None:
+        # self.setFixedSize(self.sizeHint())
+        qs=self.sizeHint()
+        self.setFixedHeight(qs.height())
+
+
+    
+    def expectantHeight(self)->int:
+
+        #根据
+
+        # 获取行数
+        lineCount = self.codeEdit.blockCount()
+        
+        # 获取单行高度（假设所有行高度相同）
+        metrics = self.codeEdit.fontMetrics()
+        lineHeight = metrics.lineSpacing()
+        
+        # 计算文本内容的总高度
+        contentHeight = (lineCount+1) * lineHeight
+        
+        # 获取顶部和底部区域的高度
+        topHeight = 30  # 顶部区域高度
+        bottomHeight = 30  # 底部区域高度
+        
+        # 添加冗余高度
+        padding = 20  # 额外的冗余高度
+        
+        # 计算总高度
+        totalHeight = topHeight + contentHeight + bottomHeight + padding
+        
+        
+        # print(f"Adjusted height: {totalHeight}px, Lines: {lineCount}")
+        return totalHeight
+
+    def sizeHint(self): #重写 预期尺寸
+        width = self.width()
+        height = self.expectantHeight()
+        return QSize(width, height)
+    
+class CompoMarkdownContentBlock(QFrame): #原来是QWidget
+    MIN_HEIGHT = 50  # 设置一个最小高度
+
     # 基础QSS样式
     BASE_QSS = """
-    QWidget {
+    /* */
+    CompoMarkdownContentBlock {
         background-color: #f0f0f0;
-        border: 1px solid #d0d0d0;
+        border: none ;
         border-radius: 5px;
     }
-    QScrollArea {
-        border: none;
+    CompoMarkdownContentBlock[contentOwnerType="ROW_CONTENT_OWNER_TYPE_USER"] {
+        border: 1px solid #a0a0a0;
+        background-color: #d4f2e7;
+        margin-left: 200px; /* 模拟右对齐，实际最好脚本中用layout实现对齐； */
     }
+
     """
 
     # md的基本 CSS 样式
@@ -745,121 +879,304 @@ class CompoMarkdownContentBlock(QWidget):
     <style>
         body {
             font-family: "Microsoft YaHei", Arial, sans-serif;
-            line-height: 1.6;
-            padding: 20px;
+            line-height: 1.1;
+            padding: 10px;
         }
         /* ... 其他样式保持不变 ... */
+        table {
+            border-collapse: collapse;
+            width: 100%;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+        }
+        th {
+            background-color: #f2f2f2;
+        }
     </style>
     """
     #
     # 内部类包装TB
     #
     class MarkdownInnerTextBrowser(QTextBrowser):
+        
         def __init__(self, parent=None):
             super().__init__(parent)
+            self.sizeChangedCallbacks = [] #当尺寸变化时回调
+
             self.setOpenExternalLinks(True)
             self.setStyleSheet("""
-                border: 1px solid #555555;
+                border: 1px solid #f0f0f0;
                 border-radius: 5px;
             """)
+            self.setWordWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
+            self.setLineWrapMode(QTextBrowser.LineWrapMode.WidgetWidth)
+            self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+            # self.setMinimumHeight(30)  # 设置一个最小高度
+            # self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+            self.setFixedHeight(50)# 设置一个最小高度
+
+            
+            # 连接文档内容变化信号到调整方法
+            # self.document().contentsChanged.connect(self.adjustHeight)
+            self.document().contentsChanged.connect(self.adjustSize)
+        
+        def registerSizeChangedCallbacks(self, callback):
+            self.sizeChangedCallbacks.append(callback)
+        def _triggerSizeChanged(self):
+            for callback in self.sizeChangedCallbacks:
+                callback()
+        def resizeEvent(self, event):
+            super().resizeEvent(event)
+            self._triggerSizeChanged()
+        
+
+        def adjustSize(self) -> None:
+            qs=self.sizeHint()
+            # self.resize(qs)
+            # self.setFixedSize(qs) #宽度会混乱
+            self.setFixedHeight(qs.height())
+
+        def _expectantHeight(self)->int:
+            # 计算文档的实际高度
+            doc_height = self.document().size().height()
+            # 添加一些额外的空间，比如为了显示滚动条
+            extra_space = 20
+            # 设置新的高度
+            new_height = doc_height + extra_space
+            # 确保高度不小于最小高度
+            new_height = max(int(new_height), 50)
+            return new_height
+
+        def sizeHint(self):
+            # 返回一个基于内容的建议大小
+            width = self.viewport().width()
+            height = self._expectantHeight()  # 额外的空间
+            return QSize(width, int(height))
+            
     ## 内部类包装TB end
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.contentChangeCallbacks = []
+        self.sizeChangedCallbacks = [] #当尺寸变化时回调
+        self.currentContent = ""
+        self.currentLine = ""
+        self.isInCodeBlock = False
         self.initUi()
+        # self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+
+        self.addContent(" ") #初始化当前currentWidget  之后要改写
+        
 
     def initUi(self):
         """初始化UI组件"""
-        self.layout = QVBoxLayout(self) #type: ignore
-        self.scrollArea = QScrollArea(self)
-        self.contentWidget = QWidget()
-        self.contentLayout = QVBoxLayout(self.contentWidget)
-        
-        # 设置滚动区域
-        self.scrollArea.setWidget(self.contentWidget)
-        self.scrollArea.setWidgetResizable(True)
-        self.layout.addWidget(self.scrollArea)
+        self.setMinimumHeight(self.MIN_HEIGHT)
+
+        self.layout = QVBoxLayout(self) #type:ignore
+        self.layout.setContentsMargins(1, 1, 1, 1)
+        self.layout.setSpacing(1)
         
         # 初始化当前显示组件
-        self.currentWidget = self.MarkdownInnerTextBrowser()
-        self.contentLayout.addWidget(self.currentWidget)
-        
-        # 初始化状态变量
-        self.isInCodeBlock = False
-        self.markdownContent = ""
-
+        self.currentWidget = None
+       
         # 应用基础样式
         self.setStyleSheet(self.BASE_QSS)
+        
+    
+    def registerSizeChangedCallbacks(self, callback):
+        self.sizeChangedCallbacks.append(callback)
+    def _triggerSizeChanged(self):
+        for callback in self.sizeChangedCallbacks:
+            callback()
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._triggerSizeChanged()
+
+    
+    def registerContentChangeCallback(self, callback):
+        #这个是挂载在 内部TB或codeblock等底层展示框中回调；
+        #比如：newWidget.codeEdit.textChanged.connect(self._triggerContentChange)
+        #     newWidget.document().contentsChanged.connect(self._triggerContentChange)
+        self.contentChangeCallbacks.append(callback)
+
+    def _triggerContentChange(self):
+        for callback in self.contentChangeCallbacks:
+            callback()
 
     def addContent(self, content):
         """添加内容到显示区域"""
-        if content.startswith("```python"):
-            self.handleCodeBlockStart(content)
-        elif content.startswith("```") and self.isInCodeBlock:
+
+        procContent=content
+
+        # TODO 如果content有回车或多个回车考虑以回车阶段进行循环执行。
+        #      STREAM方式一般不是长句；
+        #
+        # 生成新的self.currentLine 作为指令或判断；
+        # procContent为当前正在处理的传入。
+        # 查找第一个回车
+        newline_index = procContent.find('\n')
+        if newline_index == -1:
+            # 如果没有回车，全部拼接到currentLine
+            # 大部分是这种
+            self.currentLine += procContent 
+        else:
+            # 如果有回车，拼接到第一个回车（包含）
+            self.currentLine += procContent[:newline_index + 1]
+            # remaining_content = procContent[newline_index + 1:]
+
+        # 根据line去处理当前处理内容
+        self._processLine(procContent)
+        
+        # 如果line最后是回车说明之后是新的一行，充值currentLine
+        if '\n' in self.currentLine:
+            self.currentLine=""
+        # 处理1条line完成；
+
+
+    def _processLine(self, procContent):
+
+        #命令与分类判断
+        line=self.currentLine; 
+        print(f"_processLine line:{line}")
+        """处理单行内容"""
+        if line.strip().startswith("```python"):
+            print("发现代码块!!")
+            # 回溯已展示的 指令部分文本
+            self.handleMarkdownContent(
+                    procContent=procContent, 
+                    isBacktrack=True,backtrackTemplate="```python"
+            )
+            self.handleCodeBlockStart(procContent)
+        elif line.strip() == "```" and self.isInCodeBlock:
+            # 回溯已展示的 指令部分文本
+            self.appendToCodeBlock(
+                    procContent=procContent, 
+                    isBacktrack=True,backtrackTemplate="```"
+            )
+            print("代码块关闭!!")
             self.handleCodeBlockEnd()
         elif self.isInCodeBlock:
-            self.appendToCodeBlock(content)
+            self.appendToCodeBlock(procContent)
         else:
-            self.handleMarkdownContent(content)
+            # self._checkForSpecialMarkers(line)
+            self.handleMarkdownContent(procContent)
+            
+        # 处理完成后，将当前行添加到currentContent
+        # self.currentContent += line
 
-    def handleCodeBlockStart(self, content):
+
+    def handleCodeBlockStart(self, procContent):
         """处理代码块开始"""
         self.isInCodeBlock = True
-        code = content.split("```python")[1].strip()
-        newWidget = CodeBlockWidget(code)
-        self.contentLayout.addWidget(newWidget)
+        code = self.currentLine.split("```python", 1)[1].strip()
+        #可优
+        title = "```python"
+        title = title.split('```', 1)[1] if len(title.split('```', 1)) > 1 else title
+        #
+        newWidget = CodeBlockWidget(code,title=title)
+        self.layout.addWidget(newWidget)
         self.currentWidget = newWidget
-        self.markdownContent = ""
+        self.currentContent = ""+code
+        self.currentLine= ""+code
+        # 
+        newWidget.codeEdit.textChanged.connect(self._triggerContentChange)
+        newWidget.registerSizeChangedCallbacks(self.adjustSize)
 
     def handleCodeBlockEnd(self):
         """处理代码块结束"""
         self.isInCodeBlock = False
         newWidget = self.MarkdownInnerTextBrowser()
-        self.contentLayout.addWidget(newWidget)
+        self.layout.addWidget(newWidget)
         self.currentWidget = newWidget
-        self.markdownContent = ""
+        self.currentContent = ""
+        self.currentLine= ""
+        newWidget.document().contentsChanged.connect(self._triggerContentChange)
+        newWidget.registerSizeChangedCallbacks(self.adjustSize)
 
-    def appendToCodeBlock(self, content):
-        """向代码块追加内容"""
-        if isinstance(self.currentWidget, CodeBlockWidget):
-            self.currentWidget.codeEdit.appendPlainText(content)
-        else:
-            print("警告：当前不在代码块中，但收到了代码块内容")
-
-    def handleMarkdownContent(self, content):
+    def handleMarkdownContent(self, procContent,isBacktrack=False, backtrackTemplate=None):
         """处理Markdown内容"""
-        self.markdownContent += content
         if not isinstance(self.currentWidget, self.MarkdownInnerTextBrowser):
             newWidget = self.MarkdownInnerTextBrowser()
-            self.contentLayout.addWidget(newWidget)
+            self.layout.addWidget(newWidget)
             self.currentWidget = newWidget
-        htmlContent = markdown.markdown(self.markdownContent, extensions=['extra', 'codehilite'])
+            self.currentContent = ""
+            self.currentLine= ""
+            #其实就是当前组件的内容变更时触发动作；
+            newWidget.document().contentsChanged.connect(self._triggerContentChange)
+            newWidget.registerSizeChangedCallbacks(self.adjustSize)
+
+        self.currentContent += procContent
+        if isBacktrack:
+            if not backtrackTemplate:raise ValueError(
+                "template_str cannot be empty when is_backtrack is True")
+            self.currentContent = self.currentContent.rsplit(backtrackTemplate, 1)[0]
+
+        htmlContent = markdown.markdown(self.currentContent, extensions=['extra', 'codehilite'])
         fullHtml = f"{self.MARKDOWN_CONTENT_CSS}<body>{htmlContent}</body>"
         self.currentWidget.setHtml(fullHtml)
         self.currentWidget.moveCursor(QTextCursor.MoveOperation.End)
         self.currentWidget.ensureCursorVisible()
 
+    def appendToCodeBlock(self, procContent, isBacktrack=False, backtrackTemplate=None):
+        """向代码块追加内容"""
+        if isinstance(self.currentWidget, CodeBlockWidget):
+            self.currentContent += procContent
+            if isBacktrack:
+                if not backtrackTemplate: raise ValueError(
+                    "template_str cannot be empty when is_backtrack is True")
+                self.currentContent = self.currentContent.rsplit(backtrackTemplate, 1)[0]
+            self.currentWidget.codeEdit.setPlainText(self.currentContent)
+            self.currentWidget.codeEdit.moveCursor(QTextCursor.MoveOperation.End)
+
+        else:
+            print("警告：当前不在代码块中，但收到了代码块内容")
+
     def clear(self):
         """清除所有内容"""
-        for i in reversed(range(self.contentLayout.count())): 
-            widget = self.contentLayout.itemAt(i).widget()
+        for i in reversed(range(self.layout.count())): 
+            widget = self.layout.itemAt(i).widget()
             if widget is not None:
                 widget.deleteLater()
         self.currentWidget = self.MarkdownInnerTextBrowser()
-        self.contentLayout.addWidget(self.currentWidget)
+        self.layout.addWidget(self.currentWidget)
         self.isInCodeBlock = False
-        self.markdownContent = ""
+        self.currentContent = ""
+        self.currentLine = ""
 
-    def setScrollBarEnabled(self, enabled):
-        """启用或禁用滚动条"""
-        if enabled:
-            self.scrollArea.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        else:
-            self.scrollArea.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    # def adjustHeight(self):
+    #     """调整组件高度"""
+    #     # 使用 sizeHint() 获取建议的高度
+    #     suggested_height = self.sizeHint().height()
+    #     # print(f"CompoMarkdownContentBlock.adjustHeight {suggested_height}")
+    #     # 设置新的固定高度
+    #     self.setFixedHeight(suggested_height)
+
+    def adjustSize(self) -> None:
+        # self.resize(self.sizeHint())
+        qs=self.sizeHint()
+        self.setFixedHeight(qs.height())
 
     def sizeHint(self):
-        """返回建议的尺寸"""
-        return self.contentWidget.sizeHint()
+        # 返回一个基于内容的建议大小
+        width = self.width()
+
+        height = 0
+        for i in range(self.layout.count()):
+            widget = self.layout.itemAt(i).widget()
+            if widget:
+                height += widget.sizeHint().height()
+        height += self.layout.spacing() * (self.layout.count() - 1)
+        margins = self.layout.contentsMargins()
+        height += margins.top() + margins.bottom()
+
+        return QSize(width, max(height, self.MIN_HEIGHT))
+
+        
 
 @ContentBlockStrategy.register("compoMarkdownContentStrategy") 
 class CompoMarkdownContentStrategy(ContentBlockStrategy):
@@ -909,39 +1226,72 @@ class CompoMarkdownContentStrategy(ContentBlockStrategy):
         mdBlock.setProperty("contentOwner", contentOwner)
         mdBlock.setProperty("contentOwnerType", contentOwnerType)
 
-        # 禁用滚动条，由外部控制
-        mdBlock.setScrollBarEnabled(False)
+        #根据contentOwnerType提供不同的展示：
+        # mdBlock.
+
+        #
+        # 
+        # 当内容变更时调整控件尺寸，这里主要是高度；
+        # 
+        # 注册内容变化的回调
+        # mdBlock.registerContentChangeCallback(
+        #     lambda: CompoMarkdownContentStrategy.adjustSize(mdBlock) #
+        # )
+        mdBlock.registerSizeChangedCallbacks(
+             lambda: CompoMarkdownContentStrategy.onSizeChanged(mdBlock) #
+        )
 
         # 设置属性以便后续操作
         mdBlock.setProperty("mainWindow", mainWindow)
         mdBlock.setProperty("strategyWidget", strategyWidget)
 
+        # 先写入点东西
+        mdBlock.addContent(" \n")
+
         return mdBlock
 
     @staticmethod
+    @override
     def initContent(widget: CompoMarkdownContentBlock, content: str):
-        widget.clear()
+
+        # widget.clear()
         widget.addContent(content)
+        # qs:QSize=widget.currentWidget.sizeHint() #type:ignore
+
+        # 由于主线程有sleep会阻碍重绘，导致曹方法失效；（主要是方法 ）
+        # 如果曹方法失效
+        # 1秒钟后（保证展示出来后）重绘1次大小
+        QTimer.singleShot(1000, widget.currentWidget.adjustSize)#type:ignore
+        # 马上调用没用。
+        # widget.currentWidget.adjustSize()
 
     @staticmethod
     @override
     def insertContent(widget: CompoMarkdownContentBlock, content: str):
-        # 直接添加内容，不需要 MARKER
         widget.addContent(content)
+
+
+    @staticmethod
+    def onSizeChanged(widget: CompoMarkdownContentBlock):
+        
+        # 为啥一下子高度就满了？
+        # 调整主窗口高度
+        mainWindow: "AAXWJumpinMainWindow" = widget.property("mainWindow")
+        if mainWindow:
+            mainWindow.adjustHeight()
+
+    
 
     @staticmethod
     @override
     def adjustSize(widget: CompoMarkdownContentBlock):
-        # 获取内容的实际高度
-        contentHeight = widget.sizeHint().height()
-        
-        # 设置固定高度
-        widget.setFixedHeight(contentHeight)
+        widget.adjustSize()
 
         # 调整主窗口高度
         mainWindow: "AAXWJumpinMainWindow" = widget.property("mainWindow")
         if mainWindow:
             mainWindow.adjustHeight()
+        pass
 
 
 class AAXWScrollPanel(QFrame):
@@ -983,6 +1333,7 @@ class AAXWScrollPanel(QFrame):
         self.setFrameShape(QFrame.Shape.StyledPanel)
         # self.setFrameShadow(QFrame.Raised) #阴影凸起
         self.setStyleSheet(qss)
+   
 
         self.strategy = ContentBlockStrategy.getStrategy(strategy_type)
 
@@ -998,11 +1349,19 @@ class AAXWScrollPanel(QFrame):
         self.scrollArea.setWidget(self.scrollWidget)
         self.scrollLayout: AAXWVBoxLayout = AAXWVBoxLayout(self.scrollWidget)
         self.scrollLayout.setAlignment(Qt.AlignmentFlag.AlignTop)  # 设置加入的部件为顶端对齐
+
+        # 缩小间隔
+        self.scrollLayout.setContentsMargins(1, 1, 1, 1)
+        self.scrollLayout.setSpacing(3)
         # 使用scroll_layout来添加元素，应用布局；
 
         # panel层布局
         panelLayout = QVBoxLayout(self)
         panelLayout.addWidget(self.scrollArea)  # 加上scroll_area
+        #
+        panelLayout.setContentsMargins(1, 1, 1, 1)
+        panelLayout.setSpacing(1)
+
 
     def addRowContent(self, content, rowId, contentOwner="unknown", 
                       contentOwnerType=ROW_CONTENT_OWNER_TYPE_SYSTEM, isAtTop=True):
@@ -1014,13 +1373,14 @@ class AAXWScrollPanel(QFrame):
         
         widget = self.strategy.createWidget(rowId, contentOwner, contentOwnerType, self.mainWindow, self)
         
-        self.strategy.insertContent(widget, content)
-
         # 加入列表
         if isAtTop:
             self.scrollLayout.addWidgetAtTop(widget)  # 这里每次在头部加layout定制了
         else:
             self.scrollLayout.addWidget(widget)
+        
+        self.strategy.initContent(widget, content)
+
 
     def appendContentByRowId(self, text, rowId: str):
         """
@@ -1043,7 +1403,7 @@ class AAXWScrollPanel(QFrame):
     # Panel的内部基于scroll-widget增加组件后的期望尺寸；
     def expectantHeight(self):
         # 关键点是Panel，scrollArea的实际大小与 self.scrollArea.widget() 提供的大小即内部期望的大小是不一样的。
-        # 默认Panel或scrollArea是根据外部来设定大小的。
+        # 默认Panel或scrollArea是根据外部来设置大小的。
         sws = self.scrollArea.widget().size()
         total_height = 0
 
@@ -1083,8 +1443,8 @@ class AAXWJumpinMainWindow(QWidget):
         super().__init__()
         self.init_ui()
         self.installAppHotKey()
-        # self.llmagent=AIConnAgentProxy(AAXWSimpleAIConnAgent())
-        self.llmagent=AIConnAgentProxy(AAXWOllamaAIConnAgent())
+        self.llmagent=AIConnAgentProxy(AAXWSimpleAIConnAgent())
+        # self.llmagent=AIConnAgentProxy(AAXWOllamaAIConnAgent())
 
     
     def init_ui(self):
@@ -1139,11 +1499,15 @@ class AAXWJumpinMainWindow(QWidget):
             content=text, rowId=rid, contentOwner="user_xiaowang",
             contentOwnerType=AAXWScrollPanel.ROW_CONTENT_OWNER_TYPE_USER,
         )
+        # self.msgShowingPanel.repaint() #重绘然后然后再等待？
         
-        # 等0.5秒；
+        # FIXME 阻塞主线程可能会，这里可能会导致回调曹方法失效。应为计算尺寸与绘制是两个线程完成的。
+        # 互相又依赖数据。如果没有重绘，则会应该可以拿到新尺寸的没拿到。
+        # 这里考虑用其他方法生成不同的id更好。
+        # 
         # 等待0.5秒
         # 使用QThread让当前主界面线程等待0.5秒
-        QThread.msleep(500)
+        QThread.msleep(500) 
         # 反馈内容消息气泡与内容初始化
         rrid = int(time.time() * 1000)
         self.msgShowingPanel.addRowContent(
@@ -1340,7 +1704,6 @@ class AAXWJumpinTrayKit(QSystemTrayIcon):
 
     def closeMainWindow(self):
         #这里是不是应该关闭窗口外同时关闭app：app.quit()
-        #FIXME 如果主窗口是hidden状态，则不能退出，或者偶尔不能退出。
         self.mainWindow.closeWindow()
         
     
