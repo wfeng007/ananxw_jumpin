@@ -1,24 +1,29 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 #
-# @Author:wfeng007 小王同学
+# @Author:wfeng007 小王同学 wfeng007@163.com
 # @Date:2024-09-24 18:05:01
 # @Last Modified by:wfeng007
-#
 
 #
-# 小王的ai节点,快速提示词快速入口，投入ai吧！ANAN其实也是只狗狗。。。
-# An AI Node of XiaoWang ， jumpin ! ANAN is a dog...
-#
-#
+# 小王的AI 网络/节点（随便什么吧），AI与套件快速快速入口，投入ai吧！ANAN其实也是只狗狗。。。
+# An AI Net/Node of XiaoWang ， jumpin AI ! ANAN is a dog...
+# 
 
 # 一个提示符操作界面
 # 可以快捷键唤起展示的；
 # 支持钉在桌面最前端，全局热键换出与隐藏；
-# [x]:托盘功能；
+# 0.2:托盘功能；
+# 0.3:较好的Markdown展示气泡，基本可扩展的展示气泡逻辑；
+# TODO 梳理命名，清理注释与格式，结束0.3，开始0.4
+# 0.4+:
 # TODO 增加工作目录配置与维护，基本文件系统能力。
 # TODO 增加日志功能，默认标准输出中输出；支持工作目录生成日志；并根据时间与数量清理；
-# TODO 切换agent等；
+# TODO 可切换agent或其他kit-intergration功能，同时提供对应工具面板展示；不同的agent或kit可以定制自己的工具面板。
+# 
+# 0.5+: 可集成密塔等搜索（可插件方式）
+# TODO 简易注入框架；更好组织代码逻辑；
+# TODO 简易插件框架；支持二次开发；
 # 
 # 提供基本的提示发送与结果展示界面；
 # 可支持多轮交互；
@@ -28,11 +33,14 @@
 #
 
 import sys, os,time
-from tkinter import Widget
+from datetime import datetime
+import logging
+from logging.handlers import TimedRotatingFileHandler
+
 from typing import Callable, List, Dict, Type
 from abc import ABC, abstractmethod
 import markdown
-from py import process
+# from py import process
 
 try:
     from typing import override #3.12+ #type:ignore
@@ -67,6 +75,7 @@ from PySide6.QtGui import (
     QImage,QPixmap,QTextOption
 )
 
+#下面与上面需要合并一下
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton, 
                                QPlainTextEdit, QLabel, QScrollArea, QTextBrowser)
 from PySide6.QtGui import QSyntaxHighlighter, QTextCharFormat, QColor, QTextCursor
@@ -94,8 +103,141 @@ from dotenv import load_dotenv, find_dotenv
 _ = load_dotenv(find_dotenv())  # 读取本地 .env 文件，里面定义了 OPENAI_API_KEY
 
 # 版本
-__version__ = "0.3.0"
- 
+__version__ = "0.4.0"
+
+
+# 日志器
+class AAXWLoggerManager:
+    _instance = None
+    _initialized = False
+    APP_LOGGER_NAME = "AAXW"
+    
+    APP_DEFAULT_LEVEL = logging.INFO
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super(AAXWLoggerManager, cls).__new__(cls)
+        return cls._instance
+
+    def __init__(self):
+        if not self._initialized:
+            self.loggers = {}
+            self.workDir = None
+            self.workDir = None
+            self.fileHandler:logging.Handler = None #type:ignore
+            self.consoleHandler:logging.Handler = None #type:ignore
+            self.setupBasicLogger()
+            self._initialized = True
+
+    def setupBasicLogger(self):
+        """设置基本的控制台处理器"""
+        self.consoleHandler = logging.StreamHandler()
+        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        self.consoleHandler.setFormatter(formatter)
+
+        # 设置应用级别日志器
+        self.app_logger = logging.getLogger(self.APP_LOGGER_NAME)
+        self.app_logger.propagate = False #不传播
+        self.app_logger.setLevel(self.APP_DEFAULT_LEVEL)
+        self.app_logger.addHandler(self.consoleHandler)
+
+    def setWorkDir(self, workDir):
+        """设置工作目录并创建文件处理器"""
+        self.workDir = workDir
+        log_file = os.path.join(workDir, 'logs', 'app.log')
+        os.makedirs(os.path.dirname(log_file), exist_ok=True)
+        self.fileHandler = TimedRotatingFileHandler(
+            log_file,
+            when="midnight",
+            interval=1,
+            backupCount=3,
+            encoding='utf-8'
+        )
+        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(module)s.%(funcName)s [%(filename)s:%(lineno)d] - %(message)s')
+        self.fileHandler.setFormatter(formatter)
+
+        # 更新所有现有的日志器
+        for logger in self.loggers.values():
+            if self.fileHandler not in logger.handlers:
+                logger.addHandler(self.fileHandler)
+
+        # 为应用级别日志器添加文件处理器
+        self.app_logger.addHandler(self.fileHandler)
+
+    def getLogger(self, name, level=None,isPropagate=False):
+        """
+        获取或创建一个日志器
+        :param name: 日志器名称
+        :param level: 日志级别，如果为None则不设置
+        :param isPropagate: 是否传播日志消息到父日志器
+        """
+        full_name = f"{self.APP_LOGGER_NAME}.{name}" if name else self.APP_LOGGER_NAME
+        if full_name not in self.loggers:
+            logger = logging.getLogger(full_name)
+
+            logger.propagate=isPropagate
+
+            if level is not None:
+                logger.setLevel(level)
+            else:
+                # 如果没有指定级别，则不设置，让它继承父级别
+                logger.setLevel(logging.NOTSET)
+            
+            # 只有在这个日志器还没有处理器时才添加
+            if not logger.handlers:
+                logger.addHandler(self.consoleHandler)
+                if self.fileHandler:
+                    logger.addHandler(self.fileHandler)
+            
+            self.loggers[full_name] = logger
+        return self.loggers[full_name]
+
+    def getModuleLogger(self, module, level=None, isPropagate=False):
+        """获取模块级别的日志器"""
+        return self.getLogger(module.__name__, level, isPropagate)
+    
+    def getClassLogger(self, cls, level=None, isPropagate=False):
+        """获取类级别的日志器"""
+        return self.getLogger(f"{cls.__module__}.{cls.__name__}", level, isPropagate)
+    
+    def getClassLoggerByName(self, moduleName:str,className:str, level=None, isPropagate=False):
+        """获取类级别的日志器"""
+        return self.getLogger(f"{moduleName}.{className}", level, isPropagate)
+
+    def classLogger(self, level=None, isPropagate=False):
+        """为类添加日志器的装饰器  设置了类属性:AAXW_CLASS_LOGGER"""
+        def decorator(cls):
+            cls.AAXW_CLASS_LOGGER = self.getClassLogger(cls, level, isPropagate)
+            return cls
+        return decorator
+
+    def getRootLogger(self):
+        """获取根日志器"""
+        return logging.getLogger()
+
+    def getAppLogger(self):
+        """获取应用级别日志器"""
+        return self.app_logger
+
+    def setLoggerLevel(self, name, level):
+        """设置指定日志器的级别"""
+        full_name = f"{self.APP_LOGGER_NAME}.{name}" if name else self.APP_LOGGER_NAME
+        if full_name in self.loggers:
+            self.loggers[full_name].setLevel(level)
+
+    def setLoggerFormatter(self, name, formatter):
+        """设置指定日志器的格式器"""
+        full_name = f"{self.APP_LOGGER_NAME}.{name}" if name else self.APP_LOGGER_NAME
+        if full_name in self.loggers:
+            for handler in self.loggers[full_name].handlers:
+                handler.setFormatter(formatter)
+
+# 创建日志管理器实例 globe层次；
+AAXW_LOG_MGR = AAXWLoggerManager()
+# 本模块日志器
+MODULE_LOGGER=AAXW_LOG_MGR.getModuleLogger(sys.modules[__name__])
+
+
 
 # 基本config信息，与默认配置；
 class AAXWJumpinConfig:     
@@ -855,7 +997,10 @@ class CodeBlockWidget(QWidget): #QWidget有站位，但是并不绘制出来。
         height = self.expectantHeight()
         return QSize(width, height)
     
+@AAXW_LOG_MGR.classLogger(level=logging.DEBUG)
 class CompoMarkdownContentBlock(QFrame): #原来是QWidget
+    AAXW_CLASS_LOGGER:logging.Logger
+
     MIN_HEIGHT = 50  # 设置一个最小高度
 
     # 基础QSS样式
@@ -1042,7 +1187,9 @@ class CompoMarkdownContentBlock(QFrame): #原来是QWidget
 
         #命令与分类判断
         line=self.currentLine; 
-        print(f"_processLine line:{line}")
+        # print(f"_processLine line:{line}")
+        self.AAXW_CLASS_LOGGER.debug(f"line: {line}")
+
         """处理单行内容"""
         if line.strip().startswith("```python"):
             print("发现代码块!!")
@@ -1674,9 +1821,13 @@ class AAXWGlobalShortcut:
     def stop(self):
         self.hotkey.stop()
 
+@AAXW_LOG_MGR.classLogger(level=logging.DEBUG)
 class AAXWJumpinTrayKit(QSystemTrayIcon):
+    AAXW_CLASS_LOGGER:logging.Logger
+    
     def __init__(self, main_window:AAXWJumpinMainWindow):
         super().__init__()
+        
         
         self.setToolTip("ANANXW Jumpin!")
         
@@ -1695,6 +1846,7 @@ class AAXWJumpinTrayKit(QSystemTrayIcon):
         # 添加打开指定目录的菜单选项
         self.open_directory_action = self.menu.addAction("工作目录")
         self.open_directory_action.triggered.connect(self.open_directory)
+        self.AAXW_CLASS_LOGGER.info("托盘菜单已初始化!")
         
         self.mainWindow:AAXWJumpinMainWindow = main_window
         
