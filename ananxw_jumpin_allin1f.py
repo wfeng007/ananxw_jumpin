@@ -15,15 +15,16 @@
 # 支持钉在桌面最前端，全局热键换出与隐藏；
 # 0.2:托盘功能；
 # 0.3:较好的Markdown展示气泡，基本可扩展的展示气泡逻辑；
-# TODO 梳理命名，清理注释与格式，结束0.3，开始0.4
 # 0.4+:
-# TODO 增加工作目录配置与维护，基本文件系统能力。
-# TODO 增加日志功能，默认标准输出中输出；支持工作目录生成日志；并根据时间与数量清理；
-# TODO 可切换agent或其他kit-intergration功能，同时提供对应工具面板展示；不同的agent或kit可以定制自己的工具面板。
+#      已增加工作目录配置与维护，基本文件系统能力。
+#      已增加日志功能，默认标准输出中输出；支持工作目录生成日志；并根据时间与数量清理；
+# TODO 可切换agent或其他kit-intergration功能，同时提供对应工具面板展示；
+#           不同的agent或kit可以定制自己的工具面板。
 # 
-# 0.5+: 可集成密塔等搜索（可插件方式）
-# TODO 简易注入框架；更好组织代码逻辑；
+# 0.5+: 
+#      已增加简易注入框架；更好组织代码逻辑；
 # TODO 简易插件框架；支持二次开发；
+#      可集成密塔等搜索（可插件方式）
 # 
 # 提供基本的提示发送与结果展示界面；
 # 可支持多轮交互；
@@ -32,71 +33,71 @@
 # 
 #
 
+import pstats
 import sys, os,time
 from datetime import datetime
-import logging
-from logging.handlers import TimedRotatingFileHandler
-
-from typing import Callable, List, Dict, Type
-from abc import ABC, abstractmethod
-import markdown
-# from py import process
-
+from typing import Callable, List, Dict, Type,Any,TypeVar
 try:
     from typing import override #3.12+ #type:ignore
 except ImportError:
     from typing_extensions import override #3.8+
 
-#pyside6
-from PySide6.QtCore import Qt, QEvent, QObject,QThread,Signal, QTimer,QSize
+from abc import ABC, abstractmethod
+# import functools
+import threading
+import argparse
+
+import logging
+from logging.handlers import TimedRotatingFileHandler
+
+# 加载环境变量 #openai 的key读取
+from dotenv import load_dotenv, find_dotenv
+
+# yaml 配置
+import yaml
+
+# pyside6 
+from PySide6.QtCore import (
+    Qt, QEvent, QObject, QThread, Signal, QTimer, QSize, 
+    QRegularExpression
+)
 from PySide6.QtWidgets import (
-    QApplication,
-    QSystemTrayIcon,
-    QFrame,
-    QWidget,
-    QScrollArea,
-    QHBoxLayout,
-    QVBoxLayout,
-    QSizePolicy,
-    QLineEdit,
-    QPushButton,
-    QTextBrowser,
-    QStyleOption,QMenu
+    QApplication, QSystemTrayIcon, QFrame, QWidget, QScrollArea,
+    QHBoxLayout, QVBoxLayout, QSizePolicy, QLineEdit, QPushButton,
+    QTextBrowser, QStyleOption, QMenu, QPlainTextEdit, QLabel
 )
 from PySide6.QtGui import (
-    QKeySequence,
-    QShortcut,
-    # QAction,
-    QTextDocument,
-    QTextCursor,
-    QMouseEvent,
-    QPainter,
-    QIcon,
-    QImage,QPixmap,QTextOption
+    QKeySequence, QShortcut, QTextDocument, QTextCursor, QMouseEvent,
+    QPainter, QIcon, QImage, QPixmap, QTextOption, QSyntaxHighlighter,
+    QTextCharFormat, QColor
 )
-
-#下面与上面需要合并一下
-from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton, 
-                               QPlainTextEdit, QLabel, QScrollArea, QTextBrowser)
-from PySide6.QtGui import QSyntaxHighlighter, QTextCharFormat, QColor, QTextCursor
-from PySide6.QtCore import QRegularExpression, Qt
-
 # WebEngineView用hide()方式时会崩溃，默认展示框用了textbrowser
 # from PySide6.QtWebEngineWidgets import QWebEngineView 
 
 # pynput 用于全局键盘事件
 from pynput import keyboard
 
+#
+import markdown
 
 # ai相关
-from langchain_openai import ChatOpenAI
-from langchain.prompts import PromptTemplate
+# openai客户端
 from openai import OpenAI
 from openai.types.chat import ChatCompletionSystemMessageParam, ChatCompletionUserMessageParam
+# langchain
+from langchain_openai import ChatOpenAI
+# from langchain.embeddings import OpenAIEmbeddings
+# from langchain.embeddings import OllamaEmbeddings
+from langchain_community.embeddings import OpenAIEmbeddings
+# from langchain_community.embeddings import OllamaEmbeddings
+from langchain.prompts import PromptTemplate
+from langchain.schema import BaseMessage,HumanMessage,SystemMessage
 
 
-# 加载环境变量 #openai 的key读取
-from dotenv import load_dotenv, find_dotenv
+
+
+
+
 
 
 # 环境变量，用于openai key等；
@@ -122,8 +123,7 @@ class AAXWLoggerManager:
     def __init__(self):
         if not self._initialized:
             self.loggers = {}
-            self.workDir = None
-            self.workDir = None
+            self.logDir = None
             self.fileHandler:logging.Handler = None #type:ignore
             self.consoleHandler:logging.Handler = None #type:ignore
             self.setupBasicLogger()
@@ -136,15 +136,16 @@ class AAXWLoggerManager:
         self.consoleHandler.setFormatter(formatter)
 
         # 设置应用级别日志器
-        self.app_logger = logging.getLogger(self.APP_LOGGER_NAME)
-        self.app_logger.propagate = False #不传播
-        self.app_logger.setLevel(self.APP_DEFAULT_LEVEL)
-        self.app_logger.addHandler(self.consoleHandler)
+        self.appLogger = logging.getLogger(self.APP_LOGGER_NAME)
+        self.appLogger.propagate = False #不传播
+        self.appLogger.setLevel(self.APP_DEFAULT_LEVEL)
+        self.appLogger.addHandler(self.consoleHandler)
 
-    def setWorkDir(self, workDir):
+    #这里后续扩展出注册不同日志文件，可以关联不同范围或级别的日志。
+    def setLogDirAndFile(self, logDir,filename="app.log"):
         """设置工作目录并创建文件处理器"""
-        self.workDir = workDir
-        log_file = os.path.join(workDir, 'logs', 'app.log')
+        self.logDir = logDir
+        log_file = os.path.join(logDir, filename)
         os.makedirs(os.path.dirname(log_file), exist_ok=True)
         self.fileHandler = TimedRotatingFileHandler(
             log_file,
@@ -162,7 +163,7 @@ class AAXWLoggerManager:
                 logger.addHandler(self.fileHandler)
 
         # 为应用级别日志器添加文件处理器
-        self.app_logger.addHandler(self.fileHandler)
+        self.appLogger.addHandler(self.fileHandler)
 
     def getLogger(self, name, level=None,isPropagate=False):
         """
@@ -206,8 +207,10 @@ class AAXWLoggerManager:
 
     def classLogger(self, level=None, isPropagate=False):
         """为类添加日志器的装饰器  设置了类属性:AAXW_CLASS_LOGGER"""
-        def decorator(cls):
-            cls.AAXW_CLASS_LOGGER = self.getClassLogger(cls, level, isPropagate)
+        T = TypeVar('T')
+        def decorator(cls:T)->T:
+            # cls.AAXW_CLASS_LOGGER = self.getClassLogger(cls, level, isPropagate) #type:ignore
+            setattr(cls, 'AAXW_CLASS_LOGGER', self.getClassLogger(cls, level, isPropagate))
             return cls
         return decorator
 
@@ -217,7 +220,7 @@ class AAXWLoggerManager:
 
     def getAppLogger(self):
         """获取应用级别日志器"""
-        return self.app_logger
+        return self.appLogger
 
     def setLoggerLevel(self, name, level):
         """设置指定日志器的级别"""
@@ -233,15 +236,169 @@ class AAXWLoggerManager:
                 handler.setFormatter(formatter)
 
 # 创建日志管理器实例 globe层次；
-AAXW_LOG_MGR = AAXWLoggerManager()
+AAXW_JUMPIN_LOG_MGR = AAXWLoggerManager()
 # 本模块日志器
-MODULE_LOGGER=AAXW_LOG_MGR.getModuleLogger(sys.modules[__name__])
+AAXW_JUMPIN_MODULE_LOGGER:logging.Logger=AAXW_JUMPIN_LOG_MGR.getModuleLogger(
+    sys.modules[__name__])
+
+
+
+# Di框架与插件框架
+# framework-di , framework-plugin
+class AAXWDependencyContainer:
+    """
+    简易的依赖组织容器
+    注册依赖关系：
+    @dependencyContainer.register('key', isSingleton=True, isLazy=True)
+    class...
+
+    创建/获取已有，资源对象，如其依赖未创建则会创建对应依赖：
+    dependencyContainer.getAANode(key)
+    
+    """
+    def __init__(self):
+        self._factories: Dict[str, Callable] = {}
+        self._dependencies: Dict[str, Dict[str, str]] = {}
+        self._isSingletonFlags: Dict[str, bool] = {}
+        self._isLazyFlags: Dict[str, bool] = {}
+        self._instances: Dict[str, Any] = {}
+
+    def register(self, key: str, isSingleton: bool = True, isLazy: bool = False, **dependencies):
+        T = TypeVar('T', bound=Callable[..., Any])
+        def decorator(f: T)-> T:
+            self._factories[key] = f
+            self._dependencies[key] = dependencies
+            self._isSingletonFlags[key] = isSingleton
+            self._isLazyFlags[key] = isLazy
+            return f
+        return decorator
+
+    def getAANode(self, key: str) -> Any:
+        if key not in self._factories:
+            raise KeyError(f"没有注册名为 {key} 的依赖")
+        
+        isSingleton = self._isSingletonFlags[key]
+        if isSingleton and key in self._instances:
+            return self._instances[key]
+        
+        instance = self._createInstance(key)
+        
+        if isSingleton:
+            self._instances[key] = instance
+        
+        return instance
+
+    def setAANode(self, key: str, node: Any, isSingleton: bool = True, **dependencies):
+        if isSingleton:
+            self._instances[key] = node
+        
+        # 注册工厂函数
+        self._factories[key] = lambda: node
+        
+        # 注册依赖关系
+        self._dependencies[key] = dependencies
+        
+        # 设置单例和懒加载标志
+        self._isSingletonFlags[key] = isSingleton
+        self._isLazyFlags[key] = False  # setAANode 默认不使用懒加载
+        
+        # 注入依赖
+        self._injectDependencies(node, dependencies)
+        
+        return node
+
+    def _injectDependencies(self, instance: Any, dependencies: Dict[str, str]):
+        for attr, dep_key in dependencies.items():
+            if dep_key in self._instances:
+                setattr(instance, attr, self._instances[dep_key])
+            elif dep_key in self._factories:
+                setattr(instance, attr, self.getAANode(dep_key))
+            else:
+                raise KeyError(f"依赖 {dep_key} 未注册")
+
+    def _createInstance(self, key: str) -> Any:
+        factory = self._factories[key]
+        instance = factory()
+        
+        dependencies = self._dependencies[key]
+        self._injectDependencies(instance, dependencies)
+        
+        return instance
+
+    def _lazyProperty(self, dep_key):
+        #返回改写属性为特定方法；
+        #当第一次访问该属性时设置并返回
+        def getter(obj):
+            attr_name = f'_{dep_key}'
+            if not hasattr(obj, attr_name) or getattr(obj, attr_name) is None:
+                setattr(obj, attr_name, self.getAANode(dep_key)) #这里get是非线程安全的
+            return getattr(obj, attr_name)
+        return property(getter)
+
+    def clear(self):
+        self._instances.clear()
+        self._factories.clear()
+        self._dependencies.clear()
+        self._isSingletonFlags.clear()
+        self._isLazyFlags.clear()
+
+class AAXWJumpinDICSingleton: #单例化
+    """AAXWDependencyContainer的单例化工具类"""
+    __instance = None
+    _insLock = threading.Lock()
+    # _opLock = threading.Lock()
+
+    @classmethod
+    def getInstance(cls):
+        if cls.__instance is None:
+            with cls._insLock:
+                if cls.__instance is None:
+                    cls.__instance = AAXWDependencyContainer()
+        return cls.__instance
+
+    @classmethod
+    def register(cls, key: str, isSingleton: bool = True, isLazy: bool = False, **dependencies):
+        return cls.getInstance().register(key, isSingleton, isLazy, **dependencies)
+
+    @classmethod
+    def getAANode(cls, key: str) -> Any:
+        # with cls._opLock:
+            return cls.getInstance().getAANode(key)
+
+    @classmethod
+    def setAANode(cls, key: str, node: Any, isSingleton: bool = True, **dependencies):
+        return cls.getInstance().setAANode(key, node, isSingleton, **dependencies)
+
+    @classmethod
+    def clear(cls):
+        with cls._insLock:
+            if cls.__instance:
+                cls.__instance.clear()
+            cls.__instance = None
+
+# 插件框架
+
+
 
 
 
 # 基本config信息，与默认配置；
-class AAXWJumpinConfig:     
-    MSGSHOWINGPANEL_QSS="""
+@AAXWJumpinDICSingleton.register(key="jumpinConfig") 
+@AAXW_JUMPIN_LOG_MGR.classLogger()
+class AAXWJumpinConfig:
+    AAXW_CLASS_LOGGER:logging.Logger
+
+    # 默认配置
+    FAMILY_NAME="AAXW" #之后可用来拆分抽象；
+    APP_NAME_DEFAULT = "AAXW_Jumpin"
+    APP_VERSION_DEFAULT = __version__
+    DEBUG_DEFAULT = False #暂时没用到
+    LOG_LEVEL_DEFAULT = "INFO"
+    APP_WORK_DIR_DEFAULT = "./"
+    APP_CONFIG_FILENAME_DEFAULT = "aaxw_jumpin_config.yaml"
+
+    # 原有的 QSS 配置保持不变
+    MSGSHOWINGPANEL_QSS = """
     QFrame {
         border: 1px solid #ccc;
         border-radius: 5px;
@@ -255,7 +412,7 @@ class AAXWJumpinConfig:
     }
     QTextBrowser[contentOwnerType="ROW_CONTENT_OWNER_TYPE_USER"] {
         background-color: #e0e0e0;
-        margin-left: 200px; /* 模拟右对齐，实际最好脚本中用layout实现对齐； */
+        margin-left: 200px;
     }
     QTextBrowser[contentOwnerType="ROW_CONTENT_OWNER_TYPE_AGENT"] {
         background-color: #e6e6fa;
@@ -297,88 +454,245 @@ class AAXWJumpinConfig:
         }
     """
 
+    def __init__(self):
+        # 初始化实例属性
+        self.appName = self.APP_NAME_DEFAULT
+        self.appVersion = self.APP_VERSION_DEFAULT
+        
+        self.debug = self.DEBUG_DEFAULT
+        self.logLevel = self.LOG_LEVEL_DEFAULT
+        self.appWorkDir = self.APP_WORK_DIR_DEFAULT
+        self.appConfigFilename = self.APP_CONFIG_FILENAME_DEFAULT
+
+        #默认顺序初始化；
+        self.loadEnv()
+        self.loadArgs()
+        self.loadYaml()
+        self.AAXW_CLASS_LOGGER.info(f"All config loaded，new base-config: "
+                    f"appWorkDir={self.appWorkDir}, "
+                    f"logLevel={self.logLevel}, "
+                    f"appConfigFilename={self.appConfigFilename}, "
+                    f"debug={self.debug}")
+        #暂时初始化时调用
+        self.initAANode()
+
+
+
+    def loadEnv(self):
+        self.appWorkDir = os.environ.get('AAXW_APPWORKDIR', self.appWorkDir)
+        self.logLevel = os.environ.get('AAXW_LOG_LEVEL', self.logLevel)
+        self.appConfigFilename = os.environ.get('AAXW_CONFIG_FILE_NAME', self.appConfigFilename)
+        self.debug = os.environ.get('AAXW_DEBUG', self.debug)
+
+    def loadArgs(self):
+        parser = argparse.ArgumentParser()
+        parser.add_argument('--appworkdir', help='Application work directory')
+        parser.add_argument('--log-level', help='Logging level')
+        parser.add_argument('--config-file', help='Configuration file name')
+        parser.add_argument('--debug', action='store_true', help='Enable debug mode')
+        
+        args, unknown = parser.parse_known_args()
+        if args.appworkdir:
+            self.appWorkDir = args.appworkdir
+        if args.log_level:
+            self.logLevel = args.log_level
+        if args.config_file:
+            self.appConfigFilename = args.config_file
+        if args.debug is not None:
+            self.debug = args.debug
+
+
+    #yaml config
+    def loadYaml(self,yamlPath=None):
+        yaml_path = os.path.join(self.appWorkDir, self.appConfigFilename)
+        if os.path.exists(yaml_path):
+            with open(yaml_path, 'r', encoding='utf-8') as file:
+                try:
+                    yaml_config = yaml.safe_load(file)
+                    self.__dict__.update(yaml_config)
+                    self.AAXW_CLASS_LOGGER.info(f"Yaml config file loaded: new base-config"
+                            f"appWorkDir={self.appWorkDir}, "
+                            f"logLevel={self.logLevel}, "
+                            f"appConfigFilename={self.appConfigFilename}, "
+                            f"debug={self.debug}")
+                except yaml.YAMLError as e:
+                    self.AAXW_CLASS_LOGGER.warning(f"Error reading YAML file: {e}")
+
+    def setWorkCfgAndloadYaml(self, workdir=None, configName=None):
+        if workdir: self.appWorkDir = workdir
+        if configName: self.appConfigFilename = configName
+        self.loadYaml()
+
+    def initAANode(self): #init after di；当前秀先在自己内部执行；
+        #这里日志器进程全局的，所以其实__init__初始化时就能调用；
+        AAXW_JUMPIN_LOG_MGR.setLogDirAndFile(logDir=self.appWorkDir,filename="aaxw_app.log")
+
+        #其他di胡执行的工作；
+        pass
+
+
+
+        
+    
+
+    # @classmethod
+    # def create_with_current_dir(cls):
+    #     config = cls()
+    #     script_dir = os.path.dirname(os.path.abspath(__file__))
+    #     config.set_work_dir(script_dir)
+    #     return config
+
 #
 # AI相关
 #
-class AbstractAIConnAgent(ABC):
+class AbstractAIConnOrAgent(ABC):
     @abstractmethod
-    def sendRequestStream(self, prompt: str, func: Callable[[str], None]):
+    def requestAndCallback(self, prompt: str, func: Callable[[str], None],isStream: bool = True):
         # raise NotImplementedError("Subclasses must implement sendRequestStream method")
         ...
 
-class AAXWSimpleAIConnAgent(AbstractAIConnAgent):
+    def embedding(self, prompt:str):
+        ...
+
+    def edit(self, prompt:str, instruction:str):
+        ...
+       
+
+
+
+@AAXWJumpinDICSingleton.register(key="simpleAIConnOrAgent")
+@AAXW_JUMPIN_LOG_MGR.classLogger()
+class AAXWSimpleAIConnOrAgent(AbstractAIConnOrAgent):
     """
-    连接LLM/Agent的工具类，支持流式获取响应。
+    简单实现的连接LLM/Agent的类，支持流式获取响应。
+    使用Langchain封装的OpenAI的接口实现。
+    """
+
+    SYSTME_PROMPT_TEMPLE="""
+    你的名字是ANAN是一个AI入口助理;
+    请关注用户跟你说的内容，和善的回答用户，与用户要求。
+    如果用户说的不明确，请提示用户可以说的更明确。
+    如果被要求纯文本来回答，在段落后面增加<br/>标签。
+    """
+
+    USER_PROMPT_TEMPLE="""
+    以下是用户说的内容：
+    {message}
     """
     
-    def __init__(self, api_key:str =None, model_name: str = "gpt-4o-mini"): # type: ignore
+    def __init__(self, api_key:str =None,base_url:str=None, model_name: str = "gpt-4o-mini"): # type: ignore
         """
         初始化OpenAI连接代理。
         
         :param api_key: OpenAI API密钥。
+        :param base_url: OpenAI API基础URL。
         :param model_name: 使用的模型名称。
         """
-        # 创建 ChatOpenAI 实例时使用关键字参数
+        # 从环境变量读取API密钥和URL
+        self.openai_api_key = api_key or os.getenv('OPENAI_API_KEY')
+        self.openai_base_url = base_url or os.getenv('OPENAI_BASE_URL')
+        self.model_name = model_name or os.getenv('OPENAI_MODEL_NAME', 'gpt-4o-mini')
+        
+        if not self.openai_api_key:
+            raise ValueError("OpenAI API key is required.")
+        
         chat_params = {
-            "streaming": True,
             "temperature": 0,
-            "model": model_name  # 使用 'model' 而不是 'model_name'
+            "model": self.model_name,
+            "api_key": self.openai_api_key,
         }
         
-        if api_key is not None:
-            chat_params["api_key"] = api_key  # 使用 'api_key' 而不是 'openai_api_key'
+        if self.openai_base_url:
+            chat_params["base_url"] = self.openai_base_url
         
-        self.llm = ChatOpenAI(**chat_params)
-
+        self.llm: ChatOpenAI = ChatOpenAI(**chat_params)
+    
     @override
-    def sendRequestStream(self, prompt: str, func: Callable[[str], None]):
+    def requestAndCallback(self, prompt: str, func: Callable[[str], None], isStream: bool = True):
         """
         发送请求到LLM，并通过回调函数处理流式返回的数据。
         
         :param prompt: 提供给LLM的提示文本。
-        :param callback: 用于处理每次接收到的部分响应的回调函数。
+        :param func: 用于处理每次接收到的部分响应的回调函数。
+        :param isStream: 是否使用流式响应。
         """
+        system_message = SystemMessage(content=self.SYSTME_PROMPT_TEMPLE)
+        human_message = HumanMessage(content=self.USER_PROMPT_TEMPLE.format(message=prompt))
+        messages = [system_message, human_message]
         
-        templateStr="""
-        你的名字是AnAn jumpin是一个AI入口助理;
-        请关注用户跟你说的内容，和善的回答用户，与用户要求。
-        如果用户说的不明确，请提示用户可以说的更明确。
-        请用纯文本来回答，可以在段落后面增加<br/>标签。
-        以下是用户说的内容：
-        {message}
-        """
-        template = PromptTemplate.from_template(templateStr)
-        
-        # 在流式模式下，每次迭代都会返回一部分文本
-        # 每次返回都执行回调
-        for msgChunk in self.llm.stream(template.format(message=prompt)):
-            if msgChunk is not None and msgChunk.content != '':
-                time.sleep(0.1)
-                func(str(msgChunk.content))
-                
+        if isStream:
+            for msgChunk in self.llm.stream(messages):
+                if msgChunk.content:
+                    time.sleep(0.1)
+                    func(str(msgChunk.content))
+        else:
+            response = self.llm.invoke(messages)
+            func(str(response.content))
 
-class AAXWOllamaAIConnAgent(AbstractAIConnAgent):
+    def embedding(self, prompt: str, model: str = "text-embedding-ada-002"):
+        """
+        获取文本嵌入。
+        
+        :param prompt: 需要嵌入的文本。
+        :param model: 使用的嵌入模型。
+        :return: 文本的嵌入向量。
+        """
+        embeddings = OpenAIEmbeddings(
+            api_key=self.openai_api_key,
+            base_url=self.openai_base_url,
+            model=model
+        )
+        return embeddings.embed_query(prompt)
+
+
+
+@AAXWJumpinDICSingleton.register(key="ollamaAIConnOrAgent")
+@AAXW_JUMPIN_LOG_MGR.classLogger()
+class AAXWOllamaAIConnOrAgent(AbstractAIConnOrAgent):
+    """
+    直接使用OpenAI的接口实现。对Ollama的访问；
+    """
+    AAXW_CLASS_LOGGER:logging.Logger
+
+    SYSTEM_PROMPT_DEFAULT="""
+    你的名字是ANAN是一个AI入口助理;
+    请关注用户跟你说的内容，和善的回答用户，与用户要求。
+    如果用户说的不明确，请提示用户可以说的更明确。
+    如果没有特别说明，可考虑用markdown格式输出一般内容。
+    """
+
+    USER_PROMPT_TEMPLE="""
+    以下是用户说的内容：
+    {message}
+    """
+    
     def __init__(self, model_name: str = "llama3.2:3b"): #llama3.2:3b qwen2:1.5b qwen2.5:7b
         self.client = OpenAI(
             base_url="http://localhost:11434/v1",
             api_key="ollama"
         )
         self.model_name = model_name
+        
+        models = self.listModels()
+        self.AAXW_CLASS_LOGGER.info(f"Available Ollama models found: {', '.join(models)}")
+        
 
-    def list_models(self) -> List[str]:
+    def listModels(self) -> List[str]:
         """列出可用的Ollama模型"""
         try:
             models = self.client.models.list()
             return [model.id for model in models.data]
         except Exception as e:
             raise Exception(f"Failed to list models: {str(e)}")
+    
 
     @override
-    def sendRequestStream(self, prompt: str, func: Callable[[str], None]):
+    def requestAndCallback(self, prompt: str, func: Callable[[str], None],isStream: bool = True):
         """使用OpenAI API风格生成流式聊天完成"""
+        formatted_prompt = self.USER_PROMPT_TEMPLE.format(message=prompt)
         messages = [
-            ChatCompletionSystemMessageParam(content="You are a helpful assistant.", role="system"),
-            ChatCompletionUserMessageParam(content=prompt, role="user")
+            ChatCompletionSystemMessageParam(content=self.SYSTEM_PROMPT_DEFAULT, role="system"),
+            ChatCompletionUserMessageParam(content=formatted_prompt, role="user")
         ]
         try:
             stream = self.client.chat.completions.create(
@@ -393,36 +707,39 @@ class AAXWOllamaAIConnAgent(AbstractAIConnAgent):
         except Exception as e:
             raise Exception(f"Failed to generate stream chat completion: {str(e)}")
 
-class AIConnAgentProxy(AbstractAIConnAgent):
-    def __init__(self, agent: AbstractAIConnAgent):
-        self.agent = agent
+@AAXWJumpinDICSingleton.register(key="aiConnOrAgentProxy")
+@AAXW_JUMPIN_LOG_MGR.classLogger()
+class AIConnOrAgentProxy(AbstractAIConnOrAgent):
+    def __init__(self, innerInst: AbstractAIConnOrAgent=None): #type:ignore
+        self.innerInstance = innerInst
 
     @override
-    def sendRequestStream(self, prompt: str, func: Callable[[str], None]):
-        return self.agent.sendRequestStream(prompt, func)
+    def requestAndCallback(self, prompt: str, func: Callable[[str], None],isStream: bool = True):
+        return self.innerInstance.requestAndCallback(prompt, func=func,isStream=isStream)
 
-    def set_agent(self, agent: AbstractAIConnAgent):
-        self.agent = agent
+    def setInnerInstance(self, innerInst: AbstractAIConnOrAgent):
+        self.innerInstance = innerInst
 
 # 线程异步处理AI IO任务。
+@AAXW_JUMPIN_LOG_MGR.classLogger()
 class AIThread(QThread):
     
     #newContent,id 对应：ShowingPanel.appendToContentById 回调
     updateUI = Signal(str,str)  
 
-    def __init__(self,text:str,uiCellId:str,llmagent:AbstractAIConnAgent):
+    def __init__(self,text:str,uiCellId:str,llmagent:AbstractAIConnOrAgent):
         super().__init__()
         
         # self.mutex = QMutex()
         self.text:str=text
         self.uiId:str=uiCellId
-        self.llmagent:AbstractAIConnAgent=llmagent
+        self.llmagent:AbstractAIConnOrAgent=llmagent
         
     def run(self):
         self.msleep(500)  # 执行前先等界面渲染
         # self.mutex.lock()
         # print(f"thread inner str:{self.text} \n")
-        self.llmagent.sendRequestStream(self.text, self.callUpdateUI)
+        self.llmagent.requestAndCallback(self.text, self.callUpdateUI)
         # self.mutex.unlock()
         
     def callUpdateUI(self,newContent:str):
@@ -441,7 +758,7 @@ class AIThread(QThread):
 # 界面组件相关
 ##
 #
-# [x]:暂时单独放在input edit之外实现，
+# 暂时单独放在input edit之外实现，
 # TODO 之后考虑放在插件机制剥离实现？ 不分功能比如tab键的控制似乎可能不属于基础功能；
 class EditEventFilter(QObject):
     """
@@ -462,11 +779,14 @@ class EditEventFilter(QObject):
         #
         return False
 
-
+@AAXW_JUMPIN_LOG_MGR.classLogger()
 class AAXWInputLineEdit(QLineEdit):
     """ 
     主要指令，提示信息，对话信息输入框； 
     """
+
+    AAXW_CLASS_LOGGER:logging.Logger
+
 
     def __init__(self, mainWindow, parent=None):
         super().__init__(parent)
@@ -506,19 +826,19 @@ class AAXWInputLineEdit(QLineEdit):
     #
     def onUpPressed(self):
         # 在这里实现向上的功能
-        print("向上箭头键被按下")
+        self.AAXW_CLASS_LOGGER.debug("向上箭头键被按下")
 
     def onDownPressed(self):
         # 在这里实现向下的功能
-        print("向下箭头键被按下")
+        self.AAXW_CLASS_LOGGER.debug("向下箭头键被按下")
 
     def onLeftPressed(self):
         # 在这里实现向左的功能
-        print("向左箭头键被按下")
+        self.AAXW_CLASS_LOGGER.debug("向左箭头键被按下")
 
     def onRightPressed(self):
         # 在这里实现向右的功能
-        print("向右箭头键被按下")
+        self.AAXW_CLASS_LOGGER.debug("向右箭头键被按下")
 
     ##
     # TODO:这个鼠标按下移动的功能要优化。输入框有输入文字的局域可能会冲突。需要考虑在实际input外面加个面板，input自适应。
@@ -565,9 +885,13 @@ class AAXWInputLineEdit(QLineEdit):
         super().mouseReleaseEvent(event)
 
 
-
+@AAXW_JUMPIN_LOG_MGR.classLogger()
 class AAXWInputPanel(QWidget):
+    AAXW_CLASS_LOGGER:logging.Logger
+    
     # sendRequest = Signal(str)
+
+
 
     def __init__(self, mainWindow:'AAXWJumpinMainWindow',parent):
         super().__init__(parent=parent)
@@ -626,12 +950,12 @@ class AAXWInputPanel(QWidget):
     # input 回车
     def enterClicked(self):
         # 处理回车事件
-        print("Enter key pressed!")
+        self.AAXW_CLASS_LOGGER.debug("Enter key pressed!")
         self.funcButtonRight.click()
 
     # 右侧
     def rightButtonClicked(self):
-        print("Right button clicked!")
+        self.AAXW_CLASS_LOGGER.debug("Right button clicked!")
 
         text = self.promptInputEdit.text()
         self.mainWindow.handleInputRequest(text)
@@ -642,7 +966,7 @@ class AAXWInputPanel(QWidget):
     #
     def _logInput(self):
         # 打印输入框中的内容
-        print(f"Input: {self.promptInputEdit.text()}")
+        self.AAXW_CLASS_LOGGER.debug(f"Input: {self.promptInputEdit.text()}")
 
 
     def _createAcrossLine(self, shape: QFrame.Shape = QFrame.Shape.VLine):
@@ -673,6 +997,7 @@ class AAXWVBoxLayout(QVBoxLayout):
 
 
 class ContentBlockStrategy(ABC):
+    #TODO 改为DI容器维护策略。
     #单例化的
     strategies: Dict[str, Type['ContentBlockStrategy']] = {}
 
@@ -717,8 +1042,12 @@ class ContentBlockStrategy(ABC):
     
     
 #定义期初始化对象了，其实不一定好。要用最好在最外层控制使用注册
-@ContentBlockStrategy.register("text_browser") 
+@ContentBlockStrategy.register("text_browser")
+@AAXW_JUMPIN_LOG_MGR.classLogger()
 class TextBrowserStrategy(ContentBlockStrategy):
+
+    AAXW_CLASS_LOGGER:logging.Logger
+
     # 用特殊符号最为追加占位标记
     MARKER = "[💬➡️🏁]"
     @staticmethod
@@ -783,7 +1112,8 @@ class TextBrowserStrategy(ContentBlockStrategy):
             cursor.insertHtml(f"{content}")  # 可以追加html但是会过滤掉不符合规范的比如div
             widget.repaint()  # 非线程调用本方法，可能每次都要重绘，否则是完成完后一次性刷新。
         else:
-            print("not found marker:" + TextBrowserStrategy.MARKER)
+            TextBrowserStrategy.AAXW_CLASS_LOGGER.debug(
+                "not found marker:" + TextBrowserStrategy.MARKER)
 
     @staticmethod
     @override
@@ -809,7 +1139,7 @@ class TextBrowserStrategy(ContentBlockStrategy):
         #同时调整主窗口高度；
         mainWindow:"AAXWJumpinMainWindow"=tb.property("mainWindow")
 
-        # FIXME: mainWindow的调整策略需要重新实现。每次增加内容就变更主窗口尺寸有问题。
+        # 
         # mainWindow不为none，刚创建的tb没有mainWindow？
         if mainWindow :mainWindow.adjustHeight()
 
@@ -997,7 +1327,7 @@ class CodeBlockWidget(QWidget): #QWidget有站位，但是并不绘制出来。
         height = self.expectantHeight()
         return QSize(width, height)
     
-@AAXW_LOG_MGR.classLogger(level=logging.DEBUG)
+@AAXW_JUMPIN_LOG_MGR.classLogger(level=logging.DEBUG)
 class CompoMarkdownContentBlock(QFrame): #原来是QWidget
     AAXW_CLASS_LOGGER:logging.Logger
 
@@ -1192,7 +1522,8 @@ class CompoMarkdownContentBlock(QFrame): #原来是QWidget
 
         """处理单行内容"""
         if line.strip().startswith("```python"):
-            print("发现代码块!!")
+            self.AAXW_CLASS_LOGGER.debug("发现代码块!!")
+            
             # 回溯已展示的 指令部分文本
             self.handleMarkdownContent(
                     procContent=procContent, 
@@ -1205,7 +1536,7 @@ class CompoMarkdownContentBlock(QFrame): #原来是QWidget
                     procContent=procContent, 
                     isBacktrack=True,backtrackTemplate="```"
             )
-            print("代码块关闭!!")
+            self.AAXW_CLASS_LOGGER.debug("代码块关闭!!")
             self.handleCodeBlockEnd()
         elif self.isInCodeBlock:
             self.appendToCodeBlock(procContent)
@@ -1281,7 +1612,7 @@ class CompoMarkdownContentBlock(QFrame): #原来是QWidget
             self.currentWidget.codeEdit.moveCursor(QTextCursor.MoveOperation.End)
 
         else:
-            print("警告：当前不在代码块中，但收到了代码块内容")
+            self.AAXW_CLASS_LOGGER.debug("警告：当前不在代码块中，但收到了代码块内容")
 
     def clear(self):
         """清除所有内容"""
@@ -1440,7 +1771,7 @@ class CompoMarkdownContentStrategy(ContentBlockStrategy):
             mainWindow.adjustHeight()
         pass
 
-
+@AAXW_JUMPIN_LOG_MGR.classLogger()
 class AAXWScrollPanel(QFrame):
     """
     垂直方向以列表样式可追加内容的展示面板；
@@ -1448,6 +1779,7 @@ class AAXWScrollPanel(QFrame):
     内部聚合了定制的vbxlayout，增加content时默认使用TextBrowser用作Row展示。
     提供了为RowContent追加内容的方式，支持流式获取文本追加到Row中。
     """
+    AAXW_CLASS_LOGGER:logging.Logger
     
     DEFAULT_STYLE = """ 
     QTextBrowser {
@@ -1544,7 +1876,7 @@ class AAXWScrollPanel(QFrame):
             # self.strategy.adjustSize(widget) #type:ignore
             # self.mainWindow.adjustHeight()
         else:
-            print(f"Not found widget by name: {self.ROW_BLOCK_NAME_PREFIX}_{rowId}")
+            self.AAXW_CLASS_LOGGER.debug(f"Not found widget by name: {self.ROW_BLOCK_NAME_PREFIX}_{rowId}")
 
     # 
     # Panel的内部基于scroll-widget增加组件后的期望尺寸；
@@ -1575,10 +1907,7 @@ class AAXWScrollPanel(QFrame):
     # 
     pass  # AAXWScrollPanel end
 
-
-
-
-
+from typing import cast
 class AAXWJumpinMainWindow(QWidget):
     """
     主窗口:
@@ -1590,7 +1919,11 @@ class AAXWJumpinMainWindow(QWidget):
         super().__init__()
         self.init_ui()
         self.installAppHotKey()
-        self.llmagent=AIConnAgentProxy(AAXWSimpleAIConnAgent())
+
+        # 转容器关联；
+        self.jumpinConfig:AAXWJumpinConfig = None; #type:ignore
+        self.llmagent:AbstractAIConnOrAgent=AIConnOrAgentProxy(AAXWSimpleAIConnOrAgent())
+        
         # self.llmagent=AIConnAgentProxy(AAXWOllamaAIConnAgent())
 
     
@@ -1666,7 +1999,7 @@ class AAXWJumpinMainWindow(QWidget):
         #生成异步处理AI操作的线程
         #注入要用来执行的ai引擎以及 问题文本+ ui组件id
         #FIXME 执行时需要基于资源，暂时锁定输入框；
-        #TODO 多重提交，多线程处理还没很好的做，会崩溃；
+        #           多重提交，多线程处理还没很好的做，会崩溃；
         self.aiThread = AIThread(text, str(rrid), self.llmagent)
         self.aiThread.updateUI.connect(self.msgShowingPanel.appendContentByRowId)
         self.aiThread.start()
@@ -1804,15 +2137,17 @@ class AAXWJumpinMainWindow(QWidget):
         line.setFrameShadow(QFrame.Shadow.Sunken)  # 设置阴影效果
         return line
 
-
+@AAXW_JUMPIN_LOG_MGR.classLogger()
 class AAXWGlobalShortcut:
     # 全局快捷键 运行器
+    AAXW_CLASS_LOGGER:logging.Logger
+
     def __init__(self, mainWindow: AAXWJumpinMainWindow):
         self.mainWindow: AAXWJumpinMainWindow = mainWindow
         self.hotkey = keyboard.GlobalHotKeys({"<alt>+z": self.on_activate})
 
     def on_activate(self):
-        print("全局快捷键<alt>+z被触发")
+        self.AAXW_CLASS_LOGGER.debug("全局快捷键<alt>+z被触发")
         self.mainWindow.toggleHidden()
 
     def start(self):
@@ -1821,7 +2156,7 @@ class AAXWGlobalShortcut:
     def stop(self):
         self.hotkey.stop()
 
-@AAXW_LOG_MGR.classLogger(level=logging.DEBUG)
+@AAXW_JUMPIN_LOG_MGR.classLogger(level=logging.DEBUG)
 class AAXWJumpinTrayKit(QSystemTrayIcon):
     AAXW_CLASS_LOGGER:logging.Logger
     
@@ -1829,7 +2164,7 @@ class AAXWJumpinTrayKit(QSystemTrayIcon):
         super().__init__()
         
         
-        self.setToolTip("ANANXW Jumpin!")
+        self.setToolTip("AAXW Jumpin!")
         
         # self.setIcon(QIcon("icon.png"))
         qimg:QImage=self._get32QImg("./icon.png")
@@ -1868,7 +2203,8 @@ class AAXWJumpinTrayKit(QSystemTrayIcon):
         if os.path.exists(directory_path):
             os.startfile(directory_path)
         else:
-            print(f"指定的目录不存在：{directory_path}")
+            self.AAXW_CLASS_LOGGER.warning(f"指定的目录不存在：{directory_path}")
+
     
         
     def _get32QImg(self,image_path):
@@ -1887,19 +2223,25 @@ def main():
     agstool=None
     try:
         app = QApplication(sys.argv)
-        window = AAXWJumpinMainWindow()
-        tray=AAXWJumpinTrayKit(window)
-        agstool = AAXWGlobalShortcut(window)
+        mainWindow = AAXWJumpinMainWindow()
+        AAXWJumpinDICSingleton.setAANode(
+            key="mainWindow",node=mainWindow,
+            llmagent='ollamaAIConnOrAgent',
+            jumpinConfig='jumpinConfig')
+        tray=AAXWJumpinTrayKit(mainWindow)
+        agstool = AAXWGlobalShortcut(mainWindow)
+        
         agstool.start()
         tray.show()
-        window.show()
-        window.raise_()
+        mainWindow.show()
+        mainWindow.raise_()
         sys.exit(app.exec())
     except Exception as e:  
-        print("Main Exception:", e)
+        AAXW_JUMPIN_MODULE_LOGGER.error("Main Exception:", e)
         raise e
     finally:
         if agstool:agstool.stop()
+        AAXWJumpinDICSingleton.clear()
         
 
 if __name__ == "__main__":
