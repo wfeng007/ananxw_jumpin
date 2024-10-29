@@ -33,16 +33,39 @@
 # 
 #
 
-import pstats
+
+# import pstats
 import sys, os,time
+# 包与模块命名处理：
+try:
+    #如果所在包有 __init__.py 且设置了__package_name__ 就能导入。如果没有则用目录名。
+    from . import __package_name__  #type:ignore
+except ImportError:
+    # 当作为__main__运行时，使用目录名作为包名
+    __package_name__ = os.path.basename(os.path.dirname(os.path.abspath(__file__)))
+    # TODO 或者这里作为主程序再设定个主包名 pyinstaller 可能会出问题。
+    # __package_name__= "ananxw_jumpin"
+
+if __name__ == "__main__":
+    # 注册模块 包.文件主名 为模块名
+    _file_basename = os.path.splitext(os.path.basename(__file__))[0]
+    sys.modules[f"{__package_name__}.{_file_basename}"] = sys.modules["__main__"]
+    print(f"\n{__package_name__}.{_file_basename} 已设置到 sys.modules")
+    del _file_basename
+
+
 from datetime import datetime
-from typing import Callable, List, Dict, Type,Any,TypeVar
+
+from typing import Callable, List, Dict, Type,Any,TypeVar,Union
+
+from torch import NoneType
 try:
     from typing import override #3.12+ #type:ignore
 except ImportError:
     from typing_extensions import override #3.8+
-
 from abc import ABC, abstractmethod
+import importlib
+
 # import functools
 import threading
 import argparse
@@ -92,11 +115,9 @@ from langchain_community.embeddings import OpenAIEmbeddings
 # from langchain_community.embeddings import OllamaEmbeddings
 from langchain.prompts import PromptTemplate
 from langchain.schema import BaseMessage,HumanMessage,SystemMessage
-
-
-
-
-
+##
+# 导入结束
+##
 
 
 
@@ -235,8 +256,8 @@ class AAXWLoggerManager:
             for handler in self.loggers[full_name].handlers:
                 handler.setFormatter(formatter)
 
-# 创建日志管理器实例 globe层次；
-AAXW_JUMPIN_LOG_MGR = AAXWLoggerManager()
+# 创建日志管理器实例 模块globe层次；
+AAXW_JUMPIN_LOG_MGR = AAXWLoggerManager() 
 # 本模块日志器
 AAXW_JUMPIN_MODULE_LOGGER:logging.Logger=AAXW_JUMPIN_LOG_MGR.getModuleLogger(
     sys.modules[__name__])
@@ -262,6 +283,8 @@ class AAXWDependencyContainer:
         self._isSingletonFlags: Dict[str, bool] = {}
         self._isLazyFlags: Dict[str, bool] = {}
         self._instances: Dict[str, Any] = {}
+        #放入自己作为aware 自发现使用
+        self.setAANode(key='_nativeDependencyContainer',node=self)
 
     def register(self, key: str, isSingleton: bool = True, isLazy: bool = False, **dependencies):
         T = TypeVar('T', bound=Callable[..., Any])
@@ -342,6 +365,391 @@ class AAXWDependencyContainer:
         self._isSingletonFlags.clear()
         self._isLazyFlags.clear()
 
+
+
+##
+# 基本 插件框架与机制
+##
+
+class AAXWAbstractBasePlugin(ABC):
+    """
+    抽象插件基类
+    定义了插件的基本接口与部分插件框架关联实现
+    """
+    @abstractmethod
+    def onInstall(self):
+        pass
+
+    @abstractmethod
+    def onUninstall(self):
+        pass
+
+    @abstractmethod
+    def enable(self):
+        pass
+
+    @abstractmethod
+    def disable(self):
+        pass
+
+# 插件框架
+@AAXW_JUMPIN_LOG_MGR.classLogger()
+class AAXWFileSourcePluginManager:
+    """
+    1 插件管理类
+    负责检测、加载、安装、卸载、启用和禁用插件
+    插件生命周期包括：
+    - 检测：扫描文件系统，识别潜在插件
+    - 加载：导入插件模块，检索插件类
+    - 安装：实例化插件类，调用onInstall方法
+    - 启用/禁用：激活或停用插件功能
+    - 卸载：清理插件资源，调用onUninstall方法
+    
+    2. 动态插件加载：
+   - 自动扫描指定目录，支持多层目录结构
+   - 使用importlib动态导入和重新加载插件模块
+   - 支持以下目录结构：
+     plugins/
+     ├── plugin_basic.py          # 导入为: plugins.plugin_basic
+     ├── plugin_core.py           # 导入为: plugins.plugin_core
+     └── plugin_features/         # 特性插件目录
+         ├── __init__.py
+         ├── plugin_feature1.py   # 导入为: plugins.plugin_features.plugin_feature1
+         └── plugin_feature2.py   # 导入为: plugins.plugin_features.plugin_feature2
+
+    3. 插件命名和加载规则：
+   - DEFAULT_PLUGIN_PREFIX: 用于过滤文件和目录名（默认为"plugin_"）
+   - DEFAULT_PACKAGE_PREFIX: 用于构建Python包的导入路径（默认为"plugins"）
+   - 顶级目录插件直接使用包名前缀
+   - 子目录插件使用"包名前缀.子目录名.模块名"的形式
+    """
+    AAXW_CLASS_LOGGER:logging.Logger
+
+    # 用于过滤文件和目录的前缀
+    DEFAULT_PLUGIN_PREFIX = "plugin_"
+    # 用于模块导入时的包名前缀
+    DEFAULT_PACKAGE_PREFIX = "plugins"
+    # 改为内置插件前缀
+    # BUILTIN_PACKAGE_PREFIX = "builtin_plugins"  # 原 SYSTEM_PACKAGE_PREFIX
+    # 使用getattr()来安全地获取包名，如果不存在则使用默认值 
+    # FIXME 好像有问题。设置了__package_name__ 还用builtin_plugins
+    BUILTIN_PACKAGE_PREFIX = getattr(globals(), '__package_name__', "builtin_plugins")
+
+    
+    def __init__(self, rootDirectory: str = 'plugins', 
+                 pluginPrefix: Union[str , None] = None,
+                 packagePrefix: Union[str , None] = None,
+                 builtinPackagePrefix: Union[str , None] = None):
+        # 实际python中可以看做保存了类的构造器主签名的引用，cls()或某种方式去
+        self.pluginRootDirectory = rootDirectory
+        self.pluginPrefix = pluginPrefix or AAXWFileSourcePluginManager.DEFAULT_PLUGIN_PREFIX
+        self.packagePrefix = packagePrefix or AAXWFileSourcePluginManager.DEFAULT_PACKAGE_PREFIX
+        self.builtinPackagePrefix = \
+            builtinPackagePrefix or AAXWFileSourcePluginManager.BUILTIN_PACKAGE_PREFIX
+        
+        # self.detectedPlugins: Dict[str, Type[AbstractBasePlugin]] = {}
+        # 检测到的插件建设器要么是个类 要么是 工厂函数，
+        # TODO 之后可能扩展builder策略实现
+        self.pluginBuilders: Dict[
+            str, Union[Type[AAXWAbstractBasePlugin], Callable[[], AAXWAbstractBasePlugin]]
+        ] = {}
+
+        self.installedPlugins: Dict[str, AAXWAbstractBasePlugin] = {}
+        self.modules: Dict[str, Any] = {}
+        # 改为内置插件跟踪
+        self.builtinPluginBuilders: Dict[
+            str, Union[Type[AAXWAbstractBasePlugin], Callable[[], AAXWAbstractBasePlugin]]
+        ] = {}  # 原 systemPlugins
+
+    ##
+    # 检测文件系统加载plugin的builder，释放等 插件容器生命周期管理
+    ##
+    def detectPlugins(self):
+        """检测并加载插件目录中的所有插件"""
+        if not os.path.exists(self.pluginRootDirectory):
+            # os.makedirs(self.pluginFolder)
+            raise FileNotFoundError(f"插件目录 '{self.pluginRootDirectory}' 不存在")
+        
+        for item in os.listdir(self.pluginRootDirectory):
+            itemPath = os.path.join(self.pluginRootDirectory, item)
+            
+            if os.path.isdir(itemPath) and item.startswith(self.pluginPrefix):
+                self._detectPluginsFromDirectory(itemPath)
+            elif item.endswith('.py') and item.startswith(self.pluginPrefix):
+                self._loadPluginModule(itemPath)
+
+    def _detectPluginsFromDirectory(self, directory: str):
+        """从指定目录检测插件模块"""
+        for filename in os.listdir(directory):
+            if filename.endswith('.py') and filename.startswith(self.pluginPrefix):
+                pluginPath = os.path.join(directory, filename)
+                self._loadPluginModule(pluginPath)
+
+    def _loadPluginModule(self, pluginPath: str):
+        """加载单个插件模块"""
+        try:
+            moduleName = os.path.basename(pluginPath)[:-3]
+            dirName = os.path.basename(os.path.dirname(pluginPath))
+            
+            if dirName == self.pluginRootDirectory:
+                fullModuleName = f"{self.packagePrefix}.{moduleName}"
+            else:
+                fullModuleName = f"{self.packagePrefix}.{dirName}.{moduleName}"
+
+            try:
+                # 导入到sys.modules 
+                module = importlib.import_module(fullModuleName)
+                #
+
+                # 自己也保留
+                self.modules[fullModuleName] = module
+                self._detectPluginBuildersFromModule(module, fullModuleName)
+            except ImportError as e:
+                print(f"导入模块 {fullModuleName} 时出错: {e}")
+            except Exception as e:
+                print(f"加载模块 {fullModuleName} 时发生意外错误: {e}")
+        except Exception as e:
+            print(f"处理插件文件 {pluginPath} 时出错: {e}")
+    
+    def _detectPluginBuildersFromModule(self, module: Any, moduleName: str, isBuiltin=False):
+        """检测模块中的插件"""
+        for attrName in dir(module):
+            attr = getattr(module, attrName)
+            if isinstance(attr, type) and issubclass(attr, AAXWAbstractBasePlugin) and attr is not AAXWAbstractBasePlugin:
+                plugin_key = f"{moduleName}.{attrName}"
+                self._putPluginBuilder(pluginKey=plugin_key,
+                    builder=attr,isBuiltin=isBuiltin)
+
+    def _putPluginBuilder(self, pluginKey:str,builder,isBuiltin:bool):
+        if isBuiltin:
+            self.builtinPluginBuilders[pluginKey] = builder
+        self.pluginBuilders[pluginKey] = builder
+    
+    def detectBuiltinPlugins(self):
+        """从内置模块中检测插件"""
+        # 获取所有符合前缀的模块名称
+        builtin_module_names = [  # 原 system_module_names
+            name for name in sys.modules.keys() 
+            if name.startswith(self.builtinPackagePrefix)
+        ]
+        self.AAXW_CLASS_LOGGER.info(
+            f"基于模块名前缀{self.builtinPackagePrefix}，准备扫描的内置builtin可能所在模块:{builtin_module_names}")
+        # 处理符合条件的模块
+        for module_name in builtin_module_names:
+            try:
+                module = sys.modules[module_name]
+                self._detectPluginBuildersFromModule(
+                    module=module, moduleName=module_name, isBuiltin=True
+                )
+            except Exception as e:
+                print(f"从{module_name}检测内置插件时发生错误: {e}")
+    
+    def release(self):
+        """释放所有插件资源，在关闭前调用"""
+        # 卸载所有已安装的插件
+        for plugin_name in list(self.installedPlugins.keys()):
+            self.uninstallPlugin(plugin_name)
+        
+        # 清空所有缓存的数据
+        self.pluginBuilders.clear()
+        self.builtinPluginBuilders.clear()
+        self.modules.clear()
+        self.installedPlugins.clear()
+        
+        print("plugin manager relased!")
+    #
+    # 检测-加载与释放  end
+    ##
+
+
+    ##
+    # 实例化与安装卸载以及生效紧要操作 单独插件生命周期管理
+    ##
+    # 
+    def installPlugin(self, pluginName: str) -> bool:
+        """安装插件（支持检测到的插件和内置插件）"""
+        if ((pluginName in self.pluginBuilders or 
+             pluginName in self.builtinPluginBuilders) and 
+            pluginName not in self.installedPlugins):
+            # 优先从detected中获取，如果没有则从builtin中获取
+            pluginClass = (self.pluginBuilders.get(pluginName) or 
+                         self.builtinPluginBuilders.get(pluginName))
+            try:
+                plugin = self._createPluginInstance(pluginClass)
+                plugin.onInstall()
+                self.installedPlugins[pluginName] = plugin
+                self.enablePlugin(pluginName)
+                return True
+            except Exception as e:
+                print(f"安装插件 {pluginName} 时出错: {e}")
+                return False
+        return False
+    
+    # 
+    # TODO 这里是否应该改为策略或模版模式，主要需要注入资源与依赖。
+    # 
+    def _createPluginInstance(self,pluginClass):
+        return pluginClass()
+        
+
+    def uninstallPlugin(self, pluginName: str) -> bool:
+        if pluginName in self.installedPlugins:
+            plugin = self.installedPlugins[pluginName]
+            self.disablePlugin(pluginName)
+            plugin.onUninstall()
+            del self.installedPlugins[pluginName]
+            return True
+        return False
+
+    def enablePlugin(self, pluginName: str) -> bool:
+        if pluginName in self.installedPlugins:
+            self.installedPlugins[pluginName].enable()
+            return True
+        return False
+
+    def disablePlugin(self, pluginName: str) -> bool:
+        if pluginName in self.installedPlugins:
+            self.installedPlugins[pluginName].disable()
+            return True
+        return False
+
+    def reloadPlugin(self, pluginName: str) -> bool:
+        if pluginName in self.installedPlugins:
+            self.uninstallPlugin(pluginName)
+            moduleName = '.'.join(pluginName.split('.')[:-1])
+            if moduleName in self.modules:
+                self.modules[moduleName] = importlib.reload(self.modules[moduleName])
+                self._detectPluginBuildersFromModule(self.modules[moduleName], moduleName)
+            return self.installPlugin(pluginName)
+        return False
+    
+    # 批量操作
+    def installAllDetectedPlugins(self) -> Dict[str, bool]:
+        """尝试安装所有检测到的插件（包括内置插件），返回安装结果字典"""
+        results = {}
+        # 合并两个字典的键，并去重
+        all_plugins = set(self.pluginBuilders.keys()) | \
+                     set(self.builtinPluginBuilders.keys())
+        
+        for plugin_name in all_plugins:
+            if not self.isPluginInstalled(plugin_name):
+                results[plugin_name] = self.installPlugin(plugin_name)
+        return results
+    
+    def uninstallAllPlugins(self) -> Dict[str, bool]:
+        """卸载所有已安装的插件，返回卸载结果字典"""
+        results = {}
+        for plugin_name in list(self.installedPlugins.keys()):
+            results[plugin_name] = self.uninstallPlugin(plugin_name)
+        return results
+    #
+    #  实例化与安装卸载以及生效紧要操作 end
+    ##
+
+    #
+    # 各类工具方法
+    #
+    def listPluginBuilderNames(self, pluginTypeFlag: int = 0) -> List[str]:
+        """
+        返回已检测到的插件名称
+        Args:
+            flag: 选择返回的插件类型。
+                0: 返回所有插件名称
+                1: 只返回普通插件名称 
+                2: 只返回内置插件名称
+                3: 返回普通插件和内置插件名称
+        """
+        if pluginTypeFlag == 1:
+            return list(self.pluginBuilders.keys())
+        elif pluginTypeFlag == 2:
+            return list(self.builtinPluginBuilders.keys())
+        elif pluginTypeFlag == 0 or pluginTypeFlag == 3:
+            return list(set(self.pluginBuilders.keys()) | 
+                       set(self.builtinPluginBuilders.keys()))
+        else:
+            return []
+
+    def listInstalledPluginNames(self) -> List[str]:
+        return list(self.installedPlugins.keys())
+
+    # 获取内置插件列表的方法
+    def listBuiltinPluginBuilderNames(self) -> List[str]:  # 原 listSystemPluginNames
+        """返回已检测到的内置插件名称列表"""
+        return self.listPluginBuilderNames(pluginTypeFlag=2)
+
+    # 检查插件是否为内置插件的方法 
+    def isBuiltinPlugin(self, pluginName: str) -> bool:  # 原 isSystemPlugin
+        """检查指定插件是否为内置插件"""
+        return pluginName in self.builtinPluginBuilders
+
+    # 获取已安装的插件实例
+    def getInstalledPlugin(self, pluginName: str) -> Union[AAXWAbstractBasePlugin,None] :
+        """获取指定名称的已安装插件实例"""
+        return self.installedPlugins.get(pluginName) #type: ignore 
+    
+    # 获取已检测到的插件类/构造器
+    def getPluginBuilder(
+        self, 
+        pluginName: str
+    ) -> Union[Type[AAXWAbstractBasePlugin], Callable[[], AAXWAbstractBasePlugin], None]:
+        """获取指定名称的已检测到的插件类（包括内置插件）"""
+        return (self.pluginBuilders.get(pluginName) or 
+                self.builtinPluginBuilders.get(pluginName))
+    
+    # 插件状态查询
+    def isPluginInstalled(self, pluginName: str) -> bool:
+        """检查插件是否已安装"""
+        return pluginName in self.installedPlugins
+    
+    def isPluginDetected(self, pluginName: str) -> bool:
+        """检查插件是否已被检测到（包括内置插件）"""
+        return pluginName in self.pluginBuilders or pluginName in self.builtinPluginBuilders
+    
+    # 统计信息
+    def getInnerCounts(self) -> Dict[str, int]:
+        """获取插件相关计数信息"""
+        return {
+            "detectedBuilder": len(self.pluginBuilders),
+            "installed": len(self.installedPlugins),
+            "builtinBuilder": len(self.builtinPluginBuilders),  # 原 system
+            "modules": len(self.modules)
+        }
+    
+    # 插件信息获取
+    def getPluginInfo(self, pluginName: str) -> Dict[str, Any]:
+        """获取指定插件的详细信息"""
+        info = {
+            "name": pluginName,
+            "detected": self.isPluginDetected(pluginName),
+            "installed": self.isPluginInstalled(pluginName),
+            "builtin": self.isBuiltinPlugin(pluginName),  # 原 system
+            "builder": None,
+            "instance": None,
+            "module": None
+        }
+        
+        # Check both detected and builtin plugins for builder
+        if self.isPluginDetected(pluginName):
+            info["builder"] = self.getPluginBuilder(pluginName)
+
+        # Get module information
+        module_name = ".".join(pluginName.split(".")[:-1])
+        info["module"] = self.modules.get(module_name) or sys.modules.get(module_name)
+            
+        # Get instance if installed
+        if self.isPluginInstalled(pluginName):
+            info["instance"] = self.getInstalledPlugin(pluginName)
+            
+        return info
+
+#
+# 插件框架与机制 end
+##
+
+##
+# 应用级别框架扩展
+##
+#
 class AAXWJumpinDICSingleton: #单例化
     """AAXWDependencyContainer的单例化工具类"""
     __instance = None
@@ -376,10 +784,66 @@ class AAXWJumpinDICSingleton: #单例化
                 cls.__instance.clear()
             cls.__instance = None
 
-# 插件框架
+@AAXWJumpinDICSingleton.register(key="jumpinPluginManager",
+        dependencyContainer="_nativeDependencyContainer", #这里是内联 aware方式没有用singleton方式
+        jumpinConfig="jumpinConfig",
+        mainWindow="mainWindow")
+# @AAXW_JUMPIN_LOG_MGR.classLogger()
+class AAXWJumpinPluginManager(AAXWFileSourcePluginManager):
+    @override
+    def __init__(self):
+        super().__init__()
+        self.dependencyContainer:Union[AAXWDependencyContainer,None]=None 
+        self.jumpinConfig:Union['AAXWJumpinConfig',None]=None
+        self.mainWindow:Union['AAXWJumpinMainWindow',None]=None
 
+    @override
+    def _createPluginInstance(self, pluginClass):
+        inst=pluginClass()
+        # 注入依赖容器
+        setattr(inst, 'dependencyContainer', self.dependencyContainer)
+        # 注入配置对象
+        setattr(inst, 'jumpinConfig', self.jumpinConfig)
+        # 注入配置对象
+        setattr(inst, 'mainWindow', self.mainWindow)
+        #
+        return inst
+    pass
 
+    # 可以通过率builder的类型 
+    @override
+    def _putPluginBuilder(self, pluginKey: str, builder, isBuiltin: bool):
+        return super()._putPluginBuilder(pluginKey, builder, isBuiltin)
 
+# 
+# 
+##
+
+#插件例子，理论上会扫描
+@AAXW_JUMPIN_LOG_MGR.classLogger()
+class MyBuiltinPlugin(AAXWAbstractBasePlugin):
+    AAXW_CLASS_LOGGER:logging.Logger
+
+    @override
+    def onInstall(self):
+        self.AAXW_CLASS_LOGGER.info("MyBuiltinPlugin.onInstall()")
+        pass
+
+    @override
+    def onUninstall(self):
+        self.AAXW_CLASS_LOGGER.info("MyBuiltinPlugin.onUninstall()")
+        pass
+
+    @override
+    def enable(self):
+        self.AAXW_CLASS_LOGGER.info("MyBuiltinPlugin.enable()")
+        pass
+
+    @override
+    def disable(self):
+        self.AAXW_CLASS_LOGGER.info("MyBuiltinPlugin.disable()")
+        pass
+    pass
 
 
 # 基本config信息，与默认配置；
@@ -1327,7 +1791,7 @@ class CodeBlockWidget(QWidget): #QWidget有站位，但是并不绘制出来。
         height = self.expectantHeight()
         return QSize(width, height)
     
-@AAXW_JUMPIN_LOG_MGR.classLogger(level=logging.DEBUG)
+@AAXW_JUMPIN_LOG_MGR.classLogger(level=logging.INFO)
 class CompoMarkdownContentBlock(QFrame): #原来是QWidget
     AAXW_CLASS_LOGGER:logging.Logger
 
@@ -2221,6 +2685,7 @@ class AAXWJumpinTrayKit(QSystemTrayIcon):
     
 def main():
     agstool=None
+    pluginManager:AAXWFileSourcePluginManager=None #type:ignore
     try:
         app = QApplication(sys.argv)
         mainWindow = AAXWJumpinMainWindow()
@@ -2228,10 +2693,21 @@ def main():
             key="mainWindow",node=mainWindow,
             llmagent='ollamaAIConnOrAgent',
             jumpinConfig='jumpinConfig')
+        pluginManager=AAXWJumpinDICSingleton.getAANode(
+            "jumpinPluginManager")
+        pluginManager.pluginRootDirectory="./"
+        pluginManager.builtinPackagePrefix="ananxw_jumpin"
+
+        pluginManager.detectBuiltinPlugins()
+        nameLs=pluginManager.listPluginBuilderNames()
+        AAXW_JUMPIN_MODULE_LOGGER.info(f"plugin nameLs :{nameLs}")
+        pluginManager.installAllDetectedPlugins() #安装初始化所有插件
+
         tray=AAXWJumpinTrayKit(mainWindow)
         agstool = AAXWGlobalShortcut(mainWindow)
-        
         agstool.start()
+
+
         tray.show()
         mainWindow.show()
         mainWindow.raise_()
@@ -2241,6 +2717,7 @@ def main():
         raise e
     finally:
         if agstool:agstool.stop()
+        if pluginManager:pluginManager.release()
         AAXWJumpinDICSingleton.clear()
         
 
