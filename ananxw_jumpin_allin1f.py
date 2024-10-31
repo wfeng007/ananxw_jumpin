@@ -23,7 +23,7 @@
 # 
 # 0.5+: 
 #      已增加简易注入框架；更好组织代码逻辑；
-# TODO 简易插件框架；支持二次开发；
+#      已增简易插件框架；支持二次开发；
 #      可集成密塔等搜索（可插件方式）
 # 
 # 提供基本的提示发送与结果展示界面；
@@ -56,7 +56,7 @@ if __name__ == "__main__":
 
 from datetime import datetime
 
-from typing import Callable, List, Dict, Type,Any,TypeVar,Union
+from typing import Callable, List, Dict, Type,Any,TypeVar,Union,cast
 
 from torch import NoneType
 try:
@@ -440,15 +440,15 @@ class AAXWFileSourcePluginManager:
                  pluginPrefix: Union[str , None] = None,
                  packagePrefix: Union[str , None] = None,
                  builtinPackagePrefix: Union[str , None] = None):
-        # 实际python中可以看做保存了类的构造器主签名的引用，cls()或某种方式去
+        
         self.pluginRootDirectory = rootDirectory
         self.pluginPrefix = pluginPrefix or AAXWFileSourcePluginManager.DEFAULT_PLUGIN_PREFIX
         self.packagePrefix = packagePrefix or AAXWFileSourcePluginManager.DEFAULT_PACKAGE_PREFIX
         self.builtinPackagePrefix = \
             builtinPackagePrefix or AAXWFileSourcePluginManager.BUILTIN_PACKAGE_PREFIX
         
-        # self.detectedPlugins: Dict[str, Type[AbstractBasePlugin]] = {}
-        # 检测到的插件建设器要么是个类 要么是 工厂函数，
+        # 可以看做保存了类构建器函数；
+        # 检测扫描到的插件建设器要么是个类 要么是 工厂函数，
         # TODO 之后可能扩展builder策略实现
         self.pluginBuilders: Dict[
             str, Union[Type[AAXWAbstractBasePlugin], Callable[[], AAXWAbstractBasePlugin]]
@@ -673,12 +673,12 @@ class AAXWFileSourcePluginManager:
         return list(self.installedPlugins.keys())
 
     # 获取内置插件列表的方法
-    def listBuiltinPluginBuilderNames(self) -> List[str]:  # 原 listSystemPluginNames
+    def listBuiltinPluginBuilderNames(self) -> List[str]:  # 
         """返回已检测到的内置插件名称列表"""
         return self.listPluginBuilderNames(pluginTypeFlag=2)
 
     # 检查插件是否为内置插件的方法 
-    def isBuiltinPlugin(self, pluginName: str) -> bool:  # 原 isSystemPlugin
+    def isBuiltinPlugin(self, pluginName: str) -> bool:  # 
         """检查指定插件是否为内置插件"""
         return pluginName in self.builtinPluginBuilders
 
@@ -750,7 +750,7 @@ class AAXWFileSourcePluginManager:
 # 应用级别框架扩展
 ##
 #
-class AAXWJumpinDICSingleton: #单例化
+class AAXWJumpinDICUtilz: #单例化
     """AAXWDependencyContainer的单例化工具类"""
     __instance = None
     _insLock = threading.Lock()
@@ -784,7 +784,7 @@ class AAXWJumpinDICSingleton: #单例化
                 cls.__instance.clear()
             cls.__instance = None
 
-@AAXWJumpinDICSingleton.register(key="jumpinPluginManager",
+@AAXWJumpinDICUtilz.register(key="jumpinPluginManager",
         dependencyContainer="_nativeDependencyContainer", #这里是内联 aware方式没有用singleton方式
         jumpinConfig="jumpinConfig",
         mainWindow="mainWindow")
@@ -847,7 +847,7 @@ class MyBuiltinPlugin(AAXWAbstractBasePlugin):
 
 
 # 基本config信息，与默认配置；
-@AAXWJumpinDICSingleton.register(key="jumpinConfig") 
+@AAXWJumpinDICUtilz.register(key="jumpinConfig") 
 @AAXW_JUMPIN_LOG_MGR.classLogger()
 class AAXWJumpinConfig:
     AAXW_CLASS_LOGGER:logging.Logger
@@ -995,10 +995,6 @@ class AAXWJumpinConfig:
         pass
 
 
-
-        
-    
-
     # @classmethod
     # def create_with_current_dir(cls):
     #     config = cls()
@@ -1020,11 +1016,9 @@ class AbstractAIConnOrAgent(ABC):
 
     def edit(self, prompt:str, instruction:str):
         ...
-       
 
 
-
-@AAXWJumpinDICSingleton.register(key="simpleAIConnOrAgent")
+@AAXWJumpinDICUtilz.register(key="simpleAIConnOrAgent")
 @AAXW_JUMPIN_LOG_MGR.classLogger()
 class AAXWSimpleAIConnOrAgent(AbstractAIConnOrAgent):
     """
@@ -1110,7 +1104,7 @@ class AAXWSimpleAIConnOrAgent(AbstractAIConnOrAgent):
 
 
 
-@AAXWJumpinDICSingleton.register(key="ollamaAIConnOrAgent")
+@AAXWJumpinDICUtilz.register(key="ollamaAIConnOrAgent")
 @AAXW_JUMPIN_LOG_MGR.classLogger()
 class AAXWOllamaAIConnOrAgent(AbstractAIConnOrAgent):
     """
@@ -1171,7 +1165,7 @@ class AAXWOllamaAIConnOrAgent(AbstractAIConnOrAgent):
         except Exception as e:
             raise Exception(f"Failed to generate stream chat completion: {str(e)}")
 
-@AAXWJumpinDICSingleton.register(key="aiConnOrAgentProxy")
+@AAXWJumpinDICUtilz.register(key="aiConnOrAgentProxy")
 @AAXW_JUMPIN_LOG_MGR.classLogger()
 class AIConnOrAgentProxy(AbstractAIConnOrAgent):
     def __init__(self, innerInst: AbstractAIConnOrAgent=None): #type:ignore
@@ -1207,13 +1201,7 @@ class AIThread(QThread):
         # self.mutex.unlock()
         
     def callUpdateUI(self,newContent:str):
-        
-        #
-        # print(f"streaming, emitL{newContent} id:{self.uiId}")
-        
-        #
         # 最好强制类型转换。self.uiId:str 或 str(self.uiId)
-        # 
         self.updateUI.emit(str(newContent), str(self.uiId)) 
         
 
@@ -1651,7 +1639,7 @@ class CodeBlockWidget(QWidget): #QWidget有站位，但是并不绘制出来。
             CodeBlockWidget {
                 background-color: #1E1E1E;
                 border-radius: 5px;
-                overflow: hidden;
+                /* overflow: hidden; qss不支持 */
                 /* border: 2px solid #FF00FF;  添加特殊颜色的边框用于调试 */
             }
         """)
@@ -1793,6 +1781,10 @@ class CodeBlockWidget(QWidget): #QWidget有站位，但是并不绘制出来。
     
 @AAXW_JUMPIN_LOG_MGR.classLogger(level=logging.INFO)
 class CompoMarkdownContentBlock(QFrame): #原来是QWidget
+    """ 
+    复合的内容展示块；
+    - 可展示连续输出的的markdown格式内容，特定显示程序块形式的内容。
+    """
     AAXW_CLASS_LOGGER:logging.Logger
 
     MIN_HEIGHT = 50  # 设置一个最小高度
@@ -2120,6 +2112,7 @@ class CompoMarkdownContentBlock(QFrame): #原来是QWidget
 
         
 
+# TODO 改用统一的di容器。 改为可实例化来执行
 @ContentBlockStrategy.register("compoMarkdownContentStrategy") 
 class CompoMarkdownContentStrategy(ContentBlockStrategy):
     # Markdown 语法提示，可用AI提示词
@@ -2171,14 +2164,12 @@ class CompoMarkdownContentStrategy(ContentBlockStrategy):
         #根据contentOwnerType提供不同的展示：
         # mdBlock.
 
-        #
-        # 
         # 当内容变更时调整控件尺寸，这里主要是高度；
-        # 
         # 注册内容变化的回调
         # mdBlock.registerContentChangeCallback(
         #     lambda: CompoMarkdownContentStrategy.adjustSize(mdBlock) #
         # )
+        # 尺寸变化时回调；
         mdBlock.registerSizeChangedCallbacks(
              lambda: CompoMarkdownContentStrategy.onSizeChanged(mdBlock) #
         )
@@ -2345,7 +2336,8 @@ class AAXWScrollPanel(QFrame):
     # 
     # Panel的内部基于scroll-widget增加组件后的期望尺寸；
     def expectantHeight(self):
-        # 关键点是Panel，scrollArea的实际大小与 self.scrollArea.widget() 提供的大小即内部期望的大小是不一样的。
+        # 关键点是Panel，scrollArea的实际大小与 self
+        # .scrollArea.widget() 提供的大小即内部期望的大小是不一样的。
         # 默认Panel或scrollArea是根据外部来设置大小的。
         sws = self.scrollArea.widget().size()
         total_height = 0
@@ -2364,14 +2356,8 @@ class AAXWScrollPanel(QFrame):
     # def scrollWidgetSize(self):
     #     return self.scrollArea.widget().size()
 
-
-
-    #
-    # 可增加事件过滤器，需要时可以install到外部大窗口上。比如QEvent.Type.Resize事件触发动作。
-    # 
     pass  # AAXWScrollPanel end
 
-from typing import cast
 class AAXWJumpinMainWindow(QWidget):
     """
     主窗口:
@@ -2379,18 +2365,16 @@ class AAXWJumpinMainWindow(QWidget):
     """
     
     MAX_HEIGHT = 500
-    def __init__(self):
-        super().__init__()
+    def __init__(self,parent=None):
+        super().__init__(parent=parent)
         self.init_ui()
         self.installAppHotKey()
 
         # 转容器关联；
-        self.jumpinConfig:AAXWJumpinConfig = None; #type:ignore
-        self.llmagent:AbstractAIConnOrAgent=AIConnOrAgentProxy(AAXWSimpleAIConnOrAgent())
-        
-        # self.llmagent=AIConnAgentProxy(AAXWOllamaAIConnAgent())
+        self.jumpinConfig:AAXWJumpinConfig = None #type:ignore
+        self.llmagent:AbstractAIConnOrAgent=AAXWSimpleAIConnOrAgent() # 同时也可能会有容器注入
+        # 
 
-    
     def init_ui(self):
         
         self.setObjectName("jumpin_main_window")
@@ -2519,7 +2503,6 @@ class AAXWJumpinMainWindow(QWidget):
     # end
     ##
 
-
     # 
     # 切换隐藏
     def toggleHidden(self):
@@ -2533,9 +2516,6 @@ class AAXWJumpinMainWindow(QWidget):
             self.show()
             self.inputPanel.promptInputEdit.setFocus()
             # self.raise_() # 
-            # self.activateWindow() #也会有点影像
-
-            # self.promptInputEdit.setFocus()
 
     ##
     # 切换钉在最前台 功能
@@ -2579,11 +2559,7 @@ class AAXWJumpinMainWindow(QWidget):
 
         if newHeight > self.MAX_HEIGHT: newHeight = self.MAX_HEIGHT
         # print(f"adjustHeight new:{newHeight}")
-        # print(f"showing panel H :{self.msgShowingPanel.sizeHint()}")
-        # print(f"showing panel - scroll H :{self.msgShowingPanel.scrollArea.sizeHint()}")
-        # print(f"showing panel - scroll-widget sizeHint :{self.msgShowingPanel.scrollArea.widget().sizeHint()}")
         # print(f"showing panel - scroll-widget Size :{self.msgShowingPanel.scrollArea.widget().size()}")
-        # print(f"showing panel - scroll-widget-vboxlayout H :{self.msgShowingPanel.scrollArea.widget().layout().sizeHint()}")
 
         self.resize(self.width(), newHeight)
         # self.setFixedHeight(newHeight)
@@ -2602,17 +2578,29 @@ class AAXWJumpinMainWindow(QWidget):
         return line
 
 @AAXW_JUMPIN_LOG_MGR.classLogger()
-class AAXWGlobalShortcut:
-    # 全局快捷键 运行器
+# 全局快捷键 运行器
+# 这个错误是因为在非主线程中操作了 Qt 
+# 的计时器相关功能。在 Qt 中，Timer 必须在创建它的线程中启动和停止。
+# 这个问题通常出现在使用全局快捷键或后台线程时。
+
+# 继承 QObject 使用信号方式才能在非界面线程或全局快捷键操作界面
+class AAXWGlobalShortcut(QObject):  
     AAXW_CLASS_LOGGER:logging.Logger
+    
+    # 定义信号 使用信号方式操作主窗口。
+    toggleWindowSignal = Signal()
 
     def __init__(self, mainWindow: AAXWJumpinMainWindow):
-        self.mainWindow: AAXWJumpinMainWindow = mainWindow
+        super().__init__()
+        self.mainWindow = mainWindow
         self.hotkey = keyboard.GlobalHotKeys({"<alt>+z": self.on_activate})
+        # 连接信号到主窗口的切换方法
+        self.toggleWindowSignal.connect(self.mainWindow.toggleHidden)
 
     def on_activate(self):
-        self.AAXW_CLASS_LOGGER.debug("全局快捷键<alt>+z被触发")
-        self.mainWindow.toggleHidden()
+        # 发送信号而不是直接调用
+        self.toggleWindowSignal.emit()
+        self.AAXW_CLASS_LOGGER.info("全局快捷键<alt>+z被触发")
 
     def start(self):
         self.hotkey.start()
@@ -2669,31 +2657,53 @@ class AAXWJumpinTrayKit(QSystemTrayIcon):
         else:
             self.AAXW_CLASS_LOGGER.warning(f"指定的目录不存在：{directory_path}")
 
-    
-        
-    def _get32QImg(self,image_path):
-        
-        #
-        # 直接用QImage  改变尺寸 scaled_qimage = qimage.scaled(32, 32)
-        #
-        # # 使用 QImage 从文件读入
-        qimage = QImage(image_path)
-        # 改变尺寸
-        scaled_qimage = qimage.scaled(8, 8)
-        qimg=scaled_qimage
-        return qimg
-    
+    def _get32QImg(self, image_path):
+        """
+        加载并处理图标图片，返回处理后的 QImage
+        """
+        try:
+            # 使用 PIL 处理图片，可以避免 ICC profile 警告
+            from PIL import Image
+            
+            # 打开并转换图片
+            with Image.open(image_path) as img:
+                # 移除 ICC profile
+                if 'icc_profile' in img.info:
+                    img = img.convert('RGBA')
+                
+                # 调整大小
+                img = img.resize((32, 32), Image.Resampling.LANCZOS)
+                
+                # 转换为 QImage
+                img_data = img.tobytes('raw', 'RGBA')
+                qimg = QImage(img_data, img.width, img.height, QImage.Format.Format_RGBA8888)
+                
+                return qimg
+                
+        except ImportError:
+            # 如果没有 PIL，回退到原始的 QImage 处理方式
+            qimage = QImage(image_path)
+            scaled_qimage = qimage.scaled(32, 32, 
+                Qt.AspectRatioMode.KeepAspectRatio, 
+                Qt.TransformationMode.SmoothTransformation)
+            return scaled_qimage
+
+
+
+# all in one file main function.
 def main():
     agstool=None
     pluginManager:AAXWFileSourcePluginManager=None #type:ignore
     try:
         app = QApplication(sys.argv)
         mainWindow = AAXWJumpinMainWindow()
-        AAXWJumpinDICSingleton.setAANode(
+        AAXWJumpinDICUtilz.setAANode(
             key="mainWindow",node=mainWindow,
-            llmagent='ollamaAIConnOrAgent',
-            jumpinConfig='jumpinConfig')
-        pluginManager=AAXWJumpinDICSingleton.getAANode(
+            # llmagent='ollamaAIConnOrAgent', #之后改为jumpinkit切换。
+            llmagent='simpleAIConnOrAgent',
+            jumpinConfig='jumpinConfig'
+        )
+        pluginManager=AAXWJumpinDICUtilz.getAANode(
             "jumpinPluginManager")
         pluginManager.pluginRootDirectory="./"
         pluginManager.builtinPackagePrefix="ananxw_jumpin"
@@ -2718,7 +2728,7 @@ def main():
     finally:
         if agstool:agstool.stop()
         if pluginManager:pluginManager.release()
-        AAXWJumpinDICSingleton.clear()
+        AAXWJumpinDICUtilz.clear()
         
 
 if __name__ == "__main__":
