@@ -13,20 +13,26 @@
 
 # Jumpin 是什么？
 # 
-# 支持钉在桌面最前端，全局热键换出与隐藏；
-# 0.2:托盘功能；
+# 
+# 0.2:托盘功能；支持钉在桌面最前端，全局热键换出与隐藏；
 # 0.3:较好的Markdown展示气泡，基本可扩展的展示气泡逻辑；
 # 0.4+:
 #      已增加工作目录配置与维护，基本文件系统能力。
 #      已增加日志功能，默认标准输出中输出；支持工作目录生成日志；并根据时间与数量清理；
-# TODO 可切换的Applet 功能，applet可根据自己功能逻辑调用资源与界面完成相对专门的特性功能；
-#           不同Applet可以定制自己的工具面板，展示面板等等。
-# 
-# 0.5+: 
 #      已增加简易注入框架；更好组织代码逻辑；
+#      
+# 0.5+: @Date:2024-11-03左右
+#      已增加可切换的Applet 功能，applet可根据自己功能逻辑调用资源与界面完成相对专门的特性功能；
 #      已增简易插件框架；支持二次开发；
-#      可集成密塔等搜索（可插件方式）
-# 0.6+: 打包与发布版初步建设；
+#      TODO 梳理命名注释等，并版本升级到0.5 
+# 0.6+: 
+#       增加通用工具消息面板（上或下），附加展示功能面板（左或右），
+#           不同Applet可以定制自己的工具面板，展示面板等等。
+#       增加Ollama管理功能；
+#       打包与发布版初步建设；
+#       注释说明整体梳理，初步建设1抡项目说明与二开参考说明
+# 0.7+：
+#       可集成密塔等搜索（可插件方式）
 # 
 # ##基本特性：
 # 一个提示符操作界面
@@ -41,6 +47,7 @@
 
 # import pstats
 import sys, os,time
+from datetime import datetime
 # 包与模块命名处理：
 try:
     #如果所在包有 __init__.py 且设置了__package_name__ 就能导入。如果没有则用目录名。
@@ -59,7 +66,7 @@ if __name__ == "__main__":
     del _file_basename
 
 
-from datetime import datetime
+
 
 from typing import Callable, List, Dict, Type,Any,TypeVar,Union,cast, Tuple
 
@@ -379,22 +386,70 @@ class AAXWDependencyContainer:
 class AAXWAbstractBasePlugin(ABC):
     """
     抽象插件基类
-    定义了插件的基本接口与部分插件框架关联实现
+    定义了插件的基本接口与插件框架关联实现。
+    
+    插件生命周期包括：
+    1. 检测：插件管理器扫描文件系统，识别潜在插件类
+    2. 加载：导入插件模块，检索插件类
+    3. 安装：实例化插件类，调用onInstall方法
+    4. 启用/禁用：激活或停用插件功能
+    5. 卸载：清理插件资源，调用onUninstall方法
+    
+    开发新插件与扩展管理器，例如：
+    1. 继承此抽象类并实现所有抽象方法；
+    2. 通过AAXWFileSourcePluginManager或其子类自动扫描载入并生命周期管理；
+    3. 扩展管理器可在实例化插件时增加注入资源，如AAXWJumpinPluginManager实现中增加了:
+        - dependencyContainer: DI容器实例
+        - jumpinConfig: 应用配置实例 
+        - mainWindow: 主窗口实例
     """
+
     @abstractmethod
     def onInstall(self):
+        """
+        插件安装时的回调方法
+        建议实现:
+            - 初始化插件所需的资源
+            - 注册插件提供的服务到DI容器
+            - 设置插件的配置信息
+            - 创建必要的UI组件
+        """
         pass
 
     @abstractmethod
     def onUninstall(self):
+        """
+        插件卸载时的回调方法
+        建议实现:
+            - 清理插件创建的资源
+            - 从DI容器注销服务
+            - 保存配置信息
+            - 移除UI组件
+        """
         pass
 
     @abstractmethod
     def enable(self):
+        """
+        启用插件功能时的回调方法
+        建议实现:
+            - 激活插件的功能
+            - 显示插件的UI组件
+            - 注册事件监听器
+            - 启动后台服务
+        """
         pass
 
     @abstractmethod
     def disable(self):
+        """
+        禁用插件功能时的回调方法
+        建议实现:
+            - 停用插件的功能
+            - 隐藏插件的UI组件
+            - 注销事件监听器
+            - 停止后台服务
+        """
         pass
 
 # 插件框架
@@ -437,7 +492,8 @@ class AAXWFileSourcePluginManager:
     # 改为内置插件前缀
     # BUILTIN_PACKAGE_PREFIX = "builtin_plugins"  # 原 SYSTEM_PACKAGE_PREFIX
     # 使用getattr()来安全地获取包名，如果不存在则使用默认值 
-    # FIXME 好像有问题。设置了__package_name__ 还用builtin_plugins
+    # FIXME 好像有问题。设置了__package_name__ 还用builtin_plugins,
+    #         main函数中 直接 pluginManager.builtinPackagePrefix="ananxw_jumpin"
     BUILTIN_PACKAGE_PREFIX = getattr(globals(), '__package_name__', "builtin_plugins")
 
     
@@ -510,11 +566,11 @@ class AAXWFileSourcePluginManager:
                 self.modules[fullModuleName] = module
                 self._detectPluginBuildersFromModule(module, fullModuleName)
             except ImportError as e:
-                print(f"导入模块 {fullModuleName} 时出错: {e}")
+                self.AAXW_CLASS_LOGGER.error(f"导入模块 {fullModuleName} 时出错: {e}")
             except Exception as e:
-                print(f"加载模块 {fullModuleName} 时发生意外错误: {e}")
+                self.AAXW_CLASS_LOGGER.error(f"加载模块 {fullModuleName} 时发生意外错误: {e}")
         except Exception as e:
-            print(f"处理插件文件 {pluginPath} 时出错: {e}")
+            self.AAXW_CLASS_LOGGER.error(f"处理插件文件 {pluginPath} 时出错: {e}")
     
     def _detectPluginBuildersFromModule(self, module: Any, moduleName: str, isBuiltin=False):
         """检测模块中的插件"""
@@ -547,7 +603,7 @@ class AAXWFileSourcePluginManager:
                     module=module, moduleName=module_name, isBuiltin=True
                 )
             except Exception as e:
-                print(f"从{module_name}检测内置插件时发生错误: {e}")
+                self.AAXW_CLASS_LOGGER.error(f"从{module_name}检测内置插件时发生错误: {e}")
     
     def release(self):
         """释放所有插件资源，在关闭前调用"""
@@ -561,7 +617,7 @@ class AAXWFileSourcePluginManager:
         self.modules.clear()
         self.installedPlugins.clear()
         
-        print("plugin manager relased!")
+        self.AAXW_CLASS_LOGGER.info("插件管理器已释放资源。plugin manager relased!")
     #
     # 检测-加载与释放  end
     ##
@@ -901,7 +957,7 @@ class AAXWAppletManager:
             return self.applets[index]
         return None
 
-    @override
+    
     def addApplet(self, applet: AAXWAbstractApplet, index: int = -1) -> bool:
         """
         添加Applet
@@ -932,7 +988,7 @@ class AAXWAppletManager:
             self.AAXW_CLASS_LOGGER.error(f"Failed to add applet {applet.getName()}: {str(e)}")
             return False
 
-    @override
+    
     def removeApplet(self, index: int) -> bool:
         """
         移除指定索引的Applet
@@ -1025,6 +1081,7 @@ class AAXWJumpinDICUtilz: #单例化
 @AAXWJumpinDICUtilz.register(key="jumpinPluginManager",
         dependencyContainer="_nativeDependencyContainer", #这里是内联 aware方式没有用singleton方式
         jumpinConfig="jumpinConfig",
+        jumpinAppletManager="jumpinAppletManager",
         mainWindow="mainWindow")
 # @AAXW_JUMPIN_LOG_MGR.classLogger()
 class AAXWJumpinPluginManager(AAXWFileSourcePluginManager):
@@ -1034,17 +1091,17 @@ class AAXWJumpinPluginManager(AAXWFileSourcePluginManager):
         self.dependencyContainer:Union[AAXWDependencyContainer,None]=None 
         self.jumpinConfig:Union['AAXWJumpinConfig',None]=None
         self.mainWindow:Union['AAXWJumpinMainWindow',None]=None
+        self.jumpinAppletManager:Union[AAXWJumpinAppletManager,None]=None
 
     @override
     def _createPluginInstance(self, pluginClass):
         inst=pluginClass()
         # 注入依赖容器
         setattr(inst, 'dependencyContainer', self.dependencyContainer)
-        # 注入配置对象
         setattr(inst, 'jumpinConfig', self.jumpinConfig)
-        # 注入配置对象
         setattr(inst, 'mainWindow', self.mainWindow)
-        #
+        setattr(inst, 'jumpinAppletManager', self.jumpinAppletManager)
+
         return inst
     pass
 
@@ -1090,7 +1147,7 @@ class AAXWJumpinConfig:
         background-color: #e0e0e0;
         margin-left: 200px;
     }
-    QTextBrowser[contentOwnerType="ROW_CONTENT_OWNER_TYPE_AGENT"] {
+    QTextBrowser[contentOwnerType="ROW_CONTENT_OWNER_TYPE_OTHERS"] {
         background-color: #e6e6fa;
         color: #00008b;
     }
@@ -1206,7 +1263,6 @@ class AAXWJumpinConfig:
         #其他di胡执行的工作；
         pass
 
-
     # @classmethod
     # def create_with_current_dir(cls):
     #     config = cls()
@@ -1217,7 +1273,7 @@ class AAXWJumpinConfig:
 #
 # AI相关
 #
-class AAWXAbstractAIConnOrAgent(ABC):
+class AAXWAbstractAIConnOrAgent(ABC):
     @abstractmethod
     def requestAndCallback(self, prompt: str, func: Callable[[str], None],isStream: bool = True):
         # raise NotImplementedError("Subclasses must implement sendRequestStream method")
@@ -1232,7 +1288,7 @@ class AAWXAbstractAIConnOrAgent(ABC):
 
 @AAXWJumpinDICUtilz.register(key="simpleAIConnOrAgent")
 @AAXW_JUMPIN_LOG_MGR.classLogger()
-class AAXWSimpleAIConnOrAgent(AAWXAbstractAIConnOrAgent):
+class AAXWSimpleAIConnOrAgent(AAXWAbstractAIConnOrAgent):
     """
     简单实现的连接LLM/Agent的类，支持流式获取响应。
     使用Langchain封装的OpenAI的接口实现。
@@ -1318,7 +1374,7 @@ class AAXWSimpleAIConnOrAgent(AAWXAbstractAIConnOrAgent):
 
 @AAXWJumpinDICUtilz.register(key="ollamaAIConnOrAgent")
 @AAXW_JUMPIN_LOG_MGR.classLogger()
-class AAXWOllamaAIConnOrAgent(AAWXAbstractAIConnOrAgent):
+class AAXWOllamaAIConnOrAgent(AAXWAbstractAIConnOrAgent):
     """
     直接使用OpenAI的接口实现。对Ollama的访问；
     """
@@ -1398,13 +1454,13 @@ class AIThread(QThread):
     #newContent,id 对应：ShowingPanel.appendToContentById 回调
     updateUI = Signal(str,str)  
 
-    def __init__(self,text:str,uiCellId:str,llmagent:AAWXAbstractAIConnOrAgent):
+    def __init__(self,text:str,uiCellId:str,llmagent:AAXWAbstractAIConnOrAgent):
         super().__init__()
         
         # self.mutex = QMutex()
         self.text:str=text
         self.uiId:str=uiCellId
-        self.llmagent:AAWXAbstractAIConnOrAgent=llmagent
+        self.llmagent:AAXWAbstractAIConnOrAgent=llmagent
         
     def run(self):
         self.msleep(500)  # 执行前先等界面渲染
@@ -1452,22 +1508,65 @@ class AIThread(QThread):
     dependencyContainer="_nativeDependencyContainer",
     jumpinConfig="jumpinConfig",
     mainWindow="mainWindow")
-@AAXW_JUMPIN_LOG_MGR.classLogger()
+@AAXW_JUMPIN_LOG_MGR.classLogger(level=logging.DEBUG)
 class AAXWJumpinAppletManager(AAXWAppletManager):
-
     AAXW_CLASS_LOGGER:logging.Logger
-    def __init__(self, maxCapacity: int = 10):
-        super().__init__(maxCapacity=maxCapacity)
+
+    def __init__(self):
+        super().__init__(maxCapacity = self.DEFAULT_MAX_CAPACITY)
         # DI注入
         self.dependencyContainer:Union[AAXWDependencyContainer,None]=None
         self.jumpinConfig:Union['AAXWJumpinConfig',None]=None
         self.mainWindow:Union['AAXWJumpinMainWindow',None]=None
+
+
+    def removeAppletByInstance(self, applet: AAXWAbstractApplet) -> bool:
+        """
+        通过Applet实例引用来删除Applet
+        :param applet: 要删除的Applet实例
+        :return: 删除是否成功
+        """
+        try:
+            # 查找实例在列表中的索引
+            for index, existing_applet in enumerate(self.applets):
+                if existing_applet is applet:  # 使用 is 进行身份比较
+                    return self.removeApplet(index)
+            
+            self.AAXW_CLASS_LOGGER.warning(f"Applet instance not found: {applet.getName()}")
+            return False
+            
+        except Exception as e:
+            self.AAXW_CLASS_LOGGER.error(f"Failed to remove applet by instance: {str(e)}")
+            return False
         
-
+        
+    # TODO 等待抽象到父类
+    def activateNextLoop(self) -> bool:
+        """
+        激活下一个 Applet，如果当前是最后一个则激活第一个
+        Returns:
+            bool: 是否成功激活了新的 Applet
+        """
+        if len(self.applets) <= 1:
+            self.AAXW_CLASS_LOGGER.debug("Applets数量<=1，无需切换")
+            return False
+            
+        try:
+            # 计算下一个索引，如果超出范围则回到0
+            next_index = (self.activatedAppletIndex + 1) % len(self.applets)
+            
+            # 激活下一个 Applet
+            success = self.activateApplet(next_index)
+            if success:
+                self.AAXW_CLASS_LOGGER.info(
+                    f"已切换到下一个Applet[{next_index}]: {self.applets[next_index].getName()}")
+            return success
+            
+        except Exception as e:
+            self.AAXW_CLASS_LOGGER.error(f"切换到下一个Applet时发生错误: {str(e)}")
+            return False
     #
-    # TODO 增加资源注入给applet；
-    # 
-
+    # 增加资源注入给applet；
     @override
     def addApplet(self, applet: AAXWAbstractApplet, index: int = -1) -> bool:
         #
@@ -1478,8 +1577,6 @@ class AAXWJumpinAppletManager(AAXWAppletManager):
 
         # 再加入管理器
         return super().addApplet(applet=applet, index=index)
-
-
 #
 # Applet管理器 end
 ##
@@ -1490,29 +1587,8 @@ class AAXWJumpinAppletManager(AAXWAppletManager):
 # 界面组件相关
 ##
 #
-# 暂时单独放在input edit之外实现，
-# TODO 之后考虑放在插件机制剥离实现？ 不分功能比如tab键的控制似乎可能不属于基础功能；
-class EditEventFilter(QObject):
-    """
-    拦截 Tab 键，并替换为特定的功能；主要作用于InputEdit；
-    Tab:
-    """
-
-    def __init__(self, mainWindow):
-        super().__init__()
-        self.manwindow: AAXWJumpinMainWindow = mainWindow
-
-    def eventFilter(self, obj, event):
-        # Tab按键改为控制左侧按钮按下执行 （该也可以考虑改为组合键control+Tab，似）
-        if event.type() == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Tab:
-            # print("Tab 键被按下")
-            self.manwindow.inputPanel.funcButtonLeft.click()  # 点击左侧按钮
-            return True  # 被过滤
-        #
-        return False
-
 @AAXW_JUMPIN_LOG_MGR.classLogger()
-class AAXWInputLineEdit(QLineEdit):
+class AAXWJumpinInputLineEdit(QLineEdit):
     """ 
     主要指令，提示信息，对话信息输入框； 
     """
@@ -1523,9 +1599,7 @@ class AAXWInputLineEdit(QLineEdit):
     def __init__(self, mainWindow, parent=None):
         super().__init__(parent)
         self.mainWindow: AAXWJumpinMainWindow = mainWindow
-        # 额外的事件处理器，如优先处理如Tab按下
-        self.editEventHandler=EditEventFilter(self.mainWindow)
-        self.installEventFilter(self.editEventHandler)
+        
         
         # 初始化鼠标事件，主要完抓握InputEdit移动整体窗口
         self._initMouseProperties()
@@ -1618,7 +1692,7 @@ class AAXWInputLineEdit(QLineEdit):
 
 
 @AAXW_JUMPIN_LOG_MGR.classLogger()
-class AAXWInputPanel(QWidget):
+class AAXWJumpinInputPanel(QWidget):
     AAXW_CLASS_LOGGER:logging.Logger
     
     # sendRequest = Signal(str)
@@ -1641,7 +1715,7 @@ class AAXWInputPanel(QWidget):
         # 左侧功能按钮
         self.funcButtonLeft = QPushButton("Toggle", self)
         # 中间输入框
-        self.promptInputEdit = AAXWInputLineEdit(self.mainWindow, self)
+        self.promptInputEdit = AAXWJumpinInputLineEdit(self.mainWindow, self)
         # 右侧功能按钮
         self.funcButtonRight = QPushButton("⏎", self)
 
@@ -1668,7 +1742,6 @@ class AAXWInputPanel(QWidget):
     ###
     # 左侧
     def toggleLeftFunc(self):
-        #代删除；
         pass
 
 
@@ -1712,156 +1785,30 @@ class AAXWVBoxLayout(QVBoxLayout):
                 self.addItem(item)
 
 
-class ContentBlockStrategy(ABC):
-    #TODO 改为DI容器维护策略。
-    #单例化的
-    strategies: Dict[str, Type['ContentBlockStrategy']] = {}
-
-
-    @classmethod
-    def register(cls, strategy_type: str):
-        def decorator(subclass):
-            cls.strategies[strategy_type] = subclass
-            return subclass
-        return decorator
-
-    @classmethod
-    def getStrategy(cls, strategy_type: str) -> 'ContentBlockStrategy':
-        strategy = cls.strategies.get(strategy_type)
-        if not strategy:
-            raise ValueError(f"Unknown strategy type: {strategy_type}")
-        return strategy()
-
-
-    #TODO 这里临时用执行期注入，其实策略也最有定义期注入。使用实例化策略保存定义期需要的属性；
-    #执行期可放入返回的
-    @staticmethod
+#TODO 这个类族是个策略模式，但是感觉是否应该简化？
+#           视乎就是支持 AAXWScrollPanel的。至少contentOwnerType 是。contentOwner。
+#           Content 就是指内容。实际是否可以改造为create 特定的界面？比如配置界面？
+# 相当于type3注入ContentBlock。
+class AAXWContentBlockStrategy(ABC):
+   
     @abstractmethod
-    def createWidget(rowId: str, contentOwner: str, contentOwnerType: str,
+    def createWidget(self, rowId: str, contentOwner: str, contentOwnerType: str,
                     mainWindow: QWidget, strategyWidget:QWidget) -> QWidget:
         pass
 
-    @staticmethod
     @abstractmethod
-    def initContent(widget: QWidget,content:str) -> QWidget:
+    def initContent(self,widget: QWidget,content:str) -> QWidget:
         pass
 
-    @staticmethod
     @abstractmethod
-    def insertContent(widget: QWidget, content: str):
+    def insertContent(self,widget: QWidget,content:str):
         pass
 
-    @staticmethod
-    @abstractmethod
-    def adjustSize(widget: QWidget):
-        pass
-    
-    
-#定义期初始化对象了，其实不一定好。要用最好在最外层控制使用注册
-@ContentBlockStrategy.register("text_browser")
-@AAXW_JUMPIN_LOG_MGR.classLogger()
-class TextBrowserStrategy(ContentBlockStrategy):
+    # @abstractmethod
+    # def adjustSize(self,widget: QWidget): #这个有用？
+    #     pass
 
-    AAXW_CLASS_LOGGER:logging.Logger
-
-    # 用特殊符号最为追加占位标记
-    MARKER = "[💬➡️🏁]"
-    @staticmethod
-    @override
-    def createWidget(rowId: str, contentOwner: str, contentOwnerType: str, 
-                     mainWindow: 'AAXWJumpinMainWindow', strategyWidget: 'AAXWScrollPanel') -> QTextBrowser:
-        
-        tb = QTextBrowser()
-        tb.setObjectName(f"{AAXWScrollPanel.ROW_BLOCK_NAME_PREFIX}_{rowId}")
-        tb.setProperty("id", rowId)
-        tb.setProperty("contentOwner", contentOwner)
-        tb.setProperty("contentOwnerType", contentOwnerType)
-        # 高度先限定，然后根据内部变化，关闭滚动条
-        tb.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        tb.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-
-        # 关闭自动格式化？
-        tb.setAutoFormatting(QTextBrowser.AutoFormattingFlag.AutoNone)
-        tb.setLineWrapMode(QTextBrowser.LineWrapMode.WidgetWidth)
-
-        # 设置基本样式；
-        doc = QTextDocument()
-        tb.setDocument(doc)
-        doc.setDefaultStyleSheet("p { white-space: pre-wrap; }")
-
-
-        # 内容改变改变高度
-        tb.document().contentsChanged.connect(lambda: TextBrowserStrategy.adjustSize(tb))
-
-        #初始化空间
-        # initial_text = " "
-        # doc.setHtml(initial_text)
-        # tb.append(TextBrowserStrategy.MARKER)  # 这里增加一个追加内容用的特别Marker
-        TextBrowserStrategy.initContent(widget=tb,content=" ")
-
-        # 现在可以使用 main_window 和 panel 进行额外的设置或操作
-        tb.setProperty("mainWindow", mainWindow)
-        tb.setProperty("strategyWidget", strategyWidget)
-
-        return tb
-
-    @staticmethod
-    @override
-    def initContent(widget: QTextBrowser, content: str):
-        tb=widget
-        doc=tb.document()
-         #初始化空间
-        initial_text = content
-        doc.setHtml(initial_text)
-        tb.append(TextBrowserStrategy.MARKER)  # 这里增加一个追加内容用的特别Marker
-
-    @staticmethod
-    @override
-    def insertContent(widget: QTextBrowser, content: str):
-        # 使用游标进行查找marker并更新平文
-        doc = widget.document()
-        cursor = doc.find(TextBrowserStrategy.MARKER)
-        if cursor:
-            cursor.movePosition(QTextCursor.MoveOperation.PreviousCharacter, 
-                                QTextCursor.MoveMode.MoveAnchor
-            )
-            cursor.insertHtml(f"{content}")  # 可以追加html但是会过滤掉不符合规范的比如div
-            widget.repaint()  # 非线程调用本方法，可能每次都要重绘，否则是完成完后一次性刷新。
-        else:
-            TextBrowserStrategy.AAXW_CLASS_LOGGER.debug(
-                "not found marker:" + TextBrowserStrategy.MARKER)
-
-    @staticmethod
-    @override
-    def adjustSize(widget: QTextBrowser):
-        
-        tb:QTextBrowser = widget
-        # 获取 QTextBrowser 的文档对象
-        doc = tb.document()
-        # 获取 QTextBrowser 的内容边距
-        margins = tb.contentsMargins()
-        #  计算文档高度加上上下边距得到总高度
-        # TODO 这里计算的不对，所有tb都需要根据内容来计算高度，获取内容应该。
-        expectantHeight:int = int(
-            doc.size().height() + margins.top() + margins.bottom() + 10 #预期行高增加1行？
-        )  # 多增加点margins
-
-        # 使用fixed的尺寸策略
-        # 调整Row tb高度
-        if expectantHeight<20: expectantHeight=20
-        tb.setFixedHeight(int(expectantHeight))
-
-
-        #同时调整主窗口高度；
-        mainWindow:"AAXWJumpinMainWindow"=tb.property("mainWindow")
-
-        # 
-        # mainWindow不为none，刚创建的tb没有mainWindow？
-        if mainWindow :mainWindow.adjustHeight()
-
-
-
-class PythonHighlighter(QSyntaxHighlighter):
+class AAXWCodeHighlighter(QSyntaxHighlighter):
     def __init__(self, parent=None):
         super().__init__(parent) #type: ignore
         self.highlightingRules = []
@@ -1893,7 +1840,7 @@ class PythonHighlighter(QSyntaxHighlighter):
                 match = it.next()
                 self.setFormat(match.capturedStart(), match.capturedLength(), format)
 
-class CodeBlockWidget(QWidget): #QWidget有站位，但是并不绘制出来。
+class AAXWCodeBlockWidget(QWidget): #QWidget有站位，但是并不绘制出来。
     def __init__(self, code, title="Unkown", parent=None):
         super().__init__(parent)
         self.sizeChangedCallbacks = []
@@ -1969,7 +1916,7 @@ class CodeBlockWidget(QWidget): #QWidget有站位，但是并不绘制出来。
         layout.addWidget(self.codeEdit)
 
         # 应用代码高亮
-        self.highlighter = PythonHighlighter(self.codeEdit.document())
+        self.highlighter = AAXWCodeHighlighter(self.codeEdit.document())
 
         # 底部空白区域
         bottomWidget = QWidget()
@@ -2034,9 +1981,6 @@ class CodeBlockWidget(QWidget): #QWidget有站位，但是并不绘制出来。
         # 计算总高度
         totalHeight = topHeight + contentHeight + bottomHeight + padding
         
-        
-        
-        # print(f"Adjusted height: {totalHeight}px, Lines: {lineCount}")
         return totalHeight
 
     def sizeHint(self): #重写 预期尺寸
@@ -2045,7 +1989,7 @@ class CodeBlockWidget(QWidget): #QWidget有站位，但是并不绘制出来。
         return QSize(width, height)
     
 @AAXW_JUMPIN_LOG_MGR.classLogger(level=logging.INFO)
-class CompoMarkdownContentBlock(QFrame): #原来是QWidget
+class AAXWCompoMarkdownContentBlock(QFrame): #原来是QWidget
     """ 
     复合的内容展示块；
     - 可展示连续输出的的markdown格式内容，特定显示程序块形式的内容。
@@ -2057,12 +2001,12 @@ class CompoMarkdownContentBlock(QFrame): #原来是QWidget
     # 基础QSS样式
     BASE_QSS = """
     /* */
-    CompoMarkdownContentBlock {
+    AAXWCompoMarkdownContentBlock {
         background-color: #f0f0f0;
         border: none ;
         border-radius: 5px;
     }
-    CompoMarkdownContentBlock[contentOwnerType="ROW_CONTENT_OWNER_TYPE_USER"] {
+    AAXWCompoMarkdownContentBlock[contentOwnerType="ROW_CONTENT_OWNER_TYPE_USER"] {
         border: 1px solid #a0a0a0;
         background-color: #d4f2e7;
         margin-left: 200px; /* 模拟右对齐，实际最好脚本中用layout实现对齐； */
@@ -2277,7 +2221,7 @@ class CompoMarkdownContentBlock(QFrame): #原来是QWidget
         title = "```python"
         title = title.split('```', 1)[1] if len(title.split('```', 1)) > 1 else title
         #
-        newWidget = CodeBlockWidget(code,title=title)
+        newWidget = AAXWCodeBlockWidget(code,title=title)
         self.layout.addWidget(newWidget)
         self.currentWidget = newWidget
         self.currentContent = ""+code
@@ -2323,7 +2267,7 @@ class CompoMarkdownContentBlock(QFrame): #原来是QWidget
 
     def appendToCodeBlock(self, procContent, isBacktrack=False, backtrackTemplate=None):
         """向代码块追加内容"""
-        if isinstance(self.currentWidget, CodeBlockWidget):
+        if isinstance(self.currentWidget, AAXWCodeBlockWidget):
             self.currentContent += procContent
             if isBacktrack:
                 if not backtrackTemplate: raise ValueError(
@@ -2377,9 +2321,9 @@ class CompoMarkdownContentBlock(QFrame): #原来是QWidget
 
         
 
-# TODO 改用统一的di容器。 改为可实例化来执行
-@ContentBlockStrategy.register("compoMarkdownContentStrategy") 
-class CompoMarkdownContentStrategy(ContentBlockStrategy):
+# 不放置容器，直接applet等生成，设置给panel
+class AAXWJumpinCompoMarkdownContentStrategy(
+    AAXWContentBlockStrategy):
     # Markdown 语法提示，可用AI提示词
     MARKDOWN_PROMPT = """
     本对话支持以下 Markdown 语法：
@@ -2415,12 +2359,12 @@ class CompoMarkdownContentStrategy(ContentBlockStrategy):
     3. 代码块会使用特殊的格式和语法高亮显示，当前暂时仅支持python，其他代码格式先用普通文本提供。
     """
 
-    @staticmethod
+    # @staticmethod
     @override
-    def createWidget(rowId: str, contentOwner: str, contentOwnerType: str, 
-                     mainWindow: 'AAXWJumpinMainWindow', strategyWidget: 'AAXWScrollPanel') -> CompoMarkdownContentBlock:
+    def createWidget(self,rowId: str, contentOwner: str, contentOwnerType: str, 
+                     mainWindow: 'AAXWJumpinMainWindow', strategyWidget: 'AAXWScrollPanel') -> AAXWCompoMarkdownContentBlock:
         
-        mdBlock = CompoMarkdownContentBlock()
+        mdBlock = AAXWCompoMarkdownContentBlock()
         mdBlock.setObjectName(f"{AAXWScrollPanel.ROW_BLOCK_NAME_PREFIX}_{rowId}")
         mdBlock.setProperty("id", rowId)
         mdBlock.setProperty("contentOwner", contentOwner)
@@ -2436,7 +2380,7 @@ class CompoMarkdownContentStrategy(ContentBlockStrategy):
         # )
         # 尺寸变化时回调；
         mdBlock.registerSizeChangedCallbacks(
-             lambda: CompoMarkdownContentStrategy.onSizeChanged(mdBlock) #
+             lambda: self.onSizeChanged(mdBlock) #
         )
 
         # 设置属性以便后续操作
@@ -2448,9 +2392,9 @@ class CompoMarkdownContentStrategy(ContentBlockStrategy):
 
         return mdBlock
 
-    @staticmethod
+    # @staticmethod
     @override
-    def initContent(widget: CompoMarkdownContentBlock, content: str):
+    def initContent(self,widget: AAXWCompoMarkdownContentBlock, content: str):
 
         # widget.clear()
         widget.addContent(content)
@@ -2463,65 +2407,173 @@ class CompoMarkdownContentStrategy(ContentBlockStrategy):
         # 马上调用没用。
         # widget.currentWidget.adjustSize()
 
-    @staticmethod
+    # @staticmethod
     @override
-    def insertContent(widget: CompoMarkdownContentBlock, content: str):
+    def insertContent(self,widget: AAXWCompoMarkdownContentBlock, content: str):
         widget.addContent(content)
 
-
-    @staticmethod
-    def onSizeChanged(widget: CompoMarkdownContentBlock):
-        
+    # @staticmethod
+    def onSizeChanged(self,widget: AAXWCompoMarkdownContentBlock):
         # 为啥一下子高度就满了？
         # 调整主窗口高度
         mainWindow: "AAXWJumpinMainWindow" = widget.property("mainWindow")
         if mainWindow:
             mainWindow.adjustHeight()
 
-    
-
-    @staticmethod
+    # @staticmethod
     @override
-    def adjustSize(widget: CompoMarkdownContentBlock):
-        widget.adjustSize()
+    def adjustSize(self,widget: AAXWCompoMarkdownContentBlock):
+        # widget.adjustSize()
 
-        # 调整主窗口高度
-        mainWindow: "AAXWJumpinMainWindow" = widget.property("mainWindow")
-        if mainWindow:
-            mainWindow.adjustHeight()
+        # # 调整主窗口高度
+        # mainWindow: "AAXWJumpinMainWindow" = widget.property("mainWindow")
+        # if mainWindow:
+        #     mainWindow.adjustHeight()
         pass
 
 
-# TODO 之后放到后面形成具体例子；
+# applet与 plugin的功能逻辑
+#
+@AAXW_JUMPIN_LOG_MGR.classLogger()
+class AAXWJumpinDefaultSimpleApplet(AAXWAbstractApplet):
+    AAXW_CLASS_LOGGER:logging.Logger
+    
+    def __init__(self):
+        self.name = "jumpinDefaultSimpleApplet"
+        self.title = "SIMP"
+        self.dependencyContainer:AAXWDependencyContainer=None #type:ignore
+        self.jumpinConfig:'AAXWJumpinConfig'= None #type:ignore
+        self.mainWindow:'AAXWJumpinMainWindow'=None #type:ignore
+        
+    @override
+    def getName(self) -> str:
+        return self.name
+        
+    @override 
+    def getTitle(self) -> str:
+        return self.title
+
+    @override
+    def onAdd(self):
+        self.AAXW_CLASS_LOGGER.info(f"{self.name} Applet被添加")
+        pass
+
+    @override
+    def onActivate(self):
+        self.AAXW_CLASS_LOGGER.info(f"{self.name} Applet被激活")
+
+        #按钮标志与基本按钮曹关联
+        self.mainWindow.inputPanel.funcButtonLeft.setText(self.getTitle())
+        pass
+
+    @override
+    def onInactivate(self):
+        self.AAXW_CLASS_LOGGER.info(f"{self.name} Applet被停用")
+        pass
+
+    @override
+    def onRemove(self):
+        self.AAXW_CLASS_LOGGER.info(f"{self.name} Applet被移除")
+        pass
+
+
+
+#
 #插件例子，理论上会扫描
 @AAXW_JUMPIN_LOG_MGR.classLogger()
 class AAXWJumpinDefaultBuiltinPlugin(AAXWAbstractBasePlugin):
     AAXW_CLASS_LOGGER:logging.Logger
 
-    @override
-    def onInstall(self):
-        self.AAXW_CLASS_LOGGER.info("MyBuiltinPlugin.onInstall()")
-        pass
+
+    #
+    # 过滤tab，为input左侧按钮按下。
+    # 改为触发applet-manager切换为下一个applet
+    # 
+    @AAXW_JUMPIN_LOG_MGR.classLogger(level=logging.DEBUG)
+    class EditEventFilter(QObject):
+        AAXW_CLASS_LOGGER:logging.Logger
+        """
+        拦截 Tab 键，并替换为特定的功能；主要作用于InputEdit；
+        Tab:
+        """
+
+        def __init__(self, mainWindow):
+            super().__init__()
+            self.mainWindow: AAXWJumpinMainWindow = mainWindow
+
+        def eventFilter(self, obj, event):
+            # Tab按键改为控制左侧按钮按下执行 （该也可以考虑改为组合键control+Tab，似）
+            if event.type() == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Tab:
+                # print("Tab 键被按下")
+                self.mainWindow.inputPanel.funcButtonLeft.click()  # TODO 先注册左侧按钮功能。
+                self.AAXW_CLASS_LOGGER.debug("按下了Tab ！")
+                return True  # 被过滤
+            #
+            return False
+        
+    def __init__(self) -> None:
+        super().__init__()
+        #jumpin-mgr 会注入
+        self.dependencyContainer:AAXWDependencyContainer = None #type:ignore
+        self.jumpinConfig:'AAXWJumpinConfig' = None #type:ignore
+        self.mainWindow:'AAXWJumpinMainWindow' = None #type:ignore
+        self.jumpinAppletManager:AAXWJumpinAppletManager = None #type:ignore
+
+        self.editEventHandler:AAXWJumpinDefaultBuiltinPlugin.EditEventFilter=None #type:ignore 
 
     @override
-    def onUninstall(self):
-        self.AAXW_CLASS_LOGGER.info("MyBuiltinPlugin.onUninstall()")
+    def onInstall(self):
+        self.AAXW_CLASS_LOGGER.info(f"{self.__class__.__name__}.onInstall()")
+        self.simpleApplet=AAXWJumpinDefaultSimpleApplet()
+        
+        # inputedit额外的事件处理器，如优先处理如Tab按下
+        self.editEventHandler=self.EditEventFilter(self.mainWindow)
         pass
 
     @override
     def enable(self):
-        self.AAXW_CLASS_LOGGER.info("MyBuiltinPlugin.enable()")
+        self.AAXW_CLASS_LOGGER.info(f"{self.__class__.__name__}.enable()")
+
+        # AppletManager 本身会注入资源
+        self.jumpinAppletManager.addApplet(self.simpleApplet) 
+
+        
+        self.mainWindow.inputPanel.funcButtonLeft.clicked.connect(
+            self.jumpinAppletManager.activateNextLoop )
+        
+        #安装过滤器
+        self.mainWindow.inputPanel.promptInputEdit.installEventFilter(
+            self.editEventHandler) 
         pass
 
     @override
     def disable(self):
-        self.AAXW_CLASS_LOGGER.info("MyBuiltinPlugin.disable()")
+        self.AAXW_CLASS_LOGGER.info(f"{self.__class__.__name__}.disable()")
+
+        #去除过滤器
+        self.mainWindow.inputPanel.promptInputEdit.removeEventFilter(
+            self.editEventHandler) 
+        
+        #去除操作链接
+        self.mainWindow.inputPanel.funcButtonLeft.clicked.disconnect(
+            self.jumpinAppletManager.activateNextLoop )
+
+        #去除applet 维护；
+        self.jumpinAppletManager.removeAppletByInstance(self.simpleApplet) 
+        pass
+
+    @override
+    def onUninstall(self):
+        self.AAXW_CLASS_LOGGER.info(f"{self.__class__.__name__}.onUninstall()")
+        self.editEventHandler=None #type:ignore
         pass
     pass
 
+
+
 # applet-example
 @AAXW_JUMPIN_LOG_MGR.classLogger()
-class AAXWJumpinDefaultApplet(AAXWAbstractApplet):
+class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
     AAXW_CLASS_LOGGER:logging.Logger
 
     def __init__(self):
@@ -2529,8 +2581,10 @@ class AAXWJumpinDefaultApplet(AAXWAbstractApplet):
         self.jumpinConfig:'AAXWJumpinConfig'= None #type:ignore
         self.mainWindow:'AAXWJumpinMainWindow'=None #type:ignore
 
-        self.name="jumpinDefaultApplet"
+        self.name="jumpinDefaultCompoApplet"
         self.title="🐶OP"
+
+        self.backupContentBlockStrategy:AAXWContentBlockStrategy=None #type:ignore
         pass
 
     @override
@@ -2555,17 +2609,17 @@ class AAXWJumpinDefaultApplet(AAXWAbstractApplet):
         pass
     @override
     def onActivate(self): 
-        # 主要操作逻辑的“定义与注册”放在本方法中；
+        # 主要操作逻辑的"定义与注册"放在本方法中；
         # 激活时，检测默认界面组件；
         # 需要有默认 输入kit与展示panel 
-        # 最好界面整体恢复到默认组件；
         
         # 主要展示界面 界面可能变化，所以接货的时候获取界面内容；
         self.showingPanel=self.mainWindow.msgShowingPanel #用于展示的
         
 
         # 展示策略关联给 self.showingPanel
-        self.showingPanel.strategy=ContentBlockStrategy.getStrategy("compoMarkdownContentStrategy")
+        self.backupContentBlockStrategy=self.showingPanel.contentBlockStrategy
+        self.showingPanel.contentBlockStrategy=AAXWJumpinCompoMarkdownContentStrategy()
 
         #  将输入触发逻辑关联给inputkit
         #
@@ -2588,18 +2642,14 @@ class AAXWJumpinDefaultApplet(AAXWAbstractApplet):
         )
         # self.msgShowingPanel.repaint() #重绘然后然后再等待？
         
-        # FIXME 阻塞主线程可能会，这里可能会导致回调曹方法失效。应为计算尺寸与绘制是两个线程完成的。
-        # 互相又依赖数据。如果没有重，则会应该可以拿到新尺寸的没拿到。
-        # 这里考虑用其他方法生成不同的id更好。
-        # 
         # 等待0.5秒
-        # 使用QThread让当前主界面线程等待0.5秒
+        # 使用QThread让当前主界面线程等待0.5秒 #TODO 主要为了生成rowid，没必要等待。
         QThread.msleep(500) 
         # 反馈内容消息气泡与内容初始化
         rrid = int(time.time() * 1000)
         self.mainWindow.msgShowingPanel.addRowContent(
             content="", rowId=rrid, contentOwner="assistant_aaxw",
-            contentOwnerType=AAXWScrollPanel.ROW_CONTENT_OWNER_TYPE_AGENT,
+            contentOwnerType=AAXWScrollPanel.ROW_CONTENT_OWNER_TYPE_OTHERS,
         )
 
         #
@@ -2624,6 +2674,10 @@ class AAXWJumpinDefaultApplet(AAXWAbstractApplet):
     
     @override
     def onInactivate(self):
+        #
+        self.showingPanel.contentBlockStrategy=self.backupContentBlockStrategy
+        self.backupContentBlockStrategy=None #type:ignore
+
 
         #去除 槽函数
         self.mainWindow.inputPanel.funcButtonRight.clicked.disconnect(self.doInputCommitAction)
@@ -2636,6 +2690,8 @@ class AAXWJumpinDefaultApplet(AAXWAbstractApplet):
 
 
 
+
+
 @AAXW_JUMPIN_LOG_MGR.classLogger()
 class AAXWScrollPanel(QFrame):
     """
@@ -2645,6 +2701,107 @@ class AAXWScrollPanel(QFrame):
     提供了为RowContent追加内容的方式，支持流式获取文本追加到Row中。
     """
     AAXW_CLASS_LOGGER:logging.Logger
+
+
+    @AAXW_JUMPIN_LOG_MGR.classLogger()
+    class TextBrowserStrategy(AAXWContentBlockStrategy): #先当做界面的一个扩展？
+
+        AAXW_CLASS_LOGGER:logging.Logger
+
+        # 用特殊符号最为追加占位标记
+        MARKER = "[💬➡️🏁]"
+        # @staticmethod
+        @override
+        def createWidget(self,rowId: str, contentOwner: str, contentOwnerType: str, 
+                        mainWindow: 'AAXWJumpinMainWindow', strategyWidget: 'AAXWScrollPanel') -> QTextBrowser:
+            
+            tb = QTextBrowser()
+            tb.setObjectName(f"{AAXWScrollPanel.ROW_BLOCK_NAME_PREFIX}_{rowId}")
+            tb.setProperty("id", rowId)
+            tb.setProperty("contentOwner", contentOwner)
+            tb.setProperty("contentOwnerType", contentOwnerType)
+            # 高度先限定，然后根据内部变化，关闭滚动条
+            tb.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            tb.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+            # 关闭自动格式化？
+            tb.setAutoFormatting(QTextBrowser.AutoFormattingFlag.AutoNone)
+            tb.setLineWrapMode(QTextBrowser.LineWrapMode.WidgetWidth)
+
+            # 设置基本样式；
+            doc = QTextDocument()
+            tb.setDocument(doc)
+            doc.setDefaultStyleSheet("p { white-space: pre-wrap; }")
+
+
+            # 内容改变改变高度
+            tb.document().contentsChanged.connect(lambda: self.adjustSize(tb))
+
+            #初始化空间
+            # initial_text = " "
+            # doc.setHtml(initial_text)
+            # tb.append(TextBrowserStrategy.MARKER)  # 这里增加一个追加内容用的特别Marker
+            self.initContent(widget=tb,content=" ")
+
+            # 现在可以使用 main_window 和 panel 进行额外的设置或操作
+            tb.setProperty("mainWindow", mainWindow)
+            tb.setProperty("strategyWidget", strategyWidget)
+
+            return tb
+
+        # @staticmethod
+        @override
+        def initContent(self,widget: QTextBrowser, content: str):
+            tb=widget
+            doc=tb.document()
+            #初始化空间
+            initial_text = content
+            doc.setHtml(initial_text)
+            tb.append(self.MARKER)  # 这里增加一个追加内容用的特别Marker
+
+        # @staticmethod
+        @override
+        def insertContent(self,widget: QTextBrowser, content: str):
+            # 使用游标进行查找marker并更新平文
+            doc = widget.document()
+            cursor = doc.find(self.MARKER)
+            if cursor:
+                cursor.movePosition(QTextCursor.MoveOperation.PreviousCharacter, 
+                                    QTextCursor.MoveMode.MoveAnchor
+                )
+                cursor.insertHtml(f"{content}")  # 可以追加html但是会过滤掉不符合规范的比如div
+                widget.repaint()  # 非线程调用本方法，可能每次都要重绘，否则是完成完后一次性刷新。
+            else:
+                self.AAXW_CLASS_LOGGER.debug(
+                    "not found marker:" + self.MARKER)
+
+        # @staticmethod
+        def adjustSize(self,widget: QTextBrowser):
+            
+            tb:QTextBrowser = widget
+            # 获取 QTextBrowser 的文档对象
+            doc = tb.document()
+            # 获取 QTextBrowser 的内容边距
+            margins = tb.contentsMargins()
+            #  计算文档高度加上上下边距得到总高度
+            # TODO 这里计算的不对，所有tb都需要根据内容来计算高度，获取内容应该。
+            expectantHeight:int = int(
+                doc.size().height() + margins.top() + margins.bottom() + 10 #预期行高增加1行？
+            )  # 多增加点margins
+
+            # 使用fixed的尺寸策略
+            # 调整Row tb高度
+            if expectantHeight<20: expectantHeight=20
+            tb.setFixedHeight(int(expectantHeight))
+
+
+            #同时调整主窗口高度；
+            mainWindow:"AAXWJumpinMainWindow"=tb.property("mainWindow")
+
+            # 
+            # mainWindow不为none，刚创建的tb没有mainWindow？
+            if mainWindow :mainWindow.adjustHeight()                
+
     
     DEFAULT_STYLE = """ 
     QTextBrowser {
@@ -2663,12 +2820,12 @@ class AAXWScrollPanel(QFrame):
 
     ROW_BLOCK_NAME_PREFIX = "row_block_name"
     #  区分展示内容行的类型
-    # TODO 分离到外部去
     ROW_CONTENT_OWNER_TYPE_USER="ROW_CONTENT_OWNER_TYPE_USER"
-    ROW_CONTENT_OWNER_TYPE_AGENT="ROW_CONTENT_OWNER_TYPE_AGENT"
+    ROW_CONTENT_OWNER_TYPE_OTHERS="ROW_CONTENT_OWNER_TYPE_OTHERS"
     ROW_CONTENT_OWNER_TYPE_SYSTEM="ROW_CONTENT_OWNER_TYPE_SYSTEM"
 
-    def __init__(self, mainWindow: "AAXWJumpinMainWindow", qss:str=DEFAULT_STYLE, parent=None, strategy_type="text_browser"):
+    def __init__(self, mainWindow: "AAXWJumpinMainWindow", qss:str=DEFAULT_STYLE,
+                blockStrategy:AAXWContentBlockStrategy=TextBrowserStrategy(),parent=None):
         """
         当前控件展示与布局结构：
         AAXWScrollPanel->QVBoxLayout->QScrollArea->QWidget(scrollWidget)-> TB等
@@ -2680,7 +2837,7 @@ class AAXWScrollPanel(QFrame):
         self.setStyleSheet(qss)
    
 
-        self.strategy = ContentBlockStrategy.getStrategy(strategy_type)
+        self.contentBlockStrategy:AAXWContentBlockStrategy = blockStrategy
 
         # 主要设定可垂直追加的Area+Layout
         # 结构顺序为scroll_area->scroll_widget->scroll_layout
@@ -2716,7 +2873,7 @@ class AAXWScrollPanel(QFrame):
         rowId 表示内容行的唯一标识，用于后续查找，组件定位；
         """
         
-        widget = self.strategy.createWidget(rowId, contentOwner, contentOwnerType, self.mainWindow, self)
+        widget = self.contentBlockStrategy.createWidget(rowId, contentOwner, contentOwnerType, self.mainWindow, self)
         
         # 加入列表
         if isAtTop:
@@ -2724,7 +2881,7 @@ class AAXWScrollPanel(QFrame):
         else:
             self.scrollLayout.addWidget(widget)
         
-        self.strategy.initContent(widget, content)
+        self.contentBlockStrategy.initContent(widget, content)
 
 
     def appendContentByRowId(self, text, rowId: str):
@@ -2738,7 +2895,7 @@ class AAXWScrollPanel(QFrame):
         )
         #TODO findChild 默认返回的是object，这里类型需要处理一下；
         if widget:
-            self.strategy.insertContent(widget, text) #type:ignore
+            self.contentBlockStrategy.insertContent(widget, text) #type:ignore
             # self.strategy.adjustSize(widget) #type:ignore
             # self.mainWindow.adjustHeight()
         else:
@@ -2794,17 +2951,16 @@ class AAXWJumpinMainWindow(QWidget):
         # 界面主布局，垂直上下布局；
         mainVBoxLayout = QVBoxLayout()  
 
-        self.inputPanel = AAXWInputPanel(self,self)
+        self.inputPanel = AAXWJumpinInputPanel(self,self)
         # self.inputPanel.sendRequest.connect(self.handleInputRequest)
 
-        msgShowingPanel = AAXWJumpinConfig.MSGSHOWINGPANEL_QSS
+        msgShowingPanelQss = AAXWJumpinConfig.MSGSHOWINGPANEL_QSS
         # 在main这里改为了compoMarkdownContentStrategy 
         # 
         self.msgShowingPanel = AAXWScrollPanel(
             mainWindow=self, 
-            qss=msgShowingPanel, 
+            qss=msgShowingPanelQss, 
             parent=self,
-            strategy_type='compoMarkdownContentStrategy', 
         )
 
         mainVBoxLayout.addWidget(self.inputPanel)
@@ -3067,10 +3223,8 @@ class AAXWJumpinTrayKit(QSystemTrayIcon):
                 Qt.TransformationMode.SmoothTransformation)
             return scaled_qimage
 
-
-
-# all in one file main function.
-def main():
+    # all in one file main function.
+def main_allin1file():
     agstool=None
     pluginManager:AAXWFileSourcePluginManager=None #type:ignore
     appletManager:AAXWJumpinAppletManager=None #type:ignore
@@ -3092,7 +3246,7 @@ def main():
         #增加默认applet
         appletManager=AAXWJumpinDICUtilz.getAANode(
             "jumpinAppletManager")
-        appletManager.addApplet(AAXWJumpinDefaultApplet())
+        appletManager.addApplet(AAXWJumpinDefaultCompoApplet())
         appletManager.activateApplet(0) #激活默认applet
 
         #检测内置插件 
@@ -3122,11 +3276,20 @@ def main():
 
         if pluginManager:pluginManager.release()
         AAXWJumpinDICUtilz.clear()
-        
 
 if __name__ == "__main__":
 
-    main()
+    try:
+        import ananxw_jumpin.builtin_plugins as _builtin_plugins_module
+    except Exception as e: 
+        AAXW_JUMPIN_MODULE_LOGGER.warning(
+            "额外的ananxw_jumpin.builtin_plugin未正常导入，不影响allin1f的单文件运行。")
+    finally:
+        pass
+
+ 
+
+    main_allin1file()
     pass
 
 
