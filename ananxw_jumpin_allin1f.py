@@ -6,26 +6,31 @@
 # @Last Modified by:wfeng007
 
 #
-# 小王的AI 网络/节点（随便什么吧），AI与套件快速快速入口，投入ai吧！ANAN其实也是只狗狗。。。
+# 小王的AI 网络/节点（随便什么吧），AI(+Applet kits)智能工具套件快速快速入口，
+#   投入ai吧！ANAN其实也是只狗狗。。。
 # An AI Net/Node of XiaoWang ， jumpin AI ! ANAN is a dog...
 # 
 
-# 一个提示符操作界面
-# 可以快捷键唤起展示的；
+# Jumpin 是什么？
+# 
 # 支持钉在桌面最前端，全局热键换出与隐藏；
 # 0.2:托盘功能；
 # 0.3:较好的Markdown展示气泡，基本可扩展的展示气泡逻辑；
 # 0.4+:
 #      已增加工作目录配置与维护，基本文件系统能力。
 #      已增加日志功能，默认标准输出中输出；支持工作目录生成日志；并根据时间与数量清理；
-# TODO 可切换agent或其他kit-intergration功能，同时提供对应工具面板展示；
-#           不同的agent或kit可以定制自己的工具面板。
+# TODO 可切换的Applet 功能，applet可根据自己功能逻辑调用资源与界面完成相对专门的特性功能；
+#           不同Applet可以定制自己的工具面板，展示面板等等。
 # 
 # 0.5+: 
 #      已增加简易注入框架；更好组织代码逻辑；
 #      已增简易插件框架；支持二次开发；
 #      可集成密塔等搜索（可插件方式）
+# 0.6+: 打包与发布版初步建设；
 # 
+# ##基本特性：
+# 一个提示符操作界面
+# 可以快捷键唤起展示的；
 # 提供基本的提示发送与结果展示界面；
 # 可支持多轮交互；
 # 可支持富文本范围内容展示；
@@ -56,7 +61,7 @@ if __name__ == "__main__":
 
 from datetime import datetime
 
-from typing import Callable, List, Dict, Type,Any,TypeVar,Union,cast
+from typing import Callable, List, Dict, Type,Any,TypeVar,Union,cast, Tuple
 
 from torch import NoneType
 try:
@@ -783,6 +788,7 @@ class AAXWJumpinDICUtilz: #单例化
             if cls.__instance:
                 cls.__instance.clear()
             cls.__instance = None
+            
 
 @AAXWJumpinDICUtilz.register(key="jumpinPluginManager",
         dependencyContainer="_nativeDependencyContainer", #这里是内联 aware方式没有用singleton方式
@@ -810,7 +816,7 @@ class AAXWJumpinPluginManager(AAXWFileSourcePluginManager):
         return inst
     pass
 
-    # 可以通过率builder的类型 
+    # 可以过率builder的类型 
     @override
     def _putPluginBuilder(self, pluginKey: str, builder, isBuiltin: bool):
         return super()._putPluginBuilder(pluginKey, builder, isBuiltin)
@@ -818,32 +824,6 @@ class AAXWJumpinPluginManager(AAXWFileSourcePluginManager):
 # 
 # 
 ##
-
-#插件例子，理论上会扫描
-@AAXW_JUMPIN_LOG_MGR.classLogger()
-class MyBuiltinPlugin(AAXWAbstractBasePlugin):
-    AAXW_CLASS_LOGGER:logging.Logger
-
-    @override
-    def onInstall(self):
-        self.AAXW_CLASS_LOGGER.info("MyBuiltinPlugin.onInstall()")
-        pass
-
-    @override
-    def onUninstall(self):
-        self.AAXW_CLASS_LOGGER.info("MyBuiltinPlugin.onUninstall()")
-        pass
-
-    @override
-    def enable(self):
-        self.AAXW_CLASS_LOGGER.info("MyBuiltinPlugin.enable()")
-        pass
-
-    @override
-    def disable(self):
-        self.AAXW_CLASS_LOGGER.info("MyBuiltinPlugin.disable()")
-        pass
-    pass
 
 
 # 基本config信息，与默认配置；
@@ -1005,7 +985,7 @@ class AAXWJumpinConfig:
 #
 # AI相关
 #
-class AbstractAIConnOrAgent(ABC):
+class AAWXAbstractAIConnOrAgent(ABC):
     @abstractmethod
     def requestAndCallback(self, prompt: str, func: Callable[[str], None],isStream: bool = True):
         # raise NotImplementedError("Subclasses must implement sendRequestStream method")
@@ -1020,7 +1000,7 @@ class AbstractAIConnOrAgent(ABC):
 
 @AAXWJumpinDICUtilz.register(key="simpleAIConnOrAgent")
 @AAXW_JUMPIN_LOG_MGR.classLogger()
-class AAXWSimpleAIConnOrAgent(AbstractAIConnOrAgent):
+class AAXWSimpleAIConnOrAgent(AAWXAbstractAIConnOrAgent):
     """
     简单实现的连接LLM/Agent的类，支持流式获取响应。
     使用Langchain封装的OpenAI的接口实现。
@@ -1106,7 +1086,7 @@ class AAXWSimpleAIConnOrAgent(AbstractAIConnOrAgent):
 
 @AAXWJumpinDICUtilz.register(key="ollamaAIConnOrAgent")
 @AAXW_JUMPIN_LOG_MGR.classLogger()
-class AAXWOllamaAIConnOrAgent(AbstractAIConnOrAgent):
+class AAXWOllamaAIConnOrAgent(AAWXAbstractAIConnOrAgent):
     """
     直接使用OpenAI的接口实现。对Ollama的访问；
     """
@@ -1165,18 +1145,19 @@ class AAXWOllamaAIConnOrAgent(AbstractAIConnOrAgent):
         except Exception as e:
             raise Exception(f"Failed to generate stream chat completion: {str(e)}")
 
-@AAXWJumpinDICUtilz.register(key="aiConnOrAgentProxy")
-@AAXW_JUMPIN_LOG_MGR.classLogger()
-class AIConnOrAgentProxy(AbstractAIConnOrAgent):
-    def __init__(self, innerInst: AbstractAIConnOrAgent=None): #type:ignore
-        self.innerInstance = innerInst
+# @AAXWJumpinDICUtilz.register(key="aiConnOrAgentProxy")
+# @AAXW_JUMPIN_LOG_MGR.classLogger()
+# class AIConnOrAgentProxy(AAWXAbstractAIConnOrAgent):
+#     def __init__(self, innerInst: AAWXAbstractAIConnOrAgent=None): #type:ignore
+#         self.innerInstance = innerInst
 
-    @override
-    def requestAndCallback(self, prompt: str, func: Callable[[str], None],isStream: bool = True):
-        return self.innerInstance.requestAndCallback(prompt, func=func,isStream=isStream)
+#     @override
+#     def requestAndCallback(self, prompt: str, func: Callable[[str], None],isStream: bool = True):
+#         return self.innerInstance.requestAndCallback(prompt, func=func,isStream=isStream)
 
-    def setInnerInstance(self, innerInst: AbstractAIConnOrAgent):
-        self.innerInstance = innerInst
+#     def setInnerInstance(self, innerInst: AAWXAbstractAIConnOrAgent):
+#         self.innerInstance = innerInst
+
 
 # 线程异步处理AI IO任务。
 @AAXW_JUMPIN_LOG_MGR.classLogger()
@@ -1185,13 +1166,13 @@ class AIThread(QThread):
     #newContent,id 对应：ShowingPanel.appendToContentById 回调
     updateUI = Signal(str,str)  
 
-    def __init__(self,text:str,uiCellId:str,llmagent:AbstractAIConnOrAgent):
+    def __init__(self,text:str,uiCellId:str,llmagent:AAWXAbstractAIConnOrAgent):
         super().__init__()
         
         # self.mutex = QMutex()
         self.text:str=text
         self.uiId:str=uiCellId
-        self.llmagent:AbstractAIConnOrAgent=llmagent
+        self.llmagent:AAWXAbstractAIConnOrAgent=llmagent
         
     def run(self):
         self.msleep(500)  # 执行前先等界面渲染
@@ -1204,6 +1185,262 @@ class AIThread(QThread):
         # 最好强制类型转换。self.uiId:str 或 str(self.uiId)
         self.updateUI.emit(str(newContent), str(self.uiId)) 
         
+# ai  end
+
+
+#
+# Applet 小应用程序建设
+#
+
+class AAXWAbstractApplet(ABC):
+    """
+    Applet抽象基类
+    定义了Applet的基本接口，提供界面展示与后台功能的基本约定
+    """
+    
+    @abstractmethod
+    def getName(self) -> str:
+        """获取Applet的名称一般关联用，非唯一标志"""
+        pass
+    
+    @abstractmethod
+    def getTitle(self) -> str:
+        """获取Applet的显示标题"""
+        pass
+    
+    @abstractmethod
+    def onAdd(self):
+        """Applet安装时的回调"""
+        pass
+    
+    @abstractmethod
+    def onRemove(self):
+        """Applet卸载时的回调"""
+        pass
+    
+    # 有界面的且界面部分需要 才扩展出来。
+    # @abstractmethod
+    # def show(self):
+    #     """显示Applet的界面"""
+    #     pass
+    
+    # @abstractmethod
+    # def hide(self):
+    #     """隐藏Applet的界面"""
+    #     pass
+
+    @abstractmethod
+    def onActivate(self):
+        """当Applet被切换为当前活动Applet时的回调"""
+        pass
+    
+    @abstractmethod
+    def onInactivate(self):
+        """当Applet不再是当前活动Applet时的回调"""
+        pass
+
+
+@AAXW_JUMPIN_LOG_MGR.classLogger()
+class AAXWAppletManager:
+    """
+    Applet管理器
+    负责Applet的添加、移除和生命周期管理
+    """
+    AAXW_CLASS_LOGGER:logging.Logger
+    DEFAULT_MAX_CAPACITY = 10  # 默认最大容量
+
+    def __init__(self, maxCapacity: int = DEFAULT_MAX_CAPACITY):
+        self.applets: List[AAXWAbstractApplet] = []
+        self.activatedAppletIndex: int = -1  # 当前激活的Applet索引
+        self.maxCapacity = maxCapacity #容量阈值
+
+    def activateApplet(self, index: int) -> bool:
+        """
+        激活指定索引的Applet
+        :param index: Applet在列表中的索引
+        :return: 激活是否成功
+        """
+        if not (0 <= index < len(self.applets)):
+            self.AAXW_CLASS_LOGGER.warning(f"Invalid applet index: {index}")
+            return False
+
+        try:
+            # 如果有已激活的Applet，先通知它将被切出
+            if self.activatedAppletIndex != -1 and self.activatedAppletIndex < len(self.applets):
+                activated_applet = self.applets[self.activatedAppletIndex]
+                activated_applet.onInactivate()
+
+            # 激活新的Applet
+            new_applet = self.applets[index]
+            new_applet.onActivate()
+            
+            self.activatedAppletIndex = index
+            self.AAXW_CLASS_LOGGER.info(
+                f"Activated applet [{index}]: {new_applet.getName()} ({new_applet.getTitle()})")
+            return True
+            
+        except Exception as e:
+            self.AAXW_CLASS_LOGGER.error(f"Failed to activate applet at index {index}: {str(e)}")
+            return False
+
+    def getActivatedApplet(self) -> Tuple[int, Union[AAXWAbstractApplet, None]]:
+        """
+        获取当前激活的Applet
+        :return: (激活的Applet索引, Applet实例) 如果没有激活的Applet则返回(-1, None)
+        """
+        if self.activatedAppletIndex == -1 or self.activatedAppletIndex >= len(self.applets):
+            return (-1, None)
+        return (self.activatedAppletIndex, self.applets[self.activatedAppletIndex])
+
+    def getAppletByIndex(self, index: int) -> Union[AAXWAbstractApplet, None]:
+        """
+        通过索引获取Applet实例
+        :param index: Applet在列表中的索引
+        :return: Applet实例或None
+        """
+        if 0 <= index < len(self.applets):
+            return self.applets[index]
+        return None
+
+    @override
+    def addApplet(self, applet: AAXWAbstractApplet, index: int = -1) -> bool:
+        """
+        添加Applet
+        :param applet: Applet实例
+        :param index: 插入位置，-1表示追加到末尾
+        :return: 添加是否成功
+        """
+        if len(self.applets) >= self.maxCapacity:
+            self.AAXW_CLASS_LOGGER.error(f"Cannot add applet: maximum capacity ({self.maxCapacity}) reached")
+            return False
+
+        try:
+            applet.onAdd()
+            
+            if index == -1:
+                self.applets.append(applet)
+            else:
+                if not (0 <= index <= len(self.applets)):
+                    raise ValueError(f"Invalid index: {index}")
+                self.applets.insert(index, applet)
+                # 如果插入位置在已激活的Applet之前，需要更新activatedAppletIndex
+                if self.activatedAppletIndex != -1 and index <= self.activatedAppletIndex:
+                    self.activatedAppletIndex += 1
+                
+            self.AAXW_CLASS_LOGGER.info(f"Successfully added applet: {applet.getName()}")
+            return True
+        except Exception as e:
+            self.AAXW_CLASS_LOGGER.error(f"Failed to add applet {applet.getName()}: {str(e)}")
+            return False
+
+    @override
+    def removeApplet(self, index: int) -> bool:
+        """
+        移除指定索引的Applet
+        :param index: Applet在列表中的索引
+        :return: 移除是否成功
+        """
+        if not (0 <= index < len(self.applets)):
+            return False
+
+        try:
+            applet = self.applets[index]
+            
+            # 如果要移除的是当前激活的Applet，先将其切换为非激活状态
+            if index == self.activatedAppletIndex:
+                applet.onInactivate()
+                self.activatedAppletIndex = -1
+            # 如果移除的Applet在已激活的Applet之前，需要更新activatedAppletIndex
+            elif index < self.activatedAppletIndex:
+                self.activatedAppletIndex -= 1
+                
+            applet.onRemove()
+            self.applets.pop(index)
+            
+            self.AAXW_CLASS_LOGGER.info(f"Successfully removed applet at index {index}: {applet.getName()}")
+            return True
+        except Exception as e:
+            self.AAXW_CLASS_LOGGER.error(f"Failed to remove applet at index {index}: {str(e)}")
+            return False
+
+    def getApplet(self, name: str) -> List[AAXWAbstractApplet]:
+        """获取指定名称的所有Applet实例"""
+        return [applet for applet in self.applets if applet.getName() == name]
+
+    def listAppletsNamesAndTitles(self) -> List[Tuple[str, str]]:
+        """返回所有已安装的Applet的名称和标题列表，按安装顺序排序
+        Returns:
+            List[Tuple[str, str]]: 返回元组列表，每个元组包含:
+                - [0] str: Applet的名称name，
+                - [1] str: Applet的标题title（一般展示用）
+                - 数组下标: 对应applet所在所在下标；
+        """
+        return [(applet.getName(), applet.getTitle()) for applet in self.applets]
+
+    # 只有有界面的才有相应功能 可以先去掉；
+    # def showApplet(self, name: str) -> bool:
+    #     """显示指定的Applet"""
+    #     success = False
+    #     for applet in self.getApplet(name):
+    #         try:
+    #             applet.show()
+    #             success = True
+    #         except Exception as e:
+    #             self.AAXW_CLASS_LOGGER.error(f"Failed to show applet {name}: {str(e)}")
+    #     return success
+
+    # def hideApplet(self, name: str) -> bool:
+    #     """隐藏指定的Applet"""
+    #     success = False
+    #     for applet in self.getApplet(name):
+    #         try:
+    #             applet.hide()
+    #             success = True
+    #         except Exception as e:
+    #             self.AAXW_CLASS_LOGGER.error(f"Failed to hide applet {name}: {str(e)}")
+    #     return success
+
+
+
+#
+# Jumpin applet manager
+@AAXWJumpinDICUtilz.register(key="jumpinAppletManager",
+    dependencyContainer="_nativeDependencyContainer",
+    jumpinConfig="jumpinConfig",
+    mainWindow="mainWindow")
+@AAXW_JUMPIN_LOG_MGR.classLogger()
+class AAXWJumpinAppletManager(AAXWAppletManager):
+
+    AAXW_CLASS_LOGGER:logging.Logger
+    def __init__(self, maxCapacity: int = 10):
+        # DI注入
+        self.dependencyContainer:Union[AAXWDependencyContainer,None]=None
+        self.jumpinConfig:Union['AAXWJumpinConfig',None]=None
+        self.mainWindow:Union['AAXWJumpinMainWindow',None]=None
+
+    #
+    # TODO 增加资源注入给applet；
+    # 
+
+    @override
+    def addApplet(self, applet: AAXWAbstractApplet, index: int = -1) -> bool:
+        #
+        # 先注入资源给applet
+        setattr(applet, "dependencyContainer", self.dependencyContainer)
+        setattr(applet, "jumpinConfig", self.jumpinConfig) 
+        setattr(applet, "mainWindow", self.mainWindow)
+
+        # 再加入管理器
+        return super().addApplet(applet=applet, index=index)
+
+
+#
+# Applet管理器 end
+##
+
+
+
+
 
 
 ##
@@ -1387,7 +1624,7 @@ class AAXWInputPanel(QWidget):
     ###
     # 左侧
     def toggleLeftFunc(self):
-        if self.funcButtonLeft.text() == "Toggle":
+        if self.funcButtonLeft.text() == "Toggle" or self.funcButtonLeft.text() == "😢":
             self.funcButtonLeft.setText("😊")
         else:
             self.funcButtonLeft.setText("😢")
@@ -1769,6 +2006,7 @@ class CodeBlockWidget(QWidget): #QWidget有站位，但是并不绘制出来。
         
         # 计算总高度
         totalHeight = topHeight + contentHeight + bottomHeight + padding
+        
         
         
         # print(f"Adjusted height: {totalHeight}px, Lines: {lineCount}")
@@ -2226,6 +2464,94 @@ class CompoMarkdownContentStrategy(ContentBlockStrategy):
             mainWindow.adjustHeight()
         pass
 
+
+# TODO 之后放到后面形成具体例子；
+#插件例子，理论上会扫描
+@AAXW_JUMPIN_LOG_MGR.classLogger()
+class AAXWJumpinDefaultBuiltinPlugin(AAXWAbstractBasePlugin):
+    AAXW_CLASS_LOGGER:logging.Logger
+
+    @override
+    def onInstall(self):
+        self.AAXW_CLASS_LOGGER.info("MyBuiltinPlugin.onInstall()")
+        pass
+
+    @override
+    def onUninstall(self):
+        self.AAXW_CLASS_LOGGER.info("MyBuiltinPlugin.onUninstall()")
+        pass
+
+    @override
+    def enable(self):
+        self.AAXW_CLASS_LOGGER.info("MyBuiltinPlugin.enable()")
+        pass
+
+    @override
+    def disable(self):
+        self.AAXW_CLASS_LOGGER.info("MyBuiltinPlugin.disable()")
+        pass
+    pass
+
+# applet-example
+@AAXW_JUMPIN_LOG_MGR.classLogger()
+class AAXWJumpinDefaultApplet(AAXWAbstractApplet):
+    AAXW_CLASS_LOGGER:logging.Logger
+
+    def __init__(self):
+        self.dependencyContainer:AAXWDependencyContainer=None #type:ignore
+        self.jumpinConfig:'AAXWJumpinConfig'= None #type:ignore
+        self.mainWindow:'AAXWJumpinMainWindow'=None #type:ignore
+
+        self.name="jumpinCompo"
+        self.title="🐶OP"
+        pass
+
+    def getName(self) -> str:return  self.name
+    def getTitle(self) -> str:return  self.title
+    
+    def onAdd(self):
+        #
+        #加入管理时获取细节资源,内置简单ai访问器（Openai）
+        # ai  （后台类资源默认应该都有）
+        self.simpleAIConnOrAgent:AAXWSimpleAIConnOrAgent=self.dependencyContainer.getAANode(
+            "simpleAIConnOrAgent")
+        # 
+        
+        pass
+    
+    def onRemove(self):
+        self.AAXW_CLASS_LOGGER.warning(
+            f"这是个默认Applet{self.__class__.__name__}只有关闭整体时才应该被移除释放。")
+        
+        pass
+    
+    def onActivate(self): #TODO 主要操作逻辑定义与注册放在本方法中；
+        # 激活时，检测默认界面组件；
+        # 需要有默认 输入kit与展示panel 
+        # 最好界面整体恢复到默认组件；
+        
+        # 主要展示界面 界面可能变化，所以接货的时候获取界面内容；
+        self.showingPanel=self.mainWindow.msgShowingPanel #用于展示的
+        
+
+        # 展示策略关联给 self.showingPanel
+        CBT:'ContentBlockStrategy'=None; #type:ignore
+        self.showingPanel.strategy=CBT.getStrategy("compoMarkdownContentStrategy")
+
+        # TODO 将输入触发逻辑关联给inputkit
+        #
+        pass
+
+    
+    
+    def onInactivate(self):
+        # 无特别界面变更，无需恢复界面最具安；
+        # 无特别后台资源变更，无需恢复；
+        pass
+    pass
+
+
+
 @AAXW_JUMPIN_LOG_MGR.classLogger()
 class AAXWScrollPanel(QFrame):
     """
@@ -2372,7 +2698,7 @@ class AAXWJumpinMainWindow(QWidget):
 
         # 转容器关联；
         self.jumpinConfig:AAXWJumpinConfig = None #type:ignore
-        self.llmagent:AbstractAIConnOrAgent=AAXWSimpleAIConnOrAgent() # 同时也可能会有容器注入
+        self.llmagent:AAWXAbstractAIConnOrAgent=AAXWSimpleAIConnOrAgent() # 同时也可能会有容器注入
         # 
 
     def init_ui(self):
@@ -2387,11 +2713,13 @@ class AAXWJumpinMainWindow(QWidget):
         # self.inputPanel.sendRequest.connect(self.handleInputRequest)
 
         msgShowingPanel = AAXWJumpinConfig.MSGSHOWINGPANEL_QSS
+        # 在main这里改为了compoMarkdownContentStrategy 
+        # 
         self.msgShowingPanel = AAXWScrollPanel(
             mainWindow=self, 
             qss=msgShowingPanel, 
             parent=self,
-            strategy_type='compoMarkdownContentStrategy',
+            strategy_type='compoMarkdownContentStrategy', 
         )
 
         mainVBoxLayout.addWidget(self.inputPanel)
@@ -2413,7 +2741,7 @@ class AAXWJumpinMainWindow(QWidget):
         # 设置窗口大小策略
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
 
-        # 初始高度为 200 像素
+        # 初始高度 200 像素
         # self.setFixedHeight(200) 
         self.resize(self.width(), 200)
 
@@ -2430,7 +2758,7 @@ class AAXWJumpinMainWindow(QWidget):
         # self.msgShowingPanel.repaint() #重绘然后然后再等待？
         
         # FIXME 阻塞主线程可能会，这里可能会导致回调曹方法失效。应为计算尺寸与绘制是两个线程完成的。
-        # 互相又依赖数据。如果没有重绘，则会应该可以拿到新尺寸的没拿到。
+        # 互相又依赖数据。如果没有重，则会应该可以拿到新尺寸的没拿到。
         # 这里考虑用其他方法生成不同的id更好。
         # 
         # 等待0.5秒
@@ -2577,13 +2905,14 @@ class AAXWJumpinMainWindow(QWidget):
         line.setFrameShadow(QFrame.Shadow.Sunken)  # 设置阴影效果
         return line
 
-@AAXW_JUMPIN_LOG_MGR.classLogger()
+
 # 全局快捷键 运行器
 # 这个错误是因为在非主线程中操作了 Qt 
 # 的计时器相关功能。在 Qt 中，Timer 必须在创建它的线程中启动和停止。
 # 这个问题通常出现在使用全局快捷键或后台线程时。
 
 # 继承 QObject 使用信号方式才能在非界面线程或全局快捷键操作界面
+@AAXW_JUMPIN_LOG_MGR.classLogger()
 class AAXWGlobalShortcut(QObject):  
     AAXW_CLASS_LOGGER:logging.Logger
     
