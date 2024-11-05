@@ -1,0 +1,18 @@
+# Core dependencies
+python-dotenv
+pyyaml
+typing-extensions>=4.12.2; python_version < "3.12"
+
+# GUI
+PySide6
+
+# Keyboard control
+pynput
+
+# Markdown support
+markdown
+
+# AI/LLM related
+openai
+langchain-openai
+langchain-community
