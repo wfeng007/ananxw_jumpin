@@ -4,9 +4,13 @@
 # @Author:wfeng007 小王同学 wfeng007@163.com
 # @Date:2024-09-24 18:05:01
 # @Last Modified by:wfeng007
+#
+# This file is part of ananxw_jumpin.
+# ananxw_jumpin is licensed under the Apache2.0/LGPL/GPL. See LICENSE file for details.
+#
 
 #
-# 小王的AI 网络/节点（随便什么吧），AI(+Applet kits)智能工具套件快速快速入口，
+# AnAn jumpin  ,小王的AI网络/节点（随便什么吧），AI(+Applet kits)智能工具套件快速快速入口，
 #   投入ai吧！ANAN其实也是只狗狗。。。
 # An AI Net/Node of XiaoWang ， jumpin AI ! ANAN is a dog...
 # 
@@ -25,14 +29,18 @@
 #      已增加可切换的Applet 功能，applet可根据自己功能逻辑调用资源与界面完成相对专门的特性功能；
 #      已增简易插件框架；支持二次开发；
 #      TODO 梳理命名注释等，并版本升级到0.5 
-# 0.6+: 
+# 
+# 计划与路线
+# 0.6+: TODO 
 #       增加通用工具消息面板（上或下），附加展示功能面板（左或右），
 #           不同Applet可以定制自己的工具面板，展示面板等等。
 #       增加Ollama管理功能；
 #       打包与发布版初步建设；
 #       注释说明整体梳理，初步建设1抡项目说明与二开参考说明
-# 0.7+：
+# 0.7+：TODO 
 #       可集成密塔等搜索（可插件方式）
+#       coze集成对接应用样例；
+#       dify集成对接样例；
 # 
 # ##基本特性：
 # 一个提示符操作界面
@@ -72,9 +80,9 @@ from typing import Callable, List, Dict, Type,Any,TypeVar,Union,cast, Tuple
 
 from torch import NoneType
 try:
-    from typing import override #3.12+ #type:ignore
+    from typing import override #python 3.12+ #type:ignore
 except ImportError:
-    from typing_extensions import override #3.8+
+    from typing_extensions import override #python 3.8+
 from abc import ABC, abstractmethod
 import importlib
 
@@ -385,7 +393,7 @@ class AAXWDependencyContainer:
 
 class AAXWAbstractBasePlugin(ABC):
     """
-    抽象插件基类
+    抽象插件基类；
     定义了插件的基本接口与插件框架关联实现。
     
     插件生命周期包括：
@@ -606,7 +614,7 @@ class AAXWFileSourcePluginManager:
                 self.AAXW_CLASS_LOGGER.error(f"从{module_name}检测内置插件时发生错误: {e}")
     
     def release(self):
-        """释放所有插件资源，在关闭前调用"""
+        """释放所有插件资源，在需要插件机制关闭时调用"""
         # 卸载所有已安装的插件
         for plugin_name in list(self.installedPlugins.keys()):
             self.uninstallPlugin(plugin_name)
@@ -814,7 +822,7 @@ class AAXWAbstractApplet(ABC):
     """
     Applet抽象基类
     定义了Applet的基本接口，提供小程序套件（applet-kit）功能的开发的基本约定。
-    小程序套件，指在aaxw的系列的应用中，封装专有或复合功能的组件形成用户应用能力。
+    小程序套件，指在AAXW系列的应用中，封装专有或复合功能的组件形成用户应用能力。
     
     样例：
     Jumpin中DefaultApplet可提供：
@@ -3223,72 +3231,72 @@ class AAXWJumpinTrayKit(QSystemTrayIcon):
                 Qt.TransformationMode.SmoothTransformation)
             return scaled_qimage
 
-    # all in one file main function.
-def main_allin1file():
-    agstool=None
-    pluginManager:AAXWFileSourcePluginManager=None #type:ignore
-    appletManager:AAXWJumpinAppletManager=None #type:ignore
-    try:
-        app = QApplication(sys.argv)
-        mainWindow = AAXWJumpinMainWindow()
-        AAXWJumpinDICUtilz.setAANode(
-            key="mainWindow",node=mainWindow,
-            # llmagent='simpleAIConnOrAgent', 界面不再直接引用ai相关对象
-            jumpinConfig='jumpinConfig'
-        )
-
-        # 实例化插件管理器，并做默认初始化；
-        pluginManager=AAXWJumpinDICUtilz.getAANode(
-            "jumpinPluginManager")
-        pluginManager.pluginRootDirectory="./"
-        pluginManager.builtinPackagePrefix="ananxw_jumpin"
-
-        #增加默认applet
-        appletManager=AAXWJumpinDICUtilz.getAANode(
-            "jumpinAppletManager")
-        appletManager.addApplet(AAXWJumpinDefaultCompoApplet())
-        appletManager.activateApplet(0) #激活默认applet
-
-        #检测内置插件 
-        pluginManager.detectBuiltinPlugins() 
-        nameLs=pluginManager.listPluginBuilderNames()
-        AAXW_JUMPIN_MODULE_LOGGER.info(f"plugin nameLs :{nameLs}")
-
-        #安装插件，时会实例化插件其中可能会需要各种主干资源。
-        pluginManager.installAllDetectedPlugins() #安装初始化所有插件
-    
-
-        tray=AAXWJumpinTrayKit(mainWindow)
-        agstool = AAXWGlobalShortcut(mainWindow)
-        agstool.start()
-
-
-
-        tray.show()
-        mainWindow.show()
-        mainWindow.raise_()
-        sys.exit(app.exec())
-    except Exception as e:  
-        AAXW_JUMPIN_MODULE_LOGGER.error("Main Exception:", e)
-        raise e
-    finally:
-        if agstool:agstool.stop()
-
-        if pluginManager:pluginManager.release()
-        AAXWJumpinDICUtilz.clear()
-
+#
 if __name__ == "__main__":
 
     try:
-        import ananxw_jumpin.builtin_plugins as _builtin_plugins_module
+        import ananxw_jumpin.builtin_plugins 
     except Exception as e: 
         AAXW_JUMPIN_MODULE_LOGGER.warning(
             "额外的ananxw_jumpin.builtin_plugin未正常导入，不影响allin1f的单文件运行。")
     finally:
         pass
 
- 
+    # all in one file main function.
+    def main_allin1file():
+        agstool=None
+        pluginManager:AAXWFileSourcePluginManager=None #type:ignore
+        appletManager:AAXWJumpinAppletManager=None #type:ignore
+        try:
+            app = QApplication(sys.argv)
+            mainWindow = AAXWJumpinMainWindow()
+            AAXWJumpinDICUtilz.setAANode(
+                key="mainWindow",node=mainWindow,
+                # llmagent='simpleAIConnOrAgent', 界面不再直接引用ai相关对象
+                jumpinConfig='jumpinConfig'
+            )
 
+            # 实例化插件管理器，并做默认初始化；
+            pluginManager=AAXWJumpinDICUtilz.getAANode(
+                "jumpinPluginManager")
+            pluginManager.pluginRootDirectory="./"
+            pluginManager.builtinPackagePrefix="ananxw_jumpin"
+
+            #增加默认applet
+            appletManager=AAXWJumpinDICUtilz.getAANode(
+                "jumpinAppletManager")
+            appletManager.addApplet(AAXWJumpinDefaultCompoApplet())
+            appletManager.activateApplet(0) #激活默认applet
+
+            #检测内置插件 
+            pluginManager.detectBuiltinPlugins() 
+            nameLs=pluginManager.listPluginBuilderNames()
+            AAXW_JUMPIN_MODULE_LOGGER.info(f"plugin nameLs :{nameLs}")
+
+            #安装插件，时会实例化插件其中可能会需要各种主干资源。
+            pluginManager.installAllDetectedPlugins() #安装初始化所有插件
+        
+
+            tray=AAXWJumpinTrayKit(mainWindow)
+            agstool = AAXWGlobalShortcut(mainWindow)
+            agstool.start()
+
+
+
+            tray.show()
+            mainWindow.show()
+            mainWindow.raise_()
+            sys.exit(app.exec())
+        except Exception as e:  
+            AAXW_JUMPIN_MODULE_LOGGER.error("Main Exception:", e)
+            raise e
+        finally:
+            if agstool:agstool.stop()
+
+            if pluginManager:pluginManager.release()
+            AAXWJumpinDICUtilz.clear()
+ 
+    #执行main
     main_allin1file()
     pass
 
