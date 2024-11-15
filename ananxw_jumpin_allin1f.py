@@ -25,18 +25,19 @@
 #      已增加日志功能，默认标准输出中输出；支持工作目录生成日志；并根据时间与数量清理；
 #      已增加简易注入框架；更好组织代码逻辑；
 #      
-# 0.5+: @Date:2024-11-03左右
+# 0.5+: @Date:2024-11-03左右开始
 #      已增加可切换的Applet 功能，applet可根据自己功能逻辑调用资源与界面完成相对专门的特性功能；
 #      已增简易插件框架；支持二次开发；
-#      TODO 梳理命名注释等，并版本升级到0.5 
+#      并版本升级到0.5 
 # 
 # 计划与路线
-# 0.6+: TODO 
-#       增加通用工具消息面板（上或下），附加展示功能面板（左或右），
+# 0.6+: @Date:2024-11-12左右开始 
+#       已增加通用工具消息面板（上或下），附加展示功能面板（左或右），
 #           不同Applet可以定制自己的工具面板，展示面板等等。
-#       增加Ollama管理功能；
+#       已增加Ollama管理功能；（使用单独的内置插件模块文件：builtin_plugins.py实现）
 #       打包与发布版初步建设；
 #       注释说明整体梳理，初步建设1抡项目说明与二开参考说明
+#
 # 0.7+：TODO 
 #       可集成密塔等搜索（可插件方式）
 #       coze集成对接应用样例；
@@ -73,6 +74,11 @@ if __name__ == "__main__":
     print(f"\n{__package_name__}.{_file_basename} 已设置到 sys.modules")
     del _file_basename
 
+    # 获取当前文件的父目录的父目录（即 projectlab/）
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)  # 插入到路径最前面
+
 
 
 
@@ -101,13 +107,13 @@ import yaml
 
 # pyside6 
 from PySide6.QtCore import (
-    Qt, QEvent, QObject, QThread, Signal, QTimer, QSize, 
+    Qt, QEvent, QObject, QThread, Signal, QTimer, QSize, QPoint,
     QRegularExpression
 )
 from PySide6.QtWidgets import (
     QApplication, QSystemTrayIcon, QFrame, QWidget, QScrollArea,
     QHBoxLayout, QVBoxLayout, QSizePolicy, QLineEdit, QPushButton,
-    QTextBrowser, QStyleOption, QMenu, QPlainTextEdit, QLabel
+    QTextBrowser, QStyleOption, QMenu, QPlainTextEdit, QLabel,QToolBar
 )
 from PySide6.QtGui import (
     QKeySequence, QShortcut, QTextDocument, QTextCursor, QMouseEvent,
@@ -135,17 +141,21 @@ from langchain_community.embeddings import OpenAIEmbeddings
 # from langchain_community.embeddings import OllamaEmbeddings
 from langchain.prompts import PromptTemplate
 from langchain.schema import BaseMessage,HumanMessage,SystemMessage
+
+# ollama使用web客户端工具
+import urllib.parse
+import urllib.request
+import json
+
 ##
 # 导入结束
 ##
-
-
 
 # 环境变量，用于openai key等；
 _ = load_dotenv(find_dotenv())  # 读取本地 .env 文件，里面定义了 OPENAI_API_KEY
 
 # 版本
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 
 # 日志器
@@ -290,8 +300,9 @@ class AAXWDependencyContainer:
     """
     简易的依赖组织容器
     注册依赖关系：
-    @dependencyContainer.register('key', isSingleton=True, isLazy=True)
+    @dependencyContainer.register('key', isSingleton=True, isLazy=False)
     class...
+    isLazy 暂时未实现，均为False；
 
     创建/获取已有，资源对象，如其依赖未创建则会创建对应依赖：
     dependencyContainer.getAANode(key)
@@ -390,7 +401,6 @@ class AAXWDependencyContainer:
 ##
 # 基本 插件框架与机制
 ##
-
 class AAXWAbstractBasePlugin(ABC):
     """
     抽象插件基类；
@@ -584,6 +594,10 @@ class AAXWFileSourcePluginManager:
         """检测模块中的插件"""
         for attrName in dir(module):
             attr = getattr(module, attrName)
+            #
+            # 这里的判断需要导入的模块中 引用的AAXWAbstractBasePlugin有ananxw_junmpin的前缀模块中，
+            # 否则， issubclass 可能会检错为否？
+            #
             if isinstance(attr, type) and issubclass(attr, AAXWAbstractBasePlugin) and attr is not AAXWAbstractBasePlugin:
                 plugin_key = f"{moduleName}.{attrName}"
                 self._putPluginBuilder(pluginKey=plugin_key,
@@ -1389,7 +1403,7 @@ class AAXWOllamaAIConnOrAgent(AAXWAbstractAIConnOrAgent):
     AAXW_CLASS_LOGGER:logging.Logger
 
     SYSTEM_PROMPT_DEFAULT="""
-    你的名字是ANAN是一个AI入口助理;
+    你的名字是ANAN-Ollama是一个AI入口助理;
     请关注用户跟你说的内容，和善的回答用户，与用户要求。
     如果用户说的不明确，请提示用户可以说的更明确。
     如果没有特别说明，可考虑用markdown格式输出一般内容。
@@ -1400,15 +1414,75 @@ class AAXWOllamaAIConnOrAgent(AAXWAbstractAIConnOrAgent):
     {message}
     """
     
-    def __init__(self, model_name: str = "llama3.2:3b"): #llama3.2:3b qwen2:1.5b qwen2.5:7b
+    def __init__(self, modelName: str = ""): #llama3.2:3b qwen2:1.5b qwen2.5:7b
+        # 设置默认的 API URL
+        self.api_url = "http://localhost:11434"
+        
         self.client = OpenAI(
-            base_url="http://localhost:11434/v1",
+            base_url=f"{self.api_url}/v1",
             api_key="ollama"
         )
-        self.model_name = model_name
         
-        models = self.listModels()
-        self.AAXW_CLASS_LOGGER.info(f"Available Ollama models found: {', '.join(models)}")
+        # 如果model_name为空，尝试从环境变量获取
+        if not modelName:
+            modelName = os.getenv("OPENAI_MODEL_NAME", "")
+        
+        self.modelName = None
+        # 如果仍为空，从可用模型中选择一个
+        try:
+            if not modelName:
+                modelName = self._selectPreferredModel()
+                
+            self.modelName = modelName
+            self.AAXW_CLASS_LOGGER.info(f"Selected model: {self.modelName}")
+
+            models = self.listModels()
+            self.AAXW_CLASS_LOGGER.info(f"Available Ollama models found: {', '.join(models)}")
+        except Exception as e:
+            self.AAXW_CLASS_LOGGER.error(
+                f"Error initializing Ollama model: {str(e)};Ollama访问模块功能可能不可用或需要至少下载1个模型")
+
+        
+    
+    def _selectPreferredModel(self) -> str:
+        """从可用模型中选择首选模型"""
+        preferred_models = ["qwen2.5:1.5b","qwen2.5:3b", "llama3.2:3b"]
+        available_models = self.listModels()
+        
+        # 按优先级检查首选模型
+        for model in preferred_models:
+            if model in available_models:
+                return model
+                
+        # 如果没有首选模型，选择模型大小最小的
+        if available_models:
+            # 提取模型大小并排序
+            def get_model_size(model_name):
+                try:
+                    # 检查是否包含冒号
+                    if ':' not in model_name:
+                        return float('inf')
+                    
+                    # 获取冒号后的部分
+                    size_part = model_name.split(':')[1]
+                    
+                    # 检查是否以'b'结尾且前面是数字
+                    if not size_part.endswith('b'):
+                        return float('inf')
+                        
+                    # 去掉'b'并尝试转换为数字
+                    size_str = size_part[:-1]
+                    try:
+                        return float(size_str)
+                    except ValueError:
+                        return float('inf')
+                        
+                except:
+                    return float('inf')  # 任何解析错误返回无穷大
+            
+            return min(available_models, key=get_model_size)
+            
+        raise Exception("No available models found")
         
 
     def listModels(self) -> List[str]:
@@ -1418,6 +1492,78 @@ class AAXWOllamaAIConnOrAgent(AAXWAbstractAIConnOrAgent):
             return [model.id for model in models.data]
         except Exception as e:
             raise Exception(f"Failed to list models: {str(e)}")
+
+
+    @override
+    def downloadModel(self, model_name: str, callback:Callable[[str, Dict[str, Any]], None], insecure: bool = False):
+        """
+        下载 Ollama 模型
+        
+        Args:
+            model_name (str): 模型名称
+            callback (callable): 下载状态回调函数，
+                    下载过程中情况的变化可以由回调函数获取并处理，
+                    接收状态信息字符串和状态数据字典
+                    callback(status_msg: str, status_data: Dict[str, Any])
+            insecure (bool): 是否允许不安全下载
+        
+        Returns:
+            bool: 下载是否成功
+        """
+        if not model_name:
+            return False
+
+        try:
+            # 构建请求
+            req = urllib.request.Request(
+                urllib.parse.urljoin(self.api_url, "/api/pull"),
+                data=json.dumps({
+                    "name": model_name,
+                    "insecure": insecure,
+                    "stream": True
+                }).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST"
+            )
+            self.AAXW_CLASS_LOGGER.info(
+                f"Sending request to {req.full_url}, method={req.method}, headers={req.headers}"
+            )
+
+            with urllib.request.urlopen(req) as response:
+                for line in response:
+                    data = json.loads(line.decode("utf-8"))
+                    
+                    # 构建状态数据字典
+                    status_data = {
+                        "total": data.get("total"),
+                        "completed": data.get("completed", 0),
+                        "status": data.get("status"),
+                        "error": data.get("error"),
+                        "digest": data.get("digest"),
+                        "model": model_name
+                    }
+                    
+                    # 构建状态消息
+                    status_msg = data.get("error") or data.get("status") or "No response"
+                    if "status" in data and status_data["total"]:
+                        status_msg += f" [{status_data['completed']}/{status_data['total']}]"
+                    
+                    # 调用回调函数，传递消息和数据
+                    callback(status_msg, status_data)
+
+            self.AAXW_CLASS_LOGGER.info(f"Successfully downloaded model: {model_name}")
+            return True
+
+        except Exception as e:
+            error_msg = f"Failed to download model {model_name}: {str(e)}"
+            error_data = {
+                "error": str(e),
+                "model": model_name,
+                "status": "error"
+            }
+            self.AAXW_CLASS_LOGGER.error(error_msg)
+            callback(error_msg, error_data)
+            return False
     
 
     @override
@@ -1430,10 +1576,11 @@ class AAXWOllamaAIConnOrAgent(AAXWAbstractAIConnOrAgent):
         ]
         try:
             stream = self.client.chat.completions.create(
-                model=self.model_name,
+                model=self.modelName,  #type:ignore
                 messages=messages,
                 stream=True
-            )
+            )  #type:ignore
+
             for chunk in stream:
                 if chunk.choices[0].delta.content is not None:
                     content = chunk.choices[0].delta.content
@@ -2461,26 +2608,64 @@ class AAXWJumpinDefaultSimpleApplet(AAXWAbstractApplet):
     def getTitle(self) -> str:
         return self.title
 
+    # 创建1个工具菜单组件-对应本applet；（界面向）
+    def _createToolsMessagePanel(self):
+        # 创建主Frame
+        toolsframe = QFrame()
+        layout = QVBoxLayout(toolsframe)
+        
+        # 添加文本说明
+        label = QLabel("工具面板")
+        layout.addWidget(label)
+        
+        # 添加分割线
+        line = QFrame()
+        line.setFrameShape(QFrame.Shape.HLine)
+        line.setFrameShadow(QFrame.Shadow.Sunken)
+        layout.addWidget(line)
+        
+        # 创建工具栏
+        toolbar = QToolBar()
+        button1 = QPushButton("按钮1")
+        button2 = QPushButton("按钮2") 
+        button3 = QPushButton("按钮3")
+        
+        toolbar.addWidget(button1)
+        toolbar.addWidget(button2)
+        toolbar.addWidget(button3)
+        
+        layout.addWidget(toolbar)
+        
+        return toolsframe
+
     @override
     def onAdd(self):
+       
+        self.toolsFrame=self._createToolsMessagePanel()
         self.AAXW_CLASS_LOGGER.info(f"{self.name} Applet被添加")
         pass
 
     @override
     def onActivate(self):
-        self.AAXW_CLASS_LOGGER.info(f"{self.name} Applet被激活")
-
         #按钮标志与基本按钮曹关联
         self.mainWindow.inputPanel.funcButtonLeft.setText(self.getTitle())
+
+        #加上工具组件
+        self.mainWindow.topToolsMessageWindow.setCentralWidget(self.toolsFrame)
+        self.AAXW_CLASS_LOGGER.info(f"{self.name} Applet被激活")
         pass
 
     @override
     def onInactivate(self):
+        #清理工具组件引用；
+        self.mainWindow.topToolsMessageWindow.removeCentralWidget()
+        #
         self.AAXW_CLASS_LOGGER.info(f"{self.name} Applet被停用")
         pass
 
     @override
     def onRemove(self):
+
         self.AAXW_CLASS_LOGGER.info(f"{self.name} Applet被移除")
         pass
 
@@ -2584,6 +2769,7 @@ class AAXWJumpinDefaultBuiltinPlugin(AAXWAbstractBasePlugin):
 class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
     AAXW_CLASS_LOGGER:logging.Logger
 
+
     def __init__(self):
         self.dependencyContainer:AAXWDependencyContainer=None #type:ignore
         self.jumpinConfig:'AAXWJumpinConfig'= None #type:ignore
@@ -2615,6 +2801,8 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
             f"这是个默认Applet{self.__class__.__name__}只有关闭整体时才应该被移除释放。")
         
         pass
+
+
     @override
     def onActivate(self): 
         # 主要操作逻辑的"定义与注册"放在本方法中；
@@ -2934,6 +3122,176 @@ class AAXWScrollPanel(QFrame):
 
     pass  # AAXWScrollPanel end
 
+
+class AAXWFollowerWindow(QWidget):
+    """
+    工具窗口，可以相对于参考widget固定位置，并根据参考位置调整尺寸
+    """
+    
+    # 定义位置常量
+    TOP = "top"
+    BOTTOM = "bottom"
+    LEFT = "left"
+    RIGHT = "right"
+    
+    # 未指定边的默认尺寸
+    DEFAULT_SIZE = 100
+    
+    def __init__(self, refWidget: QWidget, refPosition: str, mainWindow: QWidget, parent=None):
+        """
+        初始化工具窗口
+        :param refWidget: 参考Widget
+        :param refPosition: 相对位置 ('top', 'bottom', 'left', 'right')
+        :param mainWindow: 主窗口引用
+        :param parent: 父Widget
+        """
+        super().__init__(parent=parent)
+        self.refWidget = refWidget
+        self.refPosition = refPosition.lower()
+        self.mainWindow = mainWindow
+        self.spacing = 5  # 与参考widget的间距
+        
+        # 设置窗口属性
+        self.setWindowFlags(Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        
+        # 根据参考位置调整尺寸
+        self.adjustSize()
+        
+        # 初始化UI
+        self._initUI()
+        
+        # 都不用在外侧用moveEvent去注册了。
+        # 这里直接用refwidget去install了移动监听动作了。eventFilter方法。
+        # 安装事件过滤器来监听参考widget的移动和尺寸变化
+        self.refWidget.installEventFilter(self)
+        
+    def _initUI(self):
+        """初始化UI组件"""
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        
+        
+        # contentWidget作为实际显示的容器
+        self.contentWidget = QWidget(self)
+        self.contentWidget.setObjectName("followerWindow")
+        self.contentWidget.setStyleSheet("""
+            #followerWindow {
+                /* background-color: #f0f0f0; */
+                background-color: lightblue;
+                border: 1px solid #ccc;
+                border-radius: 10px;
+            }
+        """)
+        # contentWidget使用单层布局
+        self.contentLayout = QVBoxLayout(self.contentWidget)
+        self.contentLayout.setContentsMargins(5, 5, 5, 5)
+        #
+        layout.addWidget(self.contentWidget)
+        
+    def setCentralWidget(self, widget: QWidget):
+        """
+        设置内容组件 
+        注意本窗口不维护central widget的整体生命周期。
+        只是放入并展示。
+        """
+        # 先移除当前显示的widget
+        self.removeCentralWidget()
+        
+        # 添加并显示新的widget
+        if widget is not None:
+            self.contentLayout.addWidget(widget)
+            widget.show()  # 确保widget是可见的
+    
+    def removeCentralWidget(self):
+        """
+        移除当前显示的widget但不删除它；
+        centralWidget 由放置进来的applet或插件维护。
+        """
+        for i in reversed(range(self.contentLayout.count())): 
+            item = self.contentLayout.itemAt(i)
+            if item.widget():
+                widget = item.widget()
+                self.contentLayout.removeItem(item)
+                widget.hide()           # 隐藏当前widget
+                widget.setParent(None)  # 解除父子关系但保持widget存在
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        """监听参考widget的移动和尺寸变化事件"""
+        if watched == self.refWidget:
+            if event.type() in [QEvent.Type.Move, QEvent.Type.Resize]:
+                self.adjustSize()
+                self.updatePosition()
+        return super().eventFilter(watched, event)
+
+    def adjustSize(self):
+        """根据参考widget的位置调整尺寸"""
+        if not self.refWidget:
+            return
+            
+        ref_size = self.refWidget.size()
+        
+        if self.refPosition in [self.TOP, self.BOTTOM]:
+            # 上/下位置时，宽度与参考widget相同，高度使用默认值
+            self.setFixedSize(ref_size.width(), self.DEFAULT_SIZE)
+        elif self.refPosition in [self.LEFT, self.RIGHT]:
+            # 左/右位置时，高度与参考widget相同，宽度使用默认值
+            self.setFixedSize(self.DEFAULT_SIZE, ref_size.height())
+            
+    def updatePosition(self):
+        """更新工具窗口位置"""
+        if not self.refWidget:
+            return
+            
+        ref_geo = self.refWidget.geometry()
+        ref_pos = self.refWidget.mapToGlobal(QPoint(0, 0))
+        
+        # 计算新位置
+        new_pos = QPoint()
+        
+        if self.refPosition == self.TOP:
+            new_pos.setX(ref_pos.x() + (ref_geo.width() - self.width()) // 2)
+            new_pos.setY(ref_pos.y() - self.height() - self.spacing)
+        
+        elif self.refPosition == self.BOTTOM:
+            new_pos.setX(ref_pos.x() + (ref_geo.width() - self.width()) // 2)
+            new_pos.setY(ref_pos.y() + ref_geo.height() + self.spacing)
+        
+        elif self.refPosition == self.LEFT:
+            new_pos.setX(ref_pos.x() - self.width() - self.spacing)
+            new_pos.setY(ref_pos.y() + (ref_geo.height() - self.height()) // 2)
+        
+        elif self.refPosition == self.RIGHT:
+            new_pos.setX(ref_pos.x() + ref_geo.width() + self.spacing)
+            new_pos.setY(ref_pos.y() + (ref_geo.height() - self.height()) // 2)
+            
+        # 
+        # 当前逻辑，可以移动到屏幕外部；
+        #
+        # 确保窗口不会超出屏幕边界（这个在特定情况也有用。）
+        # screen_geo = QApplication.primaryScreen().geometry()
+        # new_pos.setX(max(0, min(new_pos.x(), screen_geo.width() - self.width())))
+        # new_pos.setY(max(0, min(new_pos.y(), screen_geo.height() - self.height())))
+        #
+        
+        self.move(new_pos)
+
+    def toggleVisibility(self):
+        """切换显示/隐藏状态"""
+        AAXW_JUMPIN_MODULE_LOGGER.info("toggle_visibility!")
+        if self.isVisible():
+            self.hide()
+        else:
+            self.show()
+            self.adjustSize()
+            self.updatePosition()
+            
+    # def showEvent(self, event: QShowEvent):
+    #     """显示时更新位置"""
+    #     super().showEvent(event)
+    #     self.update_position()
+
 class AAXWJumpinMainWindow(QWidget):
     """
     主窗口:
@@ -2943,6 +3301,7 @@ class AAXWJumpinMainWindow(QWidget):
     MAX_HEIGHT = 500
     def __init__(self,parent=None):
         super().__init__(parent=parent)
+        self.movedCallbacks=[]
         self.init_ui()
         self.installAppHotKey()
 
@@ -2994,10 +3353,24 @@ class AAXWJumpinMainWindow(QWidget):
         # self.setFixedHeight(200) 
         self.resize(self.width(), 200)
 
+        self.topToolsMessageWindow=AAXWFollowerWindow(
+            refWidget=self,refPosition=AAXWFollowerWindow.TOP,
+            mainWindow=self,parent=self)
+        self.leftToolsMessageWindow=AAXWFollowerWindow(
+            refWidget=self,refPosition=AAXWFollowerWindow.LEFT,
+            mainWindow=self,parent=self)
+        
         self.inputPanel.promptInputEdit.setFocus()
 
-
-
+    #本来让topToolsWindow来注册的，不过用了evetFilter了。暂时没用这里。
+    def registerMovedCallbacks(self, callback):
+        self.movedCallbacks.append(callback)
+    def _triggerMoved(self):
+        for callback in self.movedCallbacks:
+            callback()
+    def moveEvent(self, event):
+        super().moveEvent(event)
+        self._triggerMoved()
 
     # 这里是画了圆角透明主窗口。
     # TODO 之后还是改为主窗口中加1个widget作为伪主窗口的面板，基于此定制以及绘制异形主窗口。
@@ -3038,12 +3411,22 @@ class AAXWJumpinMainWindow(QWidget):
         shortcut = QShortcut(QKeySequence("Alt+c"), self)  # 这里已经关联self
         shortcut.activated.connect(self.closeWindow)  # 不要加括号，指向方法；
 
+        # top tools message window/panel show/hide
+        # 使用标准快捷键格式 "Ctrl+Alt+Key" 或 "Ctrl+Key"
+        # QKeySequence 需要完整的快捷键组合
+        topShowOrhideSc = QShortcut(QKeySequence("Alt+1"), self)  # 添加一个具体按键T
+        topShowOrhideSc.activated.connect(self.toggleVisiSubWindows)
+
     #
     ##
     # 装载关联快捷键
     # 特殊按键处理器
     # end
     ##
+
+    def toggleVisiSubWindows(self):
+        self.topToolsMessageWindow.toggleVisibility()
+        # self.leftToolsMessageWindow.toggleVisibility()
 
     # 
     # 切换隐藏
@@ -3235,10 +3618,10 @@ class AAXWJumpinTrayKit(QSystemTrayIcon):
 if __name__ == "__main__":
 
     try:
-        import ananxw_jumpin.builtin_plugins 
+        import ananxw_jumpin.builtin_plugins
     except Exception as e: 
         AAXW_JUMPIN_MODULE_LOGGER.warning(
-            "额外的ananxw_jumpin.builtin_plugin未正常导入，不影响allin1f的单文件运行。")
+            f"额外的ananxw_jumpin.builtin_plugin未正常导入，不影响allin1f的单文件运行。{e}")
     finally:
         pass
 

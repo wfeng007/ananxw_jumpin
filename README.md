@@ -6,7 +6,7 @@ ANAN Jumpin 是一款面向**AI能效达人及超级个体**的PC端AI效率工�
 基础使用，进阶使用，定制开发，深度贡献；
 
 ### 👨‍💻 “我是，程序小白，就想用AI提效”：
-- 启动后使用内置AI对话等功能体验AI；（可全局热键）
+- 启动后使用内置AI对话等功能体验AI；（可全局热键，默认为 `Alt+z`）
 - 切换内置Applet功能来使用，常用的AI、Agent或提效应用；
 - 获取安装社区插件扩展功能或Applet来使用；
 - 提出建议、issue，帮助Jumpin提升；
@@ -75,8 +75,8 @@ python ananxw_jumpin_allin1f.py
 
 ### 🛠️ 快速使用
 基本操作：
-- 使用全局快捷键（默认为 `Alt+c` ）呼出/隐藏主界面
-- 在输入框中输入内容与AI对话（默认为是通过环境变量或.env配置LLM接入，使用）
+- 使用全局快捷键（默认为 `Alt+z` ）呼出/隐藏主界面
+- 在输入框中输入内容与AI对话（默认为通过环境变量或.env配置的LLM接入）
 - 已提供系统托盘，可访问更多功能。
 
 Applet切换：  
@@ -108,21 +108,9 @@ class MyPlugin(AAXWAbstractPlugin):
         插件安装时的回调方法
         建议实现:
             - 初始化插件所需的资源
-            - 注册插件提供的服务到DI容器
+            - 注册插件提供的服务到DI容器（如有必要）
             - 设置插件的配置信息
             - 创建必要的UI组件
-        """
-        pass
-
-    @override
-    def onUninstall(self):
-        """
-        插件卸载时的回调方法
-        建议实现:
-            - 清理插件创建的资源
-            - 从DI容器注销服务
-            - 保存配置信息
-            - 移除UI组件
         """
         pass
 
@@ -148,6 +136,18 @@ class MyPlugin(AAXWAbstractPlugin):
             - 停止后台服务
         """
         pass
+
+        @override
+    def onUninstall(self):
+        """
+        插件卸载时的回调方法
+        建议实现:
+            - 清理插件创建的资源
+            - 从DI容器注销服务
+            - 保存配置信息
+            - 移除UI组件
+        """
+        pass
 ```
 
 - 插件机制支持用户插件目录，默认在程序运行当前目录，其插件默认为plugin_前缀的py文件；**（目录变更或开关用户插件目录加载，需要进行配置或自定义main来完成修改）**
@@ -159,10 +159,10 @@ class MyPlugin(AAXWAbstractPlugin):
 3. 关联到某个插件或自定义新的插件；
 4. 在插件中获取`AppletManager`并用其`addApplet()`方法加入你的Applet；
 
-### 📝 详细说明以及参考：
+### 📝 详细说明以及参考
 （建设中...）
 
-### 🔍 示例代码与样例：
+### 🔍 示例代码与样例
 
 1. 内置的插件样例，附加输入框的快键键功能等（位置可能会有变化）：   
 [`ananxw_jumpin_allin1f.py #L2486 AAXWJumpinDefaultBuiltinPlugin` ](ananxw_jumpin_allin1f.py#L2486) # 内置插件实现样例
