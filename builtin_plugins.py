@@ -1,6 +1,14 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-#
+## License and Notice:
+# This file is part of ananxw_jumpin.
+# ananxw_jumpin is licensed under the Apache2.0(the License); you may not use 
+# this file except in compliance with the License. See LICENSE file for details.
+# For the full license text, see the LICENSE file in the root directory.
+# 
+# For more copyright, warranty disclaimer, and third - party component information,
+# see the NOTICE file in the root directory.
+##
 # @Author:wfeng007
 # @Date:2024-11-04 00:35:30
 # @Last Modified by:wfeng007

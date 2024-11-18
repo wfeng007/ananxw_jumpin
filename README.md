@@ -202,6 +202,9 @@ v0.7+ 计划
 
  ananxw_jumpin(ANAN Jumpin，安安将品) is open source and licensed under [Apache 2.0](LICENSE)
 
+## Disclaimer
+This software is provided without any warranty. The developers and the associated organization are not responsible for any issues that may arise from the use of this software. Please refer to the LICENSE file for the full legal text.
+
 ## 👨‍💻 作者
 
 小王同学 wfeng007 (wfeng007@163.com) B站:小王同学009

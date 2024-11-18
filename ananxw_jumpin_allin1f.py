@@ -1,25 +1,28 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
+## License and Notice:
+# This file is part of ananxw_jumpin.
+# ananxw_jumpin is licensed under the Apache2.0(the License); you may not use 
+# this file except in compliance with the License. See LICENSE file for details.
+# For the full license text, see the LICENSE file in the root directory.
+# 
+# For more copyright, warranty disclaimer, and third - party component information,
+# see the NOTICE file in the root directory.
+##
 #
 # @Author:wfeng007 小王同学 wfeng007@163.com
 # @Date:2024-09-24 18:05:01
 # @Last Modified by:wfeng007
 #
-# This file is part of ananxw_jumpin.
-# ananxw_jumpin is licensed under the Apache2.0/LGPL/GPL. See LICENSE file for details.
-#
-
-#
-# AnAn jumpin  ,小王的AI网络/节点（随便什么吧），AI(+Applet kits)智能工具套件快速快速入口，
+##
+# AnAn jumpin 是AI网络/节点（随便什么吧），AI(+Applet kits)智能工具套件快速快速入口，
 #   投入ai吧！ANAN其实也是只狗狗。。。
 # An AI Net/Node of XiaoWang ， jumpin AI ! ANAN is a dog...
-# 
-
-# Jumpin 是什么？
-# 
-# 
+#
+##
+# 0.1:基础功能，基础chat功能，openai ollama接入，界面等；
 # 0.2:托盘功能；支持钉在桌面最前端，全局热键换出与隐藏；
-# 0.3:较好的Markdown展示气泡，基本可扩展的展示气泡逻辑；
+# 0.3:较好的Markdown展示气泡，基本可扩展的展示气泡逻辑;python代码块展示；
 # 0.4+:
 #      已增加工作目录配置与维护，基本文件系统能力。
 #      已增加日志功能，默认标准输出中输出；支持工作目录生成日志；并根据时间与数量清理；
