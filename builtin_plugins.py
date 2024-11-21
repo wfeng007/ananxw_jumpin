@@ -582,3 +582,356 @@ class AAXWJumpinOllamaBuiltinPlugin(AAXWAbstractBasePlugin):
     pass
 
 
+
+class FileInteractionManager:
+    """管理AI(LLM) 对话持久化访问功能额管理器"""
+
+    #列出指定目录对话历史（或记录）列表；
+
+    #载入项的历史记录，成为Memory/session或可进行互动操作的访问-操作器；（内部挂用LLMconn-或外层 agent进行互动操作。）
+
+    #新建一个互动Session；
+
+
+    pass
+
+@AAXW_JUMPIN_LOG_MGR.classLogger()
+class AAXWJumpinChatHistoryExpApplet(AAXWAbstractApplet):
+    """对话历史保存Applet样例"""
+    AAXW_CLASS_LOGGER: logging.Logger
+
+    def __init__(self):
+        self.name = "jumpinChatHistoryApplet"
+        self.title = "CHIS"
+        self.dependencyContainer: AAXWDependencyContainer = None  # type: ignore
+        self.jumpinConfig: 'AAXWJumpinConfig' = None  # type: ignore
+        self.mainWindow: 'AAXWJumpinMainWindow' = None  # type: ignore
+
+    @override
+    def getName(self) -> str:
+        return self.name
+
+    @override
+    def getTitle(self) -> str:
+        return self.title
+    
+    def getDesc(self) -> str:
+        return self.__class__.__doc__ if self.__class__.__doc__ else "..."
+        # if self.__class__.__doc__:
+        #     return self.__class__.__doc__ #type:ignore
+        # else:
+        #     return ""
+
+    def _saveChatHistory(self):
+        """保存聊天历史到本地文件"""
+        # 这里实现保存聊天历史的逻辑
+        self.AAXW_CLASS_LOGGER.info("打开历史记录列表")
+        # # 示例代码：将聊天历史写入文件
+        # with open("chat_history.txt", "a") as file:
+        #     file.write("聊天历史内容...\n")  # 这里应替换为实际聊天内容
+
+    @override
+    def onAdd(self):
+
+        self.toolsFrame=self._createToolsMessagePanel()
+        self.AAXW_CLASS_LOGGER.info(f"{self.name} Applet被添加")
+        pass
+    
+
+    # 创建1个工具菜单组件-对应本applet；（界面）
+    def _createToolsMessagePanel(self):
+        """创建工具面板"""
+        # 创建主Frame
+        toolsframe = QFrame()
+        toolsframe.setObjectName("chat_history_toolsframe")
+        toolsframe.setStyleSheet("""
+            QFrame#chat_history_toolsframe {
+                background-color: #f0f0f0;
+                border: 1px solid #ccc;
+                border-radius: 5px;
+            }
+        """)
+        layout = QVBoxLayout(toolsframe)
+
+
+        # 添加文本说明，设置ObjectName
+        self.descLabel = QLabel(self.getDesc())
+        self.descLabel.setObjectName("desc_label")
+        layout.addWidget(self.descLabel)
+        
+        # 添加分割线
+        line = QFrame()
+        line.setFrameShape(QFrame.Shape.HLine)
+        line.setFrameShadow(QFrame.Shadow.Sunken)
+        layout.addWidget(line)
+
+
+        # 创建工具栏
+        toolbar = QToolBar()
+        
+        # 创建保存聊天历史按钮
+        left_win_button = QPushButton("<<<")
+        left_win_button.clicked.connect(self._saveChatHistory)
+        toolbar.addWidget(left_win_button)
+
+        layout.addWidget(toolbar)
+        return toolsframe
+
+    @override
+    def onActivate(self):
+        # 在界面中添加保存聊天历史的按钮
+        # 主要展示界面 界面可能变化，所以接货的时候获取界面内容；
+        self.showingPanel=self.mainWindow.msgShowingPanel #用于展示的
+        
+
+        # 展示策略关联给 self.showingPanel
+        self.backupContentBlockStrategy=self.showingPanel.contentBlockStrategy
+        self.showingPanel.contentBlockStrategy=AAXWJumpinCompoMarkdownContentStrategy()
+
+        #  将输入触发逻辑关联给inputkit
+        #
+        # self.mainWindow.inputPanel.funcButtonRight.clicked.connect(self.doInputCommitAction)
+
+
+        #按钮标志与基本按钮曹关联
+        self.mainWindow.inputPanel.funcButtonLeft.setText(self.getTitle())
+
+        #加上工具组件
+        self.mainWindow.topToolsMessageWindow.setCentralWidget(self.toolsFrame)  #type:ignore
+        self.AAXW_CLASS_LOGGER.info(f"{self.name} Applet被激活")
+        pass
+
+    @override
+    def onInactivate(self):
+        #
+        self.showingPanel.contentBlockStrategy=self.backupContentBlockStrategy #type:ignore 
+        self.backupContentBlockStrategy=None #type:ignore
+
+
+        #去除 槽函数
+        # self.mainWindow.inputPanel.funcButtonRight.clicked.disconnect(self.doInputCommitAction)
+        # self.mainWindow.inputPanel.promptInputEdit.returnPressed.disconnect(self.doInputCommitAction)
+        # self.aiThread=None
+
+        #清理工具组件引用；
+        self.mainWindow.topToolsMessageWindow.removeCentralWidget() 
+        #
+
+        self.AAXW_CLASS_LOGGER.info(f"{self.name} Applet被停用")
+        pass
+
+    @override
+    def onRemove(self):
+        if self.toolsFrame:
+            self.toolsFrame.deleteLater()
+            self.toolsFrame = None
+        self.AAXW_CLASS_LOGGER.info(f"{self.name} Applet被移除")
+        pass
+
+
+@AAXW_JUMPIN_LOG_MGR.classLogger()
+class AAXWJumpinChatHistoryExpPlugin(AAXWAbstractBasePlugin):
+    AAXW_CLASS_LOGGER: logging.Logger
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.dependencyContainer: AAXWDependencyContainer = None  # type: ignore
+        self.jumpinConfig: 'AAXWJumpinConfig' = None  # type: ignore
+        self.mainWindow: 'AAXWJumpinMainWindow' = None  # type: ignore
+        self.jumpinAppletManager: AAXWJumpinAppletManager = None  # type: ignore
+
+    @override
+    def onInstall(self):
+        self.chatHistoryApplet = AAXWJumpinChatHistoryExpApplet()
+        self.AAXW_CLASS_LOGGER.info(f"{self.__class__.__name__}.onInstall()")
+        pass
+
+    @override
+    def enable(self):
+        self.jumpinAppletManager.addApplet(self.chatHistoryApplet)
+        self.AAXW_CLASS_LOGGER.info(f"{self.__class__.__name__}.enable()")
+        pass
+
+    @override
+    def disable(self):
+        self.jumpinAppletManager.removeAppletByInstance(self.chatHistoryApplet)
+        self.AAXW_CLASS_LOGGER.info(f"{self.__class__.__name__}.disable()")
+        pass
+
+    @override
+    def onUninstall(self):
+        self.AAXW_CLASS_LOGGER.info(f"{self.__class__.__name__}.onUninstall()")
+        pass
+
+
+
+
+
+
+#
+# 简单例子
+#
+# 一个带矿机
+#
+@AAXW_JUMPIN_LOG_MGR.classLogger()
+class AAXWJumpinTopWinExpApplet(AAXWAbstractApplet):
+    """一个带顶端工具与消息窗口的Applet框架样例（未带任何对话或按钮功能）"""
+    AAXW_CLASS_LOGGER: logging.Logger
+
+    def __init__(self):
+        self.name = "jumpinChatHistoryApplet"
+        self.title = "TWIN"
+        self.dependencyContainer: AAXWDependencyContainer = None  # type: ignore
+        self.jumpinConfig: 'AAXWJumpinConfig' = None  # type: ignore
+        self.mainWindow: 'AAXWJumpinMainWindow' = None  # type: ignore
+
+    @override
+    def getName(self) -> str:
+        return self.name
+
+    @override
+    def getTitle(self) -> str:
+        return self.title
+    
+    def getDesc(self) -> str:
+        return self.__class__.__doc__ if self.__class__.__doc__ else "..."
+        # if self.__class__.__doc__:
+        #     return self.__class__.__doc__ #type:ignore
+        # else:
+        #     return ""
+
+    def _expButtonClicked(self):
+        """例子按钮按下"""
+        self.AAXW_CLASS_LOGGER.info("打开历史记录列表")
+
+    @override
+    def onAdd(self):
+
+        self.toolsFrame=self._createToolsMessagePanel()
+        self.AAXW_CLASS_LOGGER.info(f"{self.name} Applet被添加")
+        pass
+    
+
+    # 创建1个工具菜单组件-对应本applet；（界面）
+    def _createToolsMessagePanel(self):
+        """创建工具面板"""
+        # 创建主Frame
+        toolsframe = QFrame()
+        toolsframe.setObjectName("top_toolsframe")
+        toolsframe.setStyleSheet("""
+            QFrame#chat_history_toolsframe {
+                background-color: #f0f0f0;
+                border: 1px solid #ccc;
+                border-radius: 5px;
+            }
+        """)
+        layout = QVBoxLayout(toolsframe)
+
+
+        # 添加文本说明，设置ObjectName
+        self.descLabel = QLabel(self.getDesc())
+        self.descLabel.setObjectName("desc_label")
+        layout.addWidget(self.descLabel)
+        
+        # 添加分割线
+        line = QFrame()
+        line.setFrameShape(QFrame.Shape.HLine)
+        line.setFrameShadow(QFrame.Shadow.Sunken)
+        layout.addWidget(line)
+
+
+        # 创建工具栏
+        toolbar = QToolBar()
+        
+        # 创建保存聊天历史按钮
+        left_win_button = QPushButton("<<<")
+        left_win_button.clicked.connect(self._expButtonClicked)
+        toolbar.addWidget(left_win_button)
+
+        layout.addWidget(toolbar)
+        return toolsframe
+
+    @override
+    def onActivate(self):
+        # 在界面中添加保存聊天历史的按钮
+        # 主要展示界面 界面可能变化，所以接货的时候获取界面内容；
+        self.showingPanel=self.mainWindow.msgShowingPanel #用于展示的
+        
+
+        # 展示策略关联给 self.showingPanel
+        self.backupContentBlockStrategy=self.showingPanel.contentBlockStrategy
+        self.showingPanel.contentBlockStrategy=AAXWJumpinCompoMarkdownContentStrategy()
+
+        #  将输入触发逻辑关联给inputkit
+        #
+        # self.mainWindow.inputPanel.funcButtonRight.clicked.connect(self.doInputCommitAction)
+
+
+        #按钮标志与基本按钮曹关联
+        self.mainWindow.inputPanel.funcButtonLeft.setText(self.getTitle())
+
+        #加上工具组件
+        self.mainWindow.topToolsMessageWindow.setCentralWidget(self.toolsFrame)  #type:ignore
+        self.AAXW_CLASS_LOGGER.info(f"{self.name} Applet被激活")
+        pass
+
+    @override
+    def onInactivate(self):
+        #
+        self.showingPanel.contentBlockStrategy=self.backupContentBlockStrategy #type:ignore 
+        self.backupContentBlockStrategy=None #type:ignore
+
+        #去除 槽函数
+        # self.mainWindow.inputPanel.funcButtonRight.clicked.disconnect(self.doInputCommitAction)
+        # self.mainWindow.inputPanel.promptInputEdit.returnPressed.disconnect(self.doInputCommitAction)
+        # self.aiThread=None
+
+        #清理工具组件引用；
+        self.mainWindow.topToolsMessageWindow.removeCentralWidget() 
+        #
+
+        self.AAXW_CLASS_LOGGER.info(f"{self.name} Applet被停用")
+        pass
+
+    @override
+    def onRemove(self):
+        if self.toolsFrame:
+            self.toolsFrame.deleteLater()
+            self.toolsFrame = None
+        self.AAXW_CLASS_LOGGER.info(f"{self.name} Applet被移除")
+        pass
+
+
+@AAXW_JUMPIN_LOG_MGR.classLogger()
+class AAXWJumpinTopWinExpPlugin(AAXWAbstractBasePlugin):
+    AAXW_CLASS_LOGGER: logging.Logger
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.dependencyContainer: AAXWDependencyContainer = None  # type: ignore
+        self.jumpinConfig: 'AAXWJumpinConfig' = None  # type: ignore
+        self.mainWindow: 'AAXWJumpinMainWindow' = None  # type: ignore
+        self.jumpinAppletManager: AAXWJumpinAppletManager = None  # type: ignore
+
+    @override
+    def onInstall(self):
+        self.chatHistoryApplet = AAXWJumpinTopWinExpApplet()
+        self.AAXW_CLASS_LOGGER.info(f"{self.__class__.__name__}.onInstall()")
+        pass
+
+    @override
+    def enable(self):
+        self.jumpinAppletManager.addApplet(self.chatHistoryApplet)
+        self.AAXW_CLASS_LOGGER.info(f"{self.__class__.__name__}.enable()")
+        pass
+
+    @override
+    def disable(self):
+        self.jumpinAppletManager.removeAppletByInstance(self.chatHistoryApplet)
+        self.AAXW_CLASS_LOGGER.info(f"{self.__class__.__name__}.disable()")
+        pass
+
+    @override
+    def onUninstall(self):
+        self.AAXW_CLASS_LOGGER.info(f"{self.__class__.__name__}.onUninstall()")
+        pass
