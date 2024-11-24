@@ -29,12 +29,24 @@ from PySide6.QtCore import (
 )
 from PySide6.QtWidgets import (
     QFrame, QWidget, QVBoxLayout, QPushButton, 
-    QLabel, QToolBar,QSizePolicy, QHBoxLayout, QLineEdit,QApplication
+    QLabel, QToolBar,QSizePolicy, QHBoxLayout, QLineEdit,QApplication, QListWidget, QListWidgetItem
 )
 
 import urllib.parse
 import urllib.request
 import json
+
+
+from langchain_community.chat_message_histories.file import FileChatMessageHistory
+from langchain.prompts import PromptTemplate
+from langchain.schema import (
+        BaseMessage,
+        AIMessage,  # 等价于OpenAI接口中的assistant role
+        HumanMessage,  # 等价于OpenAI接口中的user role
+        SystemMessage  # 等价于OpenAI接口中的system role
+    )
+from langchain.memory import ConversationBufferMemory
+from langchain_openai import ChatOpenAI
 
 
 if __name__ == "__main__":
@@ -51,7 +63,7 @@ from ananxw_jumpin.ananxw_jumpin_allin1f import AAXW_JUMPIN_LOG_MGR
 from ananxw_jumpin.ananxw_jumpin_allin1f import (
     AAXWAbstractApplet,AAXWDependencyContainer,
     AAXWAbstractBasePlugin,AAXWJumpinMainWindow,AAXWJumpinAppletManager,
-    AAXWJumpinConfig,AAXWOllamaAIConnOrAgent,
+    AAXWJumpinConfig,AAXWOllamaAIConnOrAgent,AAXWSimpleAIConnOrAgent,
     AAXWJumpinCompoMarkdownContentStrategy,
     AAXWScrollPanel,AIThread,
 )
@@ -583,17 +595,108 @@ class AAXWJumpinOllamaBuiltinPlugin(AAXWAbstractBasePlugin):
 
 
 
-class FileInteractionManager:
-    """管理AI(LLM) 对话持久化访问功能额管理器"""
-
-    #列出指定目录对话历史（或记录）列表；
-
-    #载入项的历史记录，成为Memory/session或可进行互动操作的访问-操作器；（内部挂用LLMconn-或外层 agent进行互动操作。）
-
-    #新建一个互动Session；
 
 
-    pass
+
+##
+# chat history plugin and applet example
+##
+
+#列出指定目录对话历史（或记录）列表；
+#载入项的历史记录，成为Memory/session或可进行互动操作的访问-操作器；（内部挂用LLMconn-或外层 agent进行互动操作。）
+#新建一个互动Session；
+@AAXW_JUMPIN_LOG_MGR.classLogger()
+class HistoriedMemory:
+    """封装单个对话的历史和内存"""
+    AAXW_CLASS_LOGGER: logging.Logger
+    
+    def __init__(self, chat_id: str, memories_store_dir: str):
+        self.chat_id = chat_id
+        self.chat_history_path = os.path.join(memories_store_dir, f"{chat_id}_history.json")
+        #如果文件不存在，自己会创建1个新的文件。
+        self.message_history = FileChatMessageHistory(self.chat_history_path)
+        self.memory = ConversationBufferMemory()
+        
+        # 加载之前的对话历史
+        self.load()
+
+    def load(self):
+        """从文件中读取之前的对话历史"""
+        try:
+            # # 检查聊天历史文件是否存在
+            # if not os.path.exists(self.chat_history_path):
+            #     # 如果文件不存在，创建一个新的空文件
+            #     with open(self.chat_history_path, 'w') as f:
+            #         f.write('[]')  # 初始化为空的 JSON 数组
+
+            # 加载消息
+            messages: List[BaseMessage] = self.message_history.messages
+            self.memory.chat_memory.add_messages(messages)
+            self.AAXW_CLASS_LOGGER.info(f"加载的消息: {messages}")
+        except Exception as e:
+            self.AAXW_CLASS_LOGGER.error(f"加载历史消息时发生错误: {e}")
+
+    def save(self, message: Union[AIMessage,HumanMessage,SystemMessage]):
+        """保存对话到历史记录"""
+        # 添加消息到内存
+        self.memory.chat_memory.add_message(message)
+        # 持久化写入文件
+        self.message_history.add_message(message)
+
+    def getMemory(self):
+        """获取当前内存状态"""
+        return self.memory.load_memory_variables({})
+
+    def rename(self, new_chat_id: str):
+        """重命名聊天历史文件并更新实例指向新的文件"""
+        new_chat_history_path = os.path.join(os.path.dirname(self.chat_history_path), f"{new_chat_id}_history.json")
+        
+        # 检查新文件是否已存在
+        if os.path.exists(new_chat_history_path):
+            self.AAXW_CLASS_LOGGER.info(f"聊天历史 {new_chat_id} 已存在，无法重命名。")
+            return False
+        
+        # 重命名文件
+        os.rename(self.chat_history_path, new_chat_history_path)
+        
+        # 更新实例的属性
+        self.chat_id = new_chat_id
+        self.chat_history_path = new_chat_history_path
+        self.message_history = FileChatMessageHistory(self.chat_history_path)  # 重新初始化 FileChatMessageHistory
+        
+        self.AAXW_CLASS_LOGGER.info(f"聊天历史已重命名为: {new_chat_id}")
+        return True
+
+@AAXW_JUMPIN_LOG_MGR.classLogger()
+class FileAIMemoryManager:
+    """管理多个AI(LLM) 对话持久化访问功能的管理器"""
+    AAXW_CLASS_LOGGER: logging.Logger
+
+    def __init__(self, config: AAXWJumpinConfig):
+        self.config = config
+        self.storeDirName = "memories"
+        self.memoriesStoreDir = os.path.join(self.config.appWorkDir, self.storeDirName)
+        # self._initRes()
+
+    def initRes(self):
+        """初始化存储目录"""
+        self.AAXW_CLASS_LOGGER.info(f"检测到的记忆存储目录: {self.memoriesStoreDir}")
+        if not os.path.exists(self.memoriesStoreDir):
+            os.makedirs(self.memoriesStoreDir)
+
+    def listMemories(self) -> List[str]:
+        """列出所有聊天历史的ID"""
+        return [f[
+            :-len('_history.json')
+        ] for f in os.listdir(self.memoriesStoreDir) if f.endswith('_history.json')]
+
+    def loadOrCreateMemories(self, chat_id: str) -> HistoriedMemory:
+        """加载指定聊天历史"""
+        chat_history_path = os.path.join(self.memoriesStoreDir, f"{chat_id}_history.json")
+        print(f"准备加载或创建 {chat_id} 对应文件。")
+        return HistoriedMemory(chat_id, self.memoriesStoreDir)
+
+
 
 @AAXW_JUMPIN_LOG_MGR.classLogger()
 class AAXWJumpinChatHistoryExpApplet(AAXWAbstractApplet):
@@ -622,21 +725,12 @@ class AAXWJumpinChatHistoryExpApplet(AAXWAbstractApplet):
         # else:
         #     return ""
 
-    def _saveChatHistory(self):
+    def _toggleLeftWindows(self): 
         """保存聊天历史到本地文件"""
-        # 这里实现保存聊天历史的逻辑
-        self.AAXW_CLASS_LOGGER.info("打开历史记录列表")
-        # # 示例代码：将聊天历史写入文件
-        # with open("chat_history.txt", "a") as file:
-        #     file.write("聊天历史内容...\n")  # 这里应替换为实际聊天内容
+        # 
+        self.AAXW_CLASS_LOGGER.info("打开/关闭历史记录列表")
+        self.mainWindow.leftToolsMessageWindow.toggleVisibility()
 
-    @override
-    def onAdd(self):
-
-        self.toolsFrame=self._createToolsMessagePanel()
-        self.AAXW_CLASS_LOGGER.info(f"{self.name} Applet被添加")
-        pass
-    
 
     # 创建1个工具菜单组件-对应本applet；（界面）
     def _createToolsMessagePanel(self):
@@ -671,11 +765,94 @@ class AAXWJumpinChatHistoryExpApplet(AAXWAbstractApplet):
         
         # 创建保存聊天历史按钮
         left_win_button = QPushButton("<<<")
-        left_win_button.clicked.connect(self._saveChatHistory)
+        left_win_button.clicked.connect(self._toggleLeftWindows)
         toolbar.addWidget(left_win_button)
 
         layout.addWidget(toolbar)
         return toolsframe
+
+       
+    def _createHistoriedMemoriesPanel(self) -> QListWidget:
+        """创建一个用于展示历史聊天或记忆记录的面板"""
+        # 创建 QListWidget 用于展示历史记录
+        self.memories_list_widget = QListWidget()
+
+        # 添加默认项并连接槽函数
+        default_item = QListWidgetItem("--New 新增--")
+        self.memories_list_widget.addItem(default_item)
+        self.memories_list_widget.itemClicked.connect(self.on_item_clicked)
+
+        # 获取历史记录
+        mems = self.historiedMemoryManager.listMemories()
+        for record in mems:
+            # 创建一个 QWidget 作为项的容器
+            item_widget = QWidget()
+            item_layout = QHBoxLayout(item_widget)
+
+            # 创建记录项
+            record_label = QLabel(record)
+            item_layout.addWidget(record_label)
+
+            # 创建加载按钮
+            load_button = QPushButton("加载")
+            load_button.clicked.connect(lambda checked, chat_id=record: self.load_memory(chat_id))
+            item_layout.addWidget(load_button)
+
+            # 创建 QListWidgetItem
+            list_item = QListWidgetItem()
+            self.memories_list_widget.addItem(list_item)
+
+            # 将 QWidget 设置为 QListWidgetItem 的小部件
+            self.memories_list_widget.setItemWidget(list_item, item_widget)
+
+        return self.memories_list_widget
+
+    def on_item_clicked(self, item: QListWidgetItem):
+        """处理点击事件"""
+        if item.text() == "--New 新增--":
+            self.create_new_memory()
+
+    def create_new_memory(self):
+        """创建新的对话和记忆"""
+        self.AAXW_CLASS_LOGGER.info("创建新的对话和记忆")
+        # 在这里添加创建新对话和记忆的逻辑
+        # 例如，打开一个对话框让用户输入新对话的内容
+        # 或者直接调用相应的管理器方法来创建新的记忆
+
+    def load_memory(self, chat_id: str):
+        """加载指定的聊天历史或记忆"""
+        self.AAXW_CLASS_LOGGER.info(f"加载聊天历史: {chat_id}")
+        # 这里可以调用相应的加载逻辑，例如：
+        self.historiedMemoryManager.loadOrCreateMemories(chat_id)
+        # 你可以在这里添加更多的逻辑来更新界面或显示加载的内容
+
+    @override
+    def onAdd(self):
+
+        self.simpleAIConnOrAgent:AAXWSimpleAIConnOrAgent=self.dependencyContainer.getAANode(
+            "simpleAIConnOrAgent")
+        
+        self.historiedMemoryManager=FileAIMemoryManager(self.jumpinConfig)
+        self.historiedMemoryManager.initRes()
+        #
+        self.toolsFrame=self._createToolsMessagePanel()
+        self.memoryListFrame=self._createHistoriedMemoriesPanel()
+        self.AAXW_CLASS_LOGGER.info(f"{self.name} Applet被添加")
+        pass
+
+    @override
+    def onRemove(self):
+        if self.memoryListFrame:
+            self.memoryListFrame.deleteLater()
+            self.memoryListFrame = None
+    
+        if self.toolsFrame:
+            self.toolsFrame.deleteLater()
+            self.toolsFrame = None
+
+        self.AAXW_CLASS_LOGGER.info(f"{self.name} Applet被移除")
+        pass
+    
 
     @override
     def onActivate(self):
@@ -690,7 +867,7 @@ class AAXWJumpinChatHistoryExpApplet(AAXWAbstractApplet):
 
         #  将输入触发逻辑关联给inputkit
         #
-        # self.mainWindow.inputPanel.funcButtonRight.clicked.connect(self.doInputCommitAction)
+        self.mainWindow.inputPanel.funcButtonRight.clicked.connect(self.doInputCommitAction)
 
 
         #按钮标志与基本按钮曹关联
@@ -698,8 +875,47 @@ class AAXWJumpinChatHistoryExpApplet(AAXWAbstractApplet):
 
         #加上工具组件
         self.mainWindow.topToolsMessageWindow.setCentralWidget(self.toolsFrame)  #type:ignore
+
+        #加上左侧列表 
+        self.mainWindow.leftToolsMessageWindow.setCentralWidget(self.memoryListFrame) #type:ignore
         self.AAXW_CLASS_LOGGER.info(f"{self.name} Applet被激活")
         pass
+
+    def doInputCommitAction(self):
+        self.AAXW_CLASS_LOGGER.debug("Right button clicked!")
+        text = self.mainWindow.inputPanel.promptInputEdit.text()
+
+         # 用户输入容消息气泡与内容初始化
+        rid = int(time.time() * 1000)
+        self.mainWindow.msgShowingPanel.addRowContent(
+            content=text, rowId=rid, contentOwner="user_xiaowang",
+            contentOwnerType=AAXWScrollPanel.ROW_CONTENT_OWNER_TYPE_USER,
+        )
+        # self.msgShowingPanel.repaint() #重绘然后然后再等待？
+        
+        # 等待0.5秒
+        # 使用QThread让当前主界面线程等待0.5秒 #TODO 主要为了生成rowid，没必要等待。
+        QThread.msleep(500) 
+        # 反馈内容消息气泡与内容初始化
+        rrid = int(time.time() * 1000)
+        self.mainWindow.msgShowingPanel.addRowContent(
+            content="", rowId=rrid, contentOwner="assistant_aaxw",
+            contentOwnerType=AAXWScrollPanel.ROW_CONTENT_OWNER_TYPE_OTHERS,
+        )
+
+        #
+        #生成异步处理AI操作的线程
+        #注入要用来执行的ai引擎以及 问题文本+ ui组件id
+        #FIXME 执行时需要基于资源，暂时锁定输入框；
+        #           多重提交，多线程处理还没很好的做，会崩溃；
+        self.aiThread = AIThread(text, str(rrid), self.simpleAIConnOrAgent)
+        self.aiThread.updateUI.connect(self.mainWindow.msgShowingPanel.appendContentByRowId)
+        self.aiThread.start()
+       
+        self.mainWindow.inputPanel.promptInputEdit.clear()
+
+        ...
+    
 
     @override
     def onInactivate(self):
@@ -713,20 +929,16 @@ class AAXWJumpinChatHistoryExpApplet(AAXWAbstractApplet):
         # self.mainWindow.inputPanel.promptInputEdit.returnPressed.disconnect(self.doInputCommitAction)
         # self.aiThread=None
 
-        #清理工具组件引用；
-        self.mainWindow.topToolsMessageWindow.removeCentralWidget() 
         #
+        self.mainWindow.leftToolsMessageWindow.removeCentralWidget()
 
+        #清理工具组件引用；
+        self.mainWindow.topToolsMessageWindow.removeCentralWidget()
+        #
         self.AAXW_CLASS_LOGGER.info(f"{self.name} Applet被停用")
         pass
 
-    @override
-    def onRemove(self):
-        if self.toolsFrame:
-            self.toolsFrame.deleteLater()
-            self.toolsFrame = None
-        self.AAXW_CLASS_LOGGER.info(f"{self.name} Applet被移除")
-        pass
+
 
 
 @AAXW_JUMPIN_LOG_MGR.classLogger()
@@ -762,9 +974,6 @@ class AAXWJumpinChatHistoryExpPlugin(AAXWAbstractBasePlugin):
     def onUninstall(self):
         self.AAXW_CLASS_LOGGER.info(f"{self.__class__.__name__}.onUninstall()")
         pass
-
-
-
 
 
 
