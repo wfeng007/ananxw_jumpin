@@ -1302,8 +1302,19 @@ class AAXWJumpinConfig:
 # AI相关
 #
 class AAXWAbstractAIConnOrAgent(ABC):
+
+    # TODO 之后考虑增加回调实例/类来增回调时机处理。 或者1个实现enter exit的with处理类。
+    # class AbsCallback(ABC):
+    #     def onStart(self,input):...
+    #     def onResponse(self,str):...
+    #     def onFinish(self,wholeResponse):...
+    #     def onException(self,e):...
+
+        
     @abstractmethod
-    def requestAndCallback(self, prompt: str, func: Callable[[str], None],isStream: bool = True):
+    def requestAndCallback(self, 
+            prompt: str, func: Callable[[str], None],isStream: bool = True
+        ):
         # raise NotImplementedError("Subclasses must implement sendRequestStream method")
         ...
 
@@ -1362,7 +1373,11 @@ class AAXWSimpleAIConnOrAgent(AAXWAbstractAIConnOrAgent):
         self.llm: ChatOpenAI = ChatOpenAI(**chat_params)
     
     @override
-    def requestAndCallback(self, prompt: str, func: Callable[[str], None], isStream: bool = True):
+    def requestAndCallback(self, 
+            prompt: str, 
+            func: Callable[[str], None], 
+            isStream: bool = True
+        ):
         """
         发送请求到LLM，并通过回调函数处理流式返回的数据。
         
@@ -1370,9 +1385,11 @@ class AAXWSimpleAIConnOrAgent(AAXWAbstractAIConnOrAgent):
         :param func: 用于处理每次接收到的部分响应的回调函数。
         :param isStream: 是否使用流式响应。
         """
+        
         system_message = SystemMessage(content=self.SYSTME_PROMPT_TEMPLE)
         human_message = HumanMessage(content=self.USER_PROMPT_TEMPLE.format(message=prompt))
         messages = [system_message, human_message]
+
         
         if isStream:
             for msgChunk in self.llm.stream(messages):
@@ -1382,6 +1399,8 @@ class AAXWSimpleAIConnOrAgent(AAXWAbstractAIConnOrAgent):
         else:
             response = self.llm.invoke(messages)
             func(str(response.content))
+
+
 
     def embedding(self, prompt: str, model: str = "text-embedding-ada-002"):
         """
@@ -1573,7 +1592,11 @@ class AAXWOllamaAIConnOrAgent(AAXWAbstractAIConnOrAgent):
     
 
     @override
-    def requestAndCallback(self, prompt: str, func: Callable[[str], None],isStream: bool = True):
+    def requestAndCallback(self, 
+            prompt: str, 
+            func: Callable[[str], None],
+            isStream: bool = True
+        ):
         """使用OpenAI API风格生成流式聊天完成"""
         formatted_prompt = self.USER_PROMPT_TEMPLE.format(message=prompt)
         messages = [
@@ -2883,7 +2906,7 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
 
         #去除 槽函数
         self.mainWindow.inputPanel.funcButtonRight.clicked.disconnect(self.doInputCommitAction)
-        self.mainWindow.inputPanel.promptInputEdit.returnPressed.disconnect(self.doInputCommitAction)
+        # self.mainWindow.inputPanel.promptInputEdit.returnPressed.disconnect(self.doInputCommitAction)
         self.aiThread=None
         # 无特别后台资源变更，无需恢复；
         
