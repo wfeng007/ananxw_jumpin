@@ -1337,7 +1337,6 @@ class AAXWSimpleAIConnOrAgent(AAXWAbstractAIConnOrAgent):
     你的名字是ANAN是一个AI入口助理;
     请关注用户跟你说的内容，和善的回答用户，与用户要求。
     如果用户说的不明确，请提示用户可以说的更明确。
-    如果被要求纯文本来回答，在段落后面增加<br/>标签。
     """
 
     USER_PROMPT_TEMPLE="""
@@ -1992,6 +1991,7 @@ class AAXWContentBlockStrategy(ABC):
     # def adjustSize(self,widget: QWidget): #这个有用？
     #     pass
 
+# TODO 需支持plaintext/unknown 以及其他结构。
 class AAXWCodeHighlighter(QSyntaxHighlighter):
     def __init__(self, parent=None):
         super().__init__(parent) #type: ignore
@@ -2016,6 +2016,7 @@ class AAXWCodeHighlighter(QSyntaxHighlighter):
         commentFormat.setForeground(QColor("#6A9955"))
         self.highlightingRules.append((QRegularExpression("#.*"), commentFormat))
 
+    @override
     def highlightBlock(self, text):
         for pattern, format in self.highlightingRules:
             expression = QRegularExpression(pattern)
@@ -2068,15 +2069,29 @@ class AAXWCodeBlockWidget(QWidget): #QWidget有站位，但是并不绘制出来
         topLayout.addWidget(self.titleLabel)
 
         topLayout.addStretch()
-        for color in ['#ED6A5E', '#F4BF4F', '#61C554']:  # 红、黄、绿按钮
+        
+        # 创建复制按钮
+        copy_button = QPushButton("复制")
+        copy_button.setFixedHeight(20)  # 控制高度为30
+        copy_button.setStyleSheet(f"""
+            background-color: #ED6A5E;
+            border: 1px solid #1E1E1E;
+            border-radius: 3px;
+        """)
+        copy_button.clicked.connect(self.copy_to_clipboard)  # 连接点击事件
+        topLayout.addWidget(copy_button)
+
+        # 其他按钮
+        for color in ['#F4BF4F', '#61C554']:  # 黄、绿按钮
             button = QPushButton()
-            button.setFixedSize(15, 15)
+            button.setFixedSize(20, 20)
             button.setStyleSheet(f"""
                 background-color: {color};
                 border: 1px solid #1E1E1E;
                 border-radius: 3px;
             """)
             topLayout.addWidget(button)
+        
         layout.addWidget(topWidget)
 
         # 修改代码编辑器的设置
@@ -2120,6 +2135,25 @@ class AAXWCodeBlockWidget(QWidget): #QWidget有站位，但是并不绘制出来
 
         #会基于sizeHint调整；
         self.codeEdit.textChanged.connect(self.adjustSize)
+    
+    def copy_to_clipboard(self):
+        """复制内容到剪贴板并更新按钮状态"""
+        clipboard = QApplication.clipboard()
+        content_to_copy = self.codeEdit.toPlainText()  # 获取代码编辑器的完整内容
+        clipboard.setText(content_to_copy)
+
+        # 更新按钮状态
+        button:QPushButton = self.sender()  # 获取触发信号的按钮 #type:ignore
+        button.setText("已复制")
+        button.setEnabled(False)  # 禁用按钮
+
+        # 3秒后恢复按钮状态
+        QTimer.singleShot(1000, lambda: self._restore_button(button))
+
+    def _restore_button(self, button):
+        """恢复按钮状态"""
+        button.setText("复制")
+        button.setEnabled(True)
 
     def setTitle(self, title):
         self.title = title
@@ -3111,7 +3145,8 @@ class AAXWScrollPanel(QFrame):
 
     def appendContentByRowId(self, text, rowId: str):
         """
-        在指定Rowid的Row中追加内容
+        在指定Rowid的Row中追加内容；
+        可用于回调操作时更新指定块内容；
         """
         # 查找对应的 QWidget 并追加内容
         # 用名字查找元素
@@ -3125,6 +3160,14 @@ class AAXWScrollPanel(QFrame):
             # self.mainWindow.adjustHeight()
         else:
             self.AAXW_CLASS_LOGGER.debug(f"Not found widget by name: {self.ROW_BLOCK_NAME_PREFIX}_{rowId}")
+
+    def clearContent(self):
+        """清理滚动面板中的所有内容，会销毁内部组件所有控件。"""
+        for i in reversed(range(self.scrollLayout.count())): 
+            widget = self.scrollLayout.itemAt(i).widget()
+            if widget is not None:
+                widget.deleteLater()  # 删除小部件
+        self.scrollLayout.update()  # 更新布局以反映更改
 
     # 
     # Panel的内部基于scroll-widget增加组件后的期望尺寸；

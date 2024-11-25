@@ -16,6 +16,7 @@
 #
 # 额外的内置插件。提供样例可简单使用。
 #
+from cmd import PROMPT
 import sys,os,time
 from datetime import datetime  # Add this import
 import logging
@@ -807,22 +808,9 @@ class AAXWJumpinChatHistoryExpApplet(AAXWAbstractApplet):
             chat_id = item.text()  # 获取被点击项的文本内容
             self.load_memory(chat_id)  # 调用加载方法
 
-    def create_new_memory(self):
-        """创建新的对话和记忆"""
-        self.AAXW_CLASS_LOGGER.info("创建新的对话和记忆")
-        #创建1个新的chat/memo 并且作为当前chat/memo
-        self.currentHistoriedMemory=self.historiedMemoryManager.loadOrCreateMemories()
-        #刷新列表展示
-        self._refreshMemoriesList()
 
-    def load_memory(self, chat_id: str):
-        """加载指定的聊天历史或记忆"""
-        self.AAXW_CLASS_LOGGER.info(f"加载聊天历史: {chat_id}")
-        
-        self.currentHistoriedMemory=self.historiedMemoryManager.loadOrCreateMemories(chat_id)
-        #
-        # TODO 展示当前选择的memo。
-        #
+
+
 
     def _refreshMemoriesList(self):
         """刷新历史记录列表"""
@@ -905,6 +893,127 @@ class AAXWJumpinChatHistoryExpApplet(AAXWAbstractApplet):
         self.AAXW_CLASS_LOGGER.info(f"{self.name} Applet被激活")
         pass
 
+    @override
+    def onInactivate(self):
+        #
+        self.showingPanel.contentBlockStrategy=self.backupContentBlockStrategy #type:ignore 
+        self.backupContentBlockStrategy=None #type:ignore
+
+
+        #去除 槽函数
+        self.mainWindow.inputPanel.funcButtonRight.clicked.disconnect(self.doInputCommitAction)
+        self.aiThread=None
+
+        #
+        self.mainWindow.leftToolsMessageWindow.removeCentralWidget()
+
+        #清理工具组件引用；
+        self.mainWindow.topToolsMessageWindow.removeCentralWidget()
+        #
+        self.AAXW_CLASS_LOGGER.info(f"{self.name} Applet被停用")
+        pass
+
+    def create_new_memory(self):
+        """创建新的对话和记忆"""
+        self.AAXW_CLASS_LOGGER.info("创建新的对话和记忆")
+        #创建1个新的chat/memo 并且作为当前chat/memo
+        self.currentHistoriedMemory=self.historiedMemoryManager.loadOrCreateMemories()
+        #刷新列表展示
+        self._refreshMemoriesList()
+
+    def load_memory(self, chat_id: str):
+        """加载指定的聊天历史或记忆"""
+        self.AAXW_CLASS_LOGGER.info(f"加载聊天历史: {chat_id}")
+        
+        self.currentHistoriedMemory = self.historiedMemoryManager.loadOrCreateMemories(chat_id)
+        
+        #清理
+        self.mainWindow.msgShowingPanel.clearContent()
+        
+        # 使用类似steaming方式逐步更新界面；模拟AIThread处理。即可。
+        # 创建并启动加载历史消息的线程
+        # self.loadMemoryThread = self.LoadMemoryThread(self.currentHistoriedMemory)
+        # self.loadMemoryThread.addRowContentSignal.connect(self.addRowContent)  # 连接添加行内容信号
+        # self.loadMemoryThread.appendContentSignal.connect(self.appendContent)    # 连接追加内容信号
+        # self.loadMemoryThread.start()  # 启动线程
+
+        # 同步方式 不容易崩溃？
+        self._mockAIUpdateUI()
+
+    def addRowContent(self, content: str, rowId: str, contentOwner: str,contentOwnerType:str):
+        """添加行内容的槽函数"""
+        self.mainWindow.msgShowingPanel.addRowContent(
+            content=content, rowId=rowId, contentOwner=contentOwner, 
+            contentOwnerType=contentOwnerType
+        )
+
+    def appendContent(self, content: str, rowId: str):
+        """追加内容的槽函数"""
+        self.mainWindow.msgShowingPanel.appendContentByRowId(content, rowId=rowId)
+        # 同步更新界面会阻塞界面- 参考_mockAIUpdateUI方法。
+       
+
+    @AAXW_JUMPIN_LOG_MGR.classLogger()
+    class LoadMemoryThread(QThread):
+        """用于加载历史消息并更新UI的线程"""
+        AAXW_CLASS_LOGGER: logging.Logger
+        addRowContentSignal = Signal(str, str, str,str)  # (内容, rowId, contentOwner,contentOwnerType)
+        appendContentSignal = Signal(str, str)        # (内容, rowId)
+
+        def __init__(self, memory: HistoriedMemory):
+            super().__init__()
+            self.memory = memory
+
+        def run(self):
+            """线程运行方法"""
+            messages = self.memory.message_history.messages
+            for msg in messages:
+                rowId = str(datetime.now().timestamp())
+                if isinstance(msg, HumanMessage):
+                    user_content = msg.content
+                    self.addRowContentSignal.emit(user_content, rowId, "user",
+                        AAXWScrollPanel.ROW_CONTENT_OWNER_TYPE_USER)  # 通过信号更新用户消息
+                elif isinstance(msg, AIMessage):
+                    self.addRowContentSignal.emit("", rowId,"ai",
+                        AAXWScrollPanel.ROW_CONTENT_OWNER_TYPE_OTHERS)  # 发送占位符
+                    self.msleep(300)  # 模拟延迟
+                    ai_content = msg.content
+                    ai_content = str(ai_content)
+                    for chunk in ai_content.splitlines(keepends=True):
+                        self.appendContentSignal.emit(chunk, rowId)  # 通过信号更新AI消息
+                        self.msleep(100)
+                self.msleep(300)  # 模拟延迟
+
+    def _mockAIUpdateUI(self):
+        """模拟更新UI的方法，循环读取消息并更新界面"""
+        messages = self.currentHistoriedMemory.message_history.messages
+
+        # 遍历消息并更新UI
+        for msg in messages:
+            if isinstance(msg, HumanMessage):
+                # 处理用户消息
+                user_content = msg.content
+                # 使用 addRowContent 方法添加用户消息
+                self.mainWindow.msgShowingPanel.addRowContent(user_content, rowId=str(datetime.now().timestamp()), contentOwner="user", contentOwnerType=self.mainWindow.msgShowingPanel.ROW_CONTENT_OWNER_TYPE_USER)
+            
+            elif isinstance(msg, AIMessage):
+                # 处理AI消息
+                ai_content = msg.content
+                # 生成一个唯一的 rowId
+                rowId = str(datetime.now().timestamp())
+                # 添加一个空内容行作为占位符
+                self.mainWindow.msgShowingPanel.addRowContent("", rowId=rowId, contentOwner="ai", contentOwnerType=self.mainWindow.msgShowingPanel.ROW_CONTENT_OWNER_TYPE_OTHERS)
+
+                # 确保 ai_content 是字符串类型
+                ai_content = str(ai_content)  # 添加此行以确保类型正确
+                # 模拟流式更新AI消息
+                for chunk in ai_content.splitlines(keepends=True):  # 保留换行符
+                    # 使用 appendContentByRowId 方法追加AI消息
+                    self.mainWindow.msgShowingPanel.appendContentByRowId(chunk, rowId=rowId)
+                    time.sleep(0.05)  # 模拟延迟，给用户更好的体验
+
+            time.sleep(0.1)  # 模拟延迟，给用户更好的体验
+
     def doInputCommitAction(self):
         self.AAXW_CLASS_LOGGER.debug("Right button clicked!")
         text = self.mainWindow.inputPanel.promptInputEdit.text()
@@ -942,7 +1051,7 @@ class AAXWJumpinChatHistoryExpApplet(AAXWAbstractApplet):
             
             
 
-        self.aiThread = self.MyAIThread(
+        self.aiThread = self.MemoAIThread(
             text, str(rrid), self.simpleAIConnOrAgent, self.currentHistoriedMemory)
         self.aiThread.updateUI.connect(self.mainWindow.msgShowingPanel.appendContentByRowId)
         self.aiThread.start()
@@ -951,31 +1060,50 @@ class AAXWJumpinChatHistoryExpApplet(AAXWAbstractApplet):
 
         ...
 
-    @AAXW_JUMPIN_LOG_MGR.classLogger()
-    class MyAIThread(AIThread):
+    @AAXW_JUMPIN_LOG_MGR.classLogger(level=logging.DEBUG)
+    class MemoAIThread(AIThread):
         AAXW_CLASS_LOGGER: logging.Logger
 
-    
+        PROMPT_TEMPLE=PromptTemplate(
+            input_variables=["chat_history", "question"],
+            template="根据之前的对话历史:'{chat_history}'; 回答相关问题:{question}"
+        )
+
         #newContent,id 对应：ShowingPanel.appendToContentById 回调
         updateUI = Signal(str,str)  
 
         def __init__(self,text:str,uiCellId:str,llmagent:AAXWAbstractAIConnOrAgent,
                 hMemo:HistoriedMemory):
+            #
+
             super().__init__(text=text,uiCellId=uiCellId,llmagent=llmagent)
             self.hMemo=hMemo
             self.wholeResponse=""
             
+        
             
         def run(self):
             self.msleep(500)  # 执行前先等界面渲染
             exec_e=None
+            prompted=self.text
             try:
                 #onstart
+                #这里应该增加合并 历史信息到指定模版位置
                 if self.text:
-                    human_message = HumanMessage(content=self.text)
-                    self.hMemo.save(human_message)
 
-                self.llmagent.requestAndCallback(self.text, self.onResponse)
+                    #获取历史信息,并基于历史memo/chat构建提示词；
+                    hMsgs=self.hMemo.memory.chat_memory.messages
+                    chat_history_str = "\n".join([str(msg.content) for msg in hMsgs])
+                    prompted=self.PROMPT_TEMPLE.format(
+                        chat_history=chat_history_str, question=self.text)
+                    human_message = HumanMessage(content=self.text)
+
+                    #只记录 question/当前命令（不包含构建的完整prompt）
+                    self.hMemo.save(human_message)
+                else:
+                    return #直接结束没有提问题内容
+                self.AAXW_CLASS_LOGGER.debug(f"将向LLM发送完整提示词: {prompted}")
+                self.llmagent.requestAndCallback(prompted, self.onResponse)
             except Exception as e:
                 self.AAXW_CLASS_LOGGER.error(f"An exception occurred: {str(e)}")
                 exec_e=e
@@ -995,25 +1123,7 @@ class AAXWJumpinChatHistoryExpApplet(AAXWAbstractApplet):
 
     
 
-    @override
-    def onInactivate(self):
-        #
-        self.showingPanel.contentBlockStrategy=self.backupContentBlockStrategy #type:ignore 
-        self.backupContentBlockStrategy=None #type:ignore
 
-
-        #去除 槽函数
-        self.mainWindow.inputPanel.funcButtonRight.clicked.disconnect(self.doInputCommitAction)
-        self.aiThread=None
-
-        #
-        self.mainWindow.leftToolsMessageWindow.removeCentralWidget()
-
-        #清理工具组件引用；
-        self.mainWindow.topToolsMessageWindow.removeCentralWidget()
-        #
-        self.AAXW_CLASS_LOGGER.info(f"{self.name} Applet被停用")
-        pass
 
 
 
@@ -1057,7 +1167,6 @@ class AAXWJumpinChatHistoryExpPlugin(AAXWAbstractBasePlugin):
 #
 # 简单例子
 #
-# 一个带矿机
 #
 @AAXW_JUMPIN_LOG_MGR.classLogger()
 class AAXWJumpinTopWinExpApplet(AAXWAbstractApplet):
@@ -1221,3 +1330,4 @@ class AAXWJumpinTopWinExpPlugin(AAXWAbstractBasePlugin):
     def onUninstall(self):
         self.AAXW_CLASS_LOGGER.info(f"{self.__class__.__name__}.onUninstall()")
         pass
+
