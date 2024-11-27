@@ -16,7 +16,6 @@
 #
 # 额外的内置插件。提供样例可简单使用。
 #
-from cmd import PROMPT
 import sys,os,time
 from datetime import datetime  # Add this import
 import logging

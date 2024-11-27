@@ -31,31 +31,27 @@
 # 0.5+: @Date:2024-11-03左右开始
 #      已增加可切换的Applet 功能，applet可根据自己功能逻辑调用资源与界面完成相对专门的特性功能；
 #      已增简易插件框架；支持二次开发；
-#      版本升级到0.5 
 # 
 # 计划与路线
-# 0.6+: @Date:2024-11-12左右开始 
+# 0.6+: @Date:2024-11-12左右开始 - 11-26日左右结束 
 #       已增加通用工具消息面板（上或下），附加展示功能面板（左或右），
 #           不同Applet可以定制自己的工具面板，展示面板等等。
-#       已增加Ollama管理功能；（使用单独的内置插件模块文件：builtin_plugins.py实现）
-#       TODO chat 信息展示界面问题修订，代码块展示功能按钮基本实现；2 增加未知代码块类型的展示（全白）；
-#       打包与发布版初步建设；
+#       已增加 本地Ollama模型使用与简单管理功能（使用单独的内置插件模块文件：builtin_plugins.py实现）
+#       chat 信息展示界面问题修订，代码块展示功能按钮基本实现；
 #       注释说明整体梳理，初步建设1抡项目说明与二开参考说明
-#       增加基本向量数据库，支持形成基本rag能力；并提供例子；
-#       增加session（含memory）与多轮对话功能，提示词模版功能；并提供例子；
+#       增加chat history（memory）与多轮对话功能，提示词模版功能；并提供例子；
 #
 # 0.7+：TODO 
-#       可集成密塔等搜索（可插件方式）
+#       代码块需支持plaintext/unknown 以及其他结构，未知，平文为全白。
+#       增加基本向量数据库，支持形成基本rag能力；并提供例子；
+#       打包与发布版初步建设；
+#       提供其他ai相关样例，如：chateveredit等
 #       coze集成对接应用样例；
 #       dify集成对接样例；
-# 
-# ##基本特性：
-# 一个提示符操作界面
-# 可以快捷键唤起展示的；
-# 提供基本的提示发送与结果展示界面；
-# 可支持多轮交互；
-# 可支持富文本范围内容展示；
-# 提供可切换的AI LLM/Agent的对接；
+#       可集成密塔等搜索；
+#       支持可能轻量级，流程式agent/多agent
+#       轻量级meta agent；
+#       
 # 
 #
 
@@ -161,7 +157,7 @@ import json
 _ = load_dotenv(find_dotenv())  # 读取本地 .env 文件，里面定义了 OPENAI_API_KEY
 
 # 版本
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 
 # 日志器
@@ -1969,7 +1965,7 @@ class AAXWVBoxLayout(QVBoxLayout):
 
 
 #TODO 这个类族是个策略模式，但是感觉是否应该简化？
-#           视乎就是支持 AAXWScrollPanel的。至少contentOwnerType 是。contentOwner。
+#           就是支持 AAXWScrollPanel的，至少contentOwnerType 是。contentOwner。
 #           Content 就是指内容。实际是否可以改造为create 特定的界面？比如配置界面？
 # 相当于type3注入ContentBlock。
 class AAXWContentBlockStrategy(ABC):
