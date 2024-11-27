@@ -80,18 +80,23 @@ python ananxw_jumpin_allin1f.py
 - 已提供系统托盘，可访问更多功能。
 
 Applet切换：  
-- 程序支持多个Applet，每个Applet可以提供不同的功能。使用界面坐上角Applet切换（或默认快捷键 `Tab` ）在不同Applet间切换。
+- 程序支持多个Applet，每个Applet可以提供不同的功能。使用界面左上角Applet切换（或默认快捷键 `Tab`,当前为内置插件实现。）在不同Applet间切换。
 
+如下图为本工具平台基本界面，左上“🐶OP”为切换applet时会有不同的title展示（小程序标题，applet-title）。
+![Base UI1](./readme_ref_res/base_ui1.png)
 
 ## 🔧 开发者快速指南
 
-主干程序均在[`ananxw_jumpin_allin1f.py`](ananxw_jumpin_allin1f.py)文件实现。如当前版本迭代后如未及时更新说明，请按照实际代码为准。
+- 主干程序均在[`ananxw_jumpin_allin1f.py`](ananxw_jumpin_allin1f.py)文件实现。如当前版本迭代后如未及时更新说明，请按照实际代码为准。该除环境变量必须得设定外，可以在任意位置上建立anaxw_jumpin目录，只用该文件启动本工具。其中包含主干框架与最简单的内置插件与Applet，AI-访问程序等。
+- 内置插件独立文件[`builtin_plugins.py`](builtin_plugins.py)，该文件为孵化中的内置插件与Applet及样例代码。如运行[`ananxw_jumpin_allin1f.py`](ananxw_jumpin_allin1f.py) 时同目录有[`builtin_plugins.py`](builtin_plugins.py) 会自动加载。 其中包含的插件，见以下样例代码部分说明。
+
+
 ### 📦 主要外部依赖
 - python 3.9+
 - pyside6：界面主要为qt开发；
 - pynput：全局快捷键；
 - openai-api：AI-LLM对接；
-- langchain：AI建设；
+- langchain(0.3.0)：AI建设；(langchain版本变更较快，已使用尽量基本功能，如使用其他版本报错，请告知。)
 
 ### 📝 插件开发
 
@@ -163,22 +168,41 @@ class MyPlugin(AAXWAbstractPlugin):
 （建设中...）
 
 ### 🔍 示例代码与样例
+**注意：如位置变更请直接对应文件中搜索类名**
 
 1. 内置的插件样例，附加输入框的快键键功能等（位置可能会有变化）：   
-[`ananxw_jumpin_allin1f.py #L2486 AAXWJumpinDefaultBuiltinPlugin` ](ananxw_jumpin_allin1f.py#L2486) # 内置插件实现样例
+[`ananxw_jumpin_allin1f.py #L2735 AAXWJumpinDefaultBuiltinPlugin` ](ananxw_jumpin_allin1f.py#L2735) # 内置插件实现样例
 
 2. 内置的Applet样例，1个由插件去加载的简单applet实现~~ollama访问~~ （位置可能会有变化）；
-[`ananxw_jumpin_allin1f.py #L2440 AAXWJumpinDefaultSimpleApplet` ](ananxw_jumpin_allin1f.py#L2440) # 内置applet样例
+[`ananxw_jumpin_allin1f.py #L2440 AAXWJumpinDefaultSimpleApplet` ](ananxw_jumpin_allin1f.py#L2651) # 内置applet样例
 
 3. 内置的Applet样例，默认applet实现各种默认主要应用功能（位置可能会有变化）；
-[`ananxw_jumpin_allin1f.py #L2440 AAXWJumpinDefaultCompoApplet` ](ananxw_jumpin_allin1f.py#L2578) # 内置applet样例
+[`ananxw_jumpin_allin1f.py #L2827 AAXWJumpinDefaultCompoApplet` ](ananxw_jumpin_allin1f.py#L2827) # 内置applet样例
+
+
+**注意：当前版本[`builtin_plugins.py`](builtin_plugins.py) 文件样例：**
+
+4. 本地Ollama及其模型使用与基本管理样例，包含插件与applet实现：[`builtin_plugins.py #L239 AAXWJumpinOllamaSimpleApplet` ](builtin_plugins.py#L239)
+    - Applet-title:"OLAM"；
+    - 界面如下图：![Ollama Ex UI1](./readme_ref_res/ollama_ex_ui1.png)
+
+5. 本地Memory实现样例，包含插件与applet实现：[`builtin_plugins.py #L718 AAXWJumpinChatHistoryExpApplet` ](builtin_plugins.py#L718)
+    - Applet-title:"OLAM"
+    - 当前使用Langchian的本地文件持久化，在工作目录下，memories目录下保存；
+    - 界面如下图：![Chat history or memory UI1](./readme_ref_res/chathistory_memory_ex_ui1.png)
 
 ## 📝 版本历史与计划
 
-- v0.5+: 增加可切换Applet功能，完善插件框架与机制；
-- v0.4+: 增加工作目录配置，日志功能，简易注入框架
-- v0.3+: 增加Markdown展示气泡
-- v0.2+: 增加托盘功能，支持全局热键
+
+- v0.6: 已增加
+    - builtin_plugins.py 用于孵化的独立内置插件与applet样例；
+    - 本地Ollama模型使用与简单管理功能；
+    - 通用工具消息面板（上或下），附加展示功能面板（左或右）；
+    - chat history（memory）与多轮对话功能，提示词模版功能；并提供例子；
+- v0.5: 已增加可切换Applet功能，完善插件框架与机制；
+- v0.4: 已增加工作目录配置，日志功能，简易注入框架
+- v0.3: 已增加Markdown展示气泡
+- v0.2: 已增加托盘功能，支持全局热键
 
 ### 🌈 计划与路线概要
 v0.6+ 计划
@@ -188,15 +212,21 @@ v0.6+ 计划
 - 完善项目文档与二次开发说明
 
 v0.7+ 计划  
-- 集成密塔等搜索功能(插件方式)
+- 代码块需支持plaintext/unknown 以及其他结构，未知，平文为全白。
+- 增加基本向量数据库，支持形成基本rag能力；并提供例子；
+- 打包与发布版初步建设；
+- 提供其他ai相关集成样例，如：chateveredit，xbrain等
 - coze集成对接应用样例；
 - dify集成对接样例；
-- 流程化或工作流、调度器集成；
+- 可集成密塔等搜索（可插件方式）
+- 支持可能轻量级，流程式agent/多agent
+- 轻量级meta agent；
 
 
 ## 🤝 贡献
 
 欢迎提交Issue和Pull Request！
+欢迎先联系，沟通交流。
 
 ## 📄 许可证
 
@@ -207,5 +237,5 @@ This software is provided without any warranty. The developers and the associate
 
 ## 👨‍💻 作者
 
-小王同学 wfeng007 (wfeng007@163.com) B站:小王同学009
+小王同学 wfeng007 (wfeng007@163.com) 邮件不常看，可B站找:中文昵称+009
 
