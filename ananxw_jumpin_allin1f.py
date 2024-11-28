@@ -86,7 +86,6 @@ if __name__ == "__main__":
 
 from typing import Callable, List, Dict, Type,Any,TypeVar,Union,cast, Tuple
 
-from torch import NoneType
 try:
     from typing import override #python 3.12+ #type:ignore
 except ImportError:
