@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (
 import urllib.parse
 import urllib.request
 import json
+import shutil
 
 
 from langchain_community.chat_message_histories.file import FileChatMessageHistory
@@ -48,7 +49,16 @@ from langchain.schema import (
         SystemMessage  # 等价于OpenAI接口中的system role
     )
 from langchain.memory import ConversationBufferMemory
-from langchain_openai import ChatOpenAI
+from langchain_openai import ChatOpenAI,OpenAIEmbeddings
+from langchain_chroma import Chroma
+from langchain.document_loaders import PyMuPDFLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.document_loaders.word_document import UnstructuredWordDocumentLoader
+# from langchain import Document
+from langchain_core.documents import Document
+
+
+# from langchain_chroma import Chroma
 
 
 
@@ -77,6 +87,9 @@ AAXW_JUMPIN_MODULE_LOGGER:logging.Logger=AAXW_JUMPIN_LOG_MGR.getModuleLogger(
 AAXW_JUMPIN_MODULE_LOGGER.info(f"module {__name__} is running...")
 
 
+##
+# 1个ollama使用与简单管理的例子。
+##
 @AAXW_JUMPIN_LOG_MGR.classLogger(level=logging.DEBUG)
 class EditableButton(QWidget):
     """
@@ -263,8 +276,6 @@ class AAXWJumpinOllamaSimpleApplet(AAXWAbstractApplet):
             return AAXWJumpinOllamaSimpleApplet.__doc__ #type:ignore
         else:
             return ""
-
-
 
     def _getAvailableModels(self) -> Union[List[str], None]:
         """
@@ -605,6 +616,7 @@ class AAXWJumpinOllamaBuiltinPlugin(AAXWAbstractBasePlugin):
 
 
 ##
+# 多轮对话，交互或记忆功能及其持久化的管理器，插件与applet例子。
 # chat history plugin and applet example
 ##
 
@@ -1119,14 +1131,6 @@ class AAXWJumpinChatHistoryExpApplet(AAXWAbstractApplet):
             self.callUpdateUI(str)
          
 
-
-    
-
-
-
-
-
-
 @AAXW_JUMPIN_LOG_MGR.classLogger()
 class AAXWJumpinChatHistoryExpPlugin(AAXWAbstractBasePlugin):
     AAXW_CLASS_LOGGER: logging.Logger
@@ -1163,9 +1167,373 @@ class AAXWJumpinChatHistoryExpPlugin(AAXWAbstractBasePlugin):
 
 
 
+
+
+
+##
+# 代知识库实现案例；
+# RAG基础实现之一；
+##
+
+# 简单知识库实现， chroma，openai-embedding，pypdf
+@AAXW_JUMPIN_LOG_MGR.classLogger()
+class FileChromaKBS:
+    '''文件，chroma方式存储的知识库系统(KBS)。用于RAG等AI相关功能的知识保存与检索。'''
+    AAXW_CLASS_LOGGER: logging.Logger
+
+    def __init__(self):
+        self.jumpinConfig: AAXWJumpinConfig = None  # type: ignore
+        self.chromaDbDirNmae = "chroma_db"
+        self.kbsStoreDirName = "kbs_store"
+
+        self.chromaDbDir = os.path.join(
+            self.jumpinConfig.appWorkDir, self.chromaDbDirNmae)
+        self.kbsStoreDir = os.path.join(
+            self.jumpinConfig.appWorkDir, self.kbsStoreDirName)
+
+        pass
+
+
+    def initRes(self):
+        """初始化存储目录"""
+        self.AAXW_CLASS_LOGGER.info(f": {self.kbsStoreDir}")
+
+
+        if not os.path.exists(self.kbsStoreDir):
+            os.makedirs(self.kbsStoreDir)
+        if not os.path.exists(self.kbsStoreDir):
+            os.makedirs(self.kbsStoreDir)
+
+        # text-embedding-ada-002
+        self.embeddings = OpenAIEmbeddings(model="text-embedding-ada-002")
+        self.vectorstore:Chroma = Chroma(
+            persist_directory=self.chromaDbDir , 
+            embedding_function=self.embeddings #embedding模型指定
+        )
+
+    
+    # def _connStoreAndDb(self):
+
+    def addDocument(self, file_path: str) -> bool:
+        """
+        添加文档到知识库
+        Args:
+            file_path (str): 源文件路径
+        Returns:
+            bool: 是否成功添加
+        """
+        try:
+            # 获取文件名和扩展名
+            file_name = os.path.basename(file_path)
+            file_ext = os.path.splitext(file_name)[1].lower()[1:]  # 移除点号
+            
+            # 检查文件类型
+            supported_extensions = {'pdf', 'doc', 'docx'}
+            if file_ext not in supported_extensions:
+                self.AAXW_CLASS_LOGGER.error(f"不支持的文件类型: {file_ext}")
+                return False
+            
+            # 复制文件到存储目录
+            target_path = os.path.join(self.kbsStoreDir, file_name)
+            
+            if os.path.exists(target_path):
+                self.AAXW_CLASS_LOGGER.warning(f"文件已存在并将被覆盖: {target_path}")
+            shutil.copy2(file_path, target_path)
+            
+            # 根据文件类型选择加载器
+            try:
+                if file_ext == "pdf":
+                    loader = PyMuPDFLoader(target_path)
+                elif file_ext in ["doc", "docx"]:
+                    loader = UnstructuredWordDocumentLoader(target_path)
+                else:
+                    raise NotImplementedError(f"文件扩展名 {file_ext} 不支持")
+                
+                raw_docs = loader.load()
+                
+            except Exception as e:
+                self.AAXW_CLASS_LOGGER.error(f"加载文档失败: {str(e)}")
+                # 清理已复制的文件
+                if os.path.exists(target_path):
+                    os.remove(target_path)
+                return False
+            
+            if not raw_docs:
+                self.AAXW_CLASS_LOGGER.warning("文档内容为空")
+                return False
+            
+            # 切分文档
+            text_splitter = RecursiveCharacterTextSplitter(
+                chunk_size=200,
+                chunk_overlap=100,
+                length_function=len,
+                add_start_index=True,
+            )
+            documents:List[Document] = text_splitter.split_documents(raw_docs)
+            
+            if not documents:
+                self.AAXW_CLASS_LOGGER.error("文档切分失败")
+                return False
+            
+            # 添加到向量存储
+            self.vectorstore.add_documents(documents)
+            
+            self.AAXW_CLASS_LOGGER.info(f"成功添加文档: {file_name}")
+            return True
+            
+        except Exception as e:
+            self.AAXW_CLASS_LOGGER.error(f"添加文档失败: {str(e)}")
+            # 清理已复制的文件
+            if os.path.exists(target_path):
+                os.remove(target_path)
+            return False
+
+    def search(self, query: str, k: int = 3) -> List[Document]:
+        """
+        在知识库中搜索相关内容
+        Args:
+            query (str): 搜索查询文本
+            k (int): 返回的最相关文档数量，默认为3
+        Returns:
+            List[Document]: 相关文档列表，如果出错返回空列表
+        """
+        try:
+            # 使用向量存储的相似度搜索
+            docs = self.vectorstore.similarity_search(
+                query=query,
+                k=k
+            )
+            self.AAXW_CLASS_LOGGER.info(f"搜索成功，找到 {len(docs)} 条相关内容")
+            return docs
+        
+        except Exception as e:
+            self.AAXW_CLASS_LOGGER.error(f"搜索失败: {str(e)}")
+            return []
+    
+    def removeDocument(self):
+        ...
+    
+    def listDocuments(self):
+        ...
+
+    def _reloadKBS(self):
+        ...
+
 #
-# 简单例子
-#
+@AAXW_JUMPIN_LOG_MGR.classLogger()
+class AAXWJumpinKBSApplet(AAXWAbstractApplet):
+    """1个知识库的使用样例"""
+    AAXW_CLASS_LOGGER: logging.Logger
+
+    def __init__(self):
+        self.name = "jumpinKBSApplet"  # 修正名称
+        self.title = "KBS"
+        self.dependencyContainer: AAXWDependencyContainer = None  # type: ignore
+        self.jumpinConfig: 'AAXWJumpinConfig' = None  # type: ignore
+        self.mainWindow: 'AAXWJumpinMainWindow' = None  # type: ignore
+        self.aiThread = None  # 添加AI线程属性
+
+    @override
+    def getName(self) -> str:
+        return self.name
+
+    @override
+    def getTitle(self) -> str:
+        return self.title
+    
+    def getDesc(self) -> str:
+        return self.__class__.__doc__ if self.__class__.__doc__ else "..."
+        # if self.__class__.__doc__:
+        #     return self.__class__.__doc__ #type:ignore
+        # else:
+        #     return ""
+
+    def _expButtonClicked(self):
+        """例子按钮按下"""
+        self.AAXW_CLASS_LOGGER.info("打开历史记录列表")
+
+    @override
+    def onAdd(self):
+        # 获取AI代理
+        self.simpleAIConnOrAgent: AAXWSimpleAIConnOrAgent = self.dependencyContainer.getAANode(
+            "simpleAIConnOrAgent")
+        
+        self.toolsFrame = self._createToolsMessagePanel()
+        self.AAXW_CLASS_LOGGER.info(f"{self.name} Applet被添加")
+       # 创建1个工具菜单组件-对应本applet；（界面）
+
+    def _createToolsMessagePanel(self):
+        """创建工具面板"""
+        # 创建主Frame
+        toolsframe = QFrame()
+        toolsframe.setObjectName("top_toolsframe")
+        toolsframe.setStyleSheet("""
+            QFrame#chat_history_toolsframe {
+                background-color: #f0f0f0;
+                border: 1px solid #ccc;
+                border-radius: 5px;
+            }
+        """)
+        layout = QVBoxLayout(toolsframe)
+
+
+        # 添加文本说明，设置ObjectName
+        self.descLabel = QLabel(self.getDesc())
+        self.descLabel.setObjectName("desc_label")
+        layout.addWidget(self.descLabel)
+        
+        # 添加分割线
+        line = QFrame()
+        line.setFrameShape(QFrame.Shape.HLine)
+        line.setFrameShadow(QFrame.Shadow.Sunken)
+        layout.addWidget(line)
+
+
+        # 创建工具栏
+        toolbar = QToolBar()
+        
+        # 创建保存聊天历史按钮
+        left_win_button = QPushButton("<<<")
+        left_win_button.clicked.connect(self._expButtonClicked)
+        toolbar.addWidget(left_win_button)
+
+        layout.addWidget(toolbar)
+        return toolsframe
+
+    @override
+    def onActivate(self):
+        # 主要展示界面 界面可能变化，所以接货的时候获取界面内容；
+        self.showingPanel=self.mainWindow.msgShowingPanel #用于展示的
+        
+
+        # 展示策略关联给 self.showingPanel
+        self.backupContentBlockStrategy=self.showingPanel.contentBlockStrategy
+        self.showingPanel.contentBlockStrategy=AAXWJumpinCompoMarkdownContentStrategy()
+
+        #  将输入触发逻辑关联给inputkit
+        #
+        self.mainWindow.inputPanel.funcButtonRight.clicked.connect(self.doInputCommitAction)
+
+        #按钮标志与基本按钮曹关联
+        self.mainWindow.inputPanel.funcButtonLeft.setText(self.getTitle())
+
+        #加上工具组件
+        self.mainWindow.topToolsMessageWindow.setCentralWidget(self.toolsFrame)  #type:ignore
+        self.AAXW_CLASS_LOGGER.info(f"{self.name} Applet被激活")
+
+
+    def doInputCommitAction(self):
+        """处理输入提交动作"""
+        self.AAXW_CLASS_LOGGER.debug("Right button clicked!")
+        text = self.mainWindow.inputPanel.promptInputEdit.text()
+
+        # 用户输入消息气泡初始化
+        rid = int(time.time() * 1000)
+        self.mainWindow.msgShowingPanel.addRowContent(
+            content=text, 
+            rowId=rid, 
+            contentOwner="user_xiaowang",
+            contentOwnerType=AAXWScrollPanel.ROW_CONTENT_OWNER_TYPE_USER,
+        )
+        
+        # 等待界面渲染
+        QThread.msleep(500)
+        
+        # AI响应消息气泡初始化
+        rrid = int(time.time() * 1000)
+        self.mainWindow.msgShowingPanel.addRowContent(
+            content="", 
+            rowId=rrid, 
+            contentOwner="assistant_aaxw",
+            contentOwnerType=AAXWScrollPanel.ROW_CONTENT_OWNER_TYPE_OTHERS,
+        )
+
+        # 创建并启动AI处理线程
+        self.aiThread = AIThread(text, str(rrid), self.simpleAIConnOrAgent)
+        self.aiThread.updateUI.connect(self.mainWindow.msgShowingPanel.appendContentByRowId)
+        self.aiThread.start()
+       
+        self._logInput()
+        self.mainWindow.inputPanel.promptInputEdit.clear()
+
+    def _logInput(self):
+        """记录输入内容"""
+        self.AAXW_CLASS_LOGGER.debug(
+            f"Input: {self.mainWindow.inputPanel.promptInputEdit.text()}")
+
+    @override
+    def onInactivate(self):
+        #
+        self.showingPanel.contentBlockStrategy=self.backupContentBlockStrategy #type:ignore 
+        self.backupContentBlockStrategy=None #type:ignore
+
+        #去除 槽函数
+        self.mainWindow.inputPanel.funcButtonRight.clicked.disconnect(self.doInputCommitAction)
+        # self.mainWindow.inputPanel.promptInputEdit.returnPressed.disconnect(self.doInputCommitAction)
+        self.aiThread=None
+
+        #移除工具组件的引用(未做析构，组件本身还可维持在applet)
+        self.mainWindow.topToolsMessageWindow.removeCentralWidget() 
+        #
+
+        self.AAXW_CLASS_LOGGER.info(f"{self.name} Applet被停用")
+        pass
+
+    @override
+    def onRemove(self):
+        if self.toolsFrame:
+            self.toolsFrame.deleteLater()
+            self.toolsFrame = None
+        self.AAXW_CLASS_LOGGER.info(f"{self.name} Applet被移除")
+        pass
+
+
+@AAXW_JUMPIN_LOG_MGR.classLogger()
+class AAXWJumpinKBSPlugin(AAXWAbstractBasePlugin):
+    AAXW_CLASS_LOGGER: logging.Logger
+
+    def __init__(self) -> None:
+        # 初始化插件，并将插件管理器中需要的资源置为None
+        super().__init__()
+        self.dependencyContainer: AAXWDependencyContainer = None  # 插件依赖管理器 #type:ignore
+        self.jumpinConfig: 'AAXWJumpinConfig' = None  # 插件配置对象 #type:ignore
+        self.mainWindow: 'AAXWJumpinMainWindow' = None  # 主窗口对象 #type:ignore
+        self.jumpinAppletManager: AAXWJumpinAppletManager = None  # 小程序管理器 #type:ignore
+
+    @override
+    def onInstall(self):
+        # 安装插件时的操作
+        self.kbsApplet = AAXWJumpinKBSApplet()  # 创建一个小程序示例
+        self.AAXW_CLASS_LOGGER.info(f"{self.__class__.__name__}.onInstall()")  # 记录安装日志
+        pass
+
+    @override
+    def enable(self):
+        # 启用插件时的操作
+        self.jumpinAppletManager.addApplet(self.kbsApplet)  # 将小程序添加到管理器中
+        self.AAXW_CLASS_LOGGER.info(f"{self.__class__.__name__}.enable()")  # 记录启用日志
+        pass
+
+    @override
+    def disable(self):
+        # 禁用插件时的操作
+        self.jumpinAppletManager.removeAppletByInstance(self.kbsApplet)  # 从管理器中移除小程序
+        self.AAXW_CLASS_LOGGER.info(f"{self.__class__.__name__}.disable()")  # 记录禁用日志
+        pass
+
+    @override
+    def onUninstall(self):
+        # 卸载插件时的操作
+        self.AAXW_CLASS_LOGGER.info(f"{self.__class__.__name__}.onUninstall()")  # 记录卸载日志
+        pass
+
+
+
+
+##
+# 1个带top工具与消息面板的，简单例子。
+# 无实际其他功能。
+##
 #
 @AAXW_JUMPIN_LOG_MGR.classLogger()
 class AAXWJumpinTopWinExpApplet(AAXWAbstractApplet):
@@ -1247,7 +1615,6 @@ class AAXWJumpinTopWinExpApplet(AAXWAbstractApplet):
 
     @override
     def onActivate(self):
-        # 在界面中添加保存聊天历史的按钮
         # 主要展示界面 界面可能变化，所以接货的时候获取界面内容；
         self.showingPanel=self.mainWindow.msgShowingPanel #用于展示的
         
@@ -1301,32 +1668,37 @@ class AAXWJumpinTopWinExpPlugin(AAXWAbstractBasePlugin):
     AAXW_CLASS_LOGGER: logging.Logger
 
     def __init__(self) -> None:
+        # 初始化插件，并将插件管理器中需要的资源置为None
         super().__init__()
-        self.dependencyContainer: AAXWDependencyContainer = None  # type: ignore
-        self.jumpinConfig: 'AAXWJumpinConfig' = None  # type: ignore
-        self.mainWindow: 'AAXWJumpinMainWindow' = None  # type: ignore
-        self.jumpinAppletManager: AAXWJumpinAppletManager = None  # type: ignore
+        self.dependencyContainer: AAXWDependencyContainer = None  # 插件依赖管理器 #type:ignore
+        self.jumpinConfig: 'AAXWJumpinConfig' = None  # 插件配置对象 #type:ignore
+        self.mainWindow: 'AAXWJumpinMainWindow' = None  # 主窗口对象 #type:ignore
+        self.jumpinAppletManager: AAXWJumpinAppletManager = None  # 小程序管理器 #type:ignore
 
     @override
     def onInstall(self):
-        self.chatHistoryApplet = AAXWJumpinTopWinExpApplet()
-        self.AAXW_CLASS_LOGGER.info(f"{self.__class__.__name__}.onInstall()")
+        # 安装插件时的操作
+        self.chatHistoryApplet = AAXWJumpinTopWinExpApplet()  # 创建一个小程序示例
+        self.AAXW_CLASS_LOGGER.info(f"{self.__class__.__name__}.onInstall()")  # 记录安装日志
         pass
 
     @override
     def enable(self):
-        self.jumpinAppletManager.addApplet(self.chatHistoryApplet)
-        self.AAXW_CLASS_LOGGER.info(f"{self.__class__.__name__}.enable()")
+        # 启用插件时的操作
+        self.jumpinAppletManager.addApplet(self.chatHistoryApplet)  # 将小程序添加到管理器中
+        self.AAXW_CLASS_LOGGER.info(f"{self.__class__.__name__}.enable()")  # 记录启用日志
         pass
 
     @override
     def disable(self):
-        self.jumpinAppletManager.removeAppletByInstance(self.chatHistoryApplet)
-        self.AAXW_CLASS_LOGGER.info(f"{self.__class__.__name__}.disable()")
+        # 禁用插件时的操作
+        self.jumpinAppletManager.removeAppletByInstance(self.chatHistoryApplet)  # 从管理器中移除小程序
+        self.AAXW_CLASS_LOGGER.info(f"{self.__class__.__name__}.disable()")  # 记录禁用日志
         pass
 
     @override
     def onUninstall(self):
-        self.AAXW_CLASS_LOGGER.info(f"{self.__class__.__name__}.onUninstall()")
+        # 卸载插件时的操作
+        self.AAXW_CLASS_LOGGER.info(f"{self.__class__.__name__}.onUninstall()")  # 记录卸载日志
         pass
 
