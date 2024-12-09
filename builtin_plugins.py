@@ -31,9 +31,11 @@ from PySide6.QtCore import (
 )
 from PySide6.QtWidgets import (
     QFrame, QWidget, QVBoxLayout, QPushButton, 
-    QLabel, QToolBar,QSizePolicy, QHBoxLayout, QLineEdit,QApplication, QListWidget, QListWidgetItem
+    QLabel, QToolBar,QSizePolicy, QHBoxLayout, 
+    QLineEdit,QApplication, QListWidget, QListWidgetItem,
+    QFileDialog,
 )
-
+# from langchain.embeddings import BCEmbeddingEmbeddings
 import urllib.parse
 import urllib.request
 import json
@@ -51,9 +53,9 @@ from langchain.schema import (
 from langchain.memory import ConversationBufferMemory
 from langchain_openai import ChatOpenAI,OpenAIEmbeddings
 from langchain_chroma import Chroma
-from langchain.document_loaders import PyMuPDFLoader
+from langchain_community.document_loaders import PyMuPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.document_loaders.word_document import UnstructuredWordDocumentLoader
+from langchain_community.document_loaders.word_document import UnstructuredWordDocumentLoader
 # from langchain import Document
 from langchain_core.documents import Document
 
@@ -919,7 +921,7 @@ class AAXWJumpinChatHistoryExpApplet(AAXWAbstractApplet):
         self.mainWindow.leftToolsMessageWindow.removeCentralWidget()
 
         #清理工具组件引用；
-        self.mainWindow.topToolsMessageWindow.removeCentralWidget()
+        self.mainWindow.topToolsMessageWindow.removeCentralWidget() 
         #
         self.AAXW_CLASS_LOGGER.info(f"{self.name} Applet被停用")
         pass
@@ -1071,7 +1073,7 @@ class AAXWJumpinChatHistoryExpApplet(AAXWAbstractApplet):
 
         ...
 
-    @AAXW_JUMPIN_LOG_MGR.classLogger(level=logging.DEBUG)
+    @AAXW_JUMPIN_LOG_MGR.classLogger()#level=logging.INFO
     class MemoAIThread(AIThread):
         AAXW_CLASS_LOGGER: logging.Logger
 
@@ -1176,6 +1178,7 @@ class AAXWJumpinChatHistoryExpPlugin(AAXWAbstractBasePlugin):
 ##
 
 # 简单知识库实现， chroma，openai-embedding，pypdf
+# TODO 增加metadata 写入辨别来源。
 @AAXW_JUMPIN_LOG_MGR.classLogger()
 class FileChromaKBS:
     '''文件，chroma方式存储的知识库系统(KBS)。用于RAG等AI相关功能的知识保存与检索。'''
@@ -1186,19 +1189,17 @@ class FileChromaKBS:
         self.chromaDbDirNmae = "chroma_db"
         self.kbsStoreDirName = "kbs_store"
 
-        self.chromaDbDir = os.path.join(
-            self.jumpinConfig.appWorkDir, self.chromaDbDirNmae)
-        self.kbsStoreDir = os.path.join(
-            self.jumpinConfig.appWorkDir, self.kbsStoreDirName)
-
         pass
 
 
     def initRes(self):
-        """初始化存储目录"""
-        self.AAXW_CLASS_LOGGER.info(f": {self.kbsStoreDir}")
+        """初始化知识库资源"""
 
-
+        self.chromaDbDir = os.path.join(
+            self.jumpinConfig.appWorkDir, self.chromaDbDirNmae)
+        self.kbsStoreDir = os.path.join(
+            self.jumpinConfig.appWorkDir, self.kbsStoreDirName)
+        
         if not os.path.exists(self.kbsStoreDir):
             os.makedirs(self.kbsStoreDir)
         if not os.path.exists(self.kbsStoreDir):
@@ -1210,21 +1211,24 @@ class FileChromaKBS:
             persist_directory=self.chromaDbDir , 
             embedding_function=self.embeddings #embedding模型指定
         )
+        self.AAXW_CLASS_LOGGER.info(
+            f"已初始化知识库资源。文件目录: {self.kbsStoreDir}，chroma库位置:{self.chromaDbDir}")
 
     
     # def _connStoreAndDb(self):
 
-    def addDocument(self, file_path: str) -> bool:
+    def addDocument(self, filePath: str, collectionName: str = None) -> bool: #type:ignore
         """
         添加文档到知识库
         Args:
             file_path (str): 源文件路径
+            collection_name (str): 集合名称，默认为None，使用默认collection
         Returns:
             bool: 是否成功添加
         """
         try:
             # 获取文件名和扩展名
-            file_name = os.path.basename(file_path)
+            file_name = os.path.basename(filePath)
             file_ext = os.path.splitext(file_name)[1].lower()[1:]  # 移除点号
             
             # 检查文件类型
@@ -1232,13 +1236,24 @@ class FileChromaKBS:
             if file_ext not in supported_extensions:
                 self.AAXW_CLASS_LOGGER.error(f"不支持的文件类型: {file_ext}")
                 return False
-            
+                
             # 复制文件到存储目录
             target_path = os.path.join(self.kbsStoreDir, file_name)
             
             if os.path.exists(target_path):
                 self.AAXW_CLASS_LOGGER.warning(f"文件已存在并将被覆盖: {target_path}")
-            shutil.copy2(file_path, target_path)
+            shutil.copy2(filePath, target_path)
+            
+            # 使用默认或指定的 collection
+            if collectionName:
+                vectorstore = Chroma(
+                    collection_name=collectionName,
+                    persist_directory=self.chromaDbDir,
+                    embedding_function=self.embeddings
+                )
+            else:
+                vectorstore = self.vectorstore
+            
             
             # 根据文件类型选择加载器
             try:
@@ -1248,12 +1263,11 @@ class FileChromaKBS:
                     loader = UnstructuredWordDocumentLoader(target_path)
                 else:
                     raise NotImplementedError(f"文件扩展名 {file_ext} 不支持")
-                
+                    
                 raw_docs = loader.load()
                 
             except Exception as e:
                 self.AAXW_CLASS_LOGGER.error(f"加载文档失败: {str(e)}")
-                # 清理已复制的文件
                 if os.path.exists(target_path):
                     os.remove(target_path)
                 return False
@@ -1262,62 +1276,103 @@ class FileChromaKBS:
                 self.AAXW_CLASS_LOGGER.warning("文档内容为空")
                 return False
             
-            # 切分文档
+            # 切分文档，并为每个片段添加元数据
             text_splitter = RecursiveCharacterTextSplitter(
                 chunk_size=200,
                 chunk_overlap=100,
                 length_function=len,
                 add_start_index=True,
             )
-            documents:List[Document] = text_splitter.split_documents(raw_docs)
+            documents: List[Document] = text_splitter.split_documents(raw_docs)
+            
+            # 为每个文档片段添加元数据
+            for doc in documents:
+                doc.metadata.update({
+                    "source_file": file_name,
+                    "file_path": target_path,
+                    "file_type": file_ext,
+                    "collection": self.vectorstore._collection_name, #TODO 需要更合理的获取
+                    "chunk_size": 200,
+                    "chunk_overlap": 100
+                })
             
             if not documents:
                 self.AAXW_CLASS_LOGGER.error("文档切分失败")
                 return False
             
             # 添加到向量存储
-            self.vectorstore.add_documents(documents)
+            vectorstore.add_documents(documents)
             
-            self.AAXW_CLASS_LOGGER.info(f"成功添加文档: {file_name}")
+            self.AAXW_CLASS_LOGGER.info(f"成功添加文档到集合 {collectionName or 'default'}: {file_name}")
             return True
             
         except Exception as e:
-            self.AAXW_CLASS_LOGGER.error(f"添加文档失败: {str(e)}")
-            # 清理已复制的文件
+            self.AAXW_CLASS_LOGGER.error(f"添加文档到集合 {collectionName or 'default'} 失败: {str(e)}")
             if os.path.exists(target_path):
                 os.remove(target_path)
             return False
 
-    def search(self, query: str, k: int = 3) -> List[Document]:
+
+    def search(self, query: str, k: int = 3, collection_name: str = None) -> List[Document]: #type:ignore
         """
         在知识库中搜索相关内容
         Args:
             query (str): 搜索查询文本
             k (int): 返回的最相关文档数量，默认为3
+            collection_name (str): 集合名称，默认为None，使用默认collection
         Returns:
             List[Document]: 相关文档列表，如果出错返回空列表
+        Note:
+            - 获取文档元数据：每个Document对象包含metadata属性，可以通过doc.metadata访问。
+            - 元数据通常在addDocument函数中添加，例如文件名、文件路径等。
+            doc.metadata结构：
+            {
+                        "source_file": xxx,
+                        "file_path": xxx,
+                        "file_type": xxx,
+                        "collection": xxx,
+                        "chunk_size": xxx,
+                        "chunk_overlap": xxx
+            }
         """
         try:
+            # 使用默认或指定的 collection
+            if collection_name:
+                vectorstore = Chroma(
+                    collection_name=collection_name,
+                    persist_directory=self.chromaDbDir,
+                    embedding_function=self.embeddings
+                )
+            else:
+                vectorstore = self.vectorstore
+
             # 使用向量存储的相似度搜索
-            docs = self.vectorstore.similarity_search(
+            docs = vectorstore.similarity_search(
                 query=query,
                 k=k
             )
-            self.AAXW_CLASS_LOGGER.info(f"搜索成功，找到 {len(docs)} 条相关内容")
+            
+            self.AAXW_CLASS_LOGGER.info(f"在集合 {collection_name or 'default'} 中搜索成功，找到 {len(docs)} 条相关内容")
             return docs
-        
+            
         except Exception as e:
-            self.AAXW_CLASS_LOGGER.error(f"搜索失败: {str(e)}")
+            self.AAXW_CLASS_LOGGER.error(f"在集合 {collection_name or 'default'} 中搜索失败: {str(e)}")
             return []
     
     def removeDocument(self):
         ...
+
+    def _reloadDocument(self):
+        ...
     
+    def documentMeta(self):
+        ...
+
     def listDocuments(self):
         ...
 
     def _reloadKBS(self):
-        ...
+            ...
 
 #
 @AAXW_JUMPIN_LOG_MGR.classLogger()
@@ -1348,9 +1403,95 @@ class AAXWJumpinKBSApplet(AAXWAbstractApplet):
         # else:
         #     return ""
 
-    def _expButtonClicked(self):
-        """例子按钮按下"""
-        self.AAXW_CLASS_LOGGER.info("打开历史记录列表")
+    def _createToolsMessagePanel(self):
+        """创建工具面板"""
+        # 创建主Frame
+        toolsframe = QFrame()
+        toolsframe.setObjectName("kbs_toolsframe")
+        toolsframe.setStyleSheet("""
+            QFrame#kbs_toolsframe {
+                background-color: #f0f0f0;
+                border: 1px solid #ccc;
+                border-radius: 5px;
+            }
+        """)
+        layout = QVBoxLayout(toolsframe)
+        
+        # 创建顶部说明区域（水平布局）
+        topLayout = QHBoxLayout()
+        
+        # 添加文本说明，设置ObjectName
+        self.descLabel = QLabel(self.getDesc())
+        self.descLabel.setObjectName("kbs_desc_label")
+        topLayout.addWidget(self.descLabel)
+        
+        # 创建状态标签并靠右对齐
+        self.statusLabel = QLabel("就绪")
+        self.statusLabel.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.statusLabel.setStyleSheet("padding-right: 10px;")
+        topLayout.addWidget(self.statusLabel)
+        
+        layout.addLayout(topLayout)
+        
+        # 添加分割线
+        line = QFrame()
+        line.setFrameShape(QFrame.Shape.HLine)
+        line.setFrameShadow(QFrame.Shadow.Sunken)
+        layout.addWidget(line)
+        
+        # 创建工具栏
+        toolbar = QToolBar()
+        
+        # 创建上传文件按钮
+        uploadButton = QPushButton("📄 上传材料")
+        uploadButton.clicked.connect(self._handleUploadFile)
+        toolbar.addWidget(uploadButton)
+        
+        # 创建第二个按钮
+        button2 = QPushButton("按钮2")
+        button2.clicked.connect(lambda: self.AAXW_CLASS_LOGGER.info("按钮2被点击"))
+        toolbar.addWidget(button2)
+        
+        # 创建第三个按钮
+        button3 = QPushButton("按钮3")
+        button3.clicked.connect(lambda: self.AAXW_CLASS_LOGGER.info("按钮3被点击"))
+        toolbar.addWidget(button3)
+        
+        layout.addWidget(toolbar)
+        return toolsframe
+
+    #FIXME 改为异步处理上传与灌库。需要增加过程或进度获取，得到类似streaming的效果
+    #FIXME 上传时需要锁定界面特定功能。
+    def _handleUploadFile(self):
+        """处理文件上传"""
+       
+        
+        # 打开文件选择对话框
+        file_path, _ = QFileDialog.getOpenFileName(
+            self.mainWindow,
+            "选择文件",
+            "",
+            "文档文件 (*.pdf *.doc *.docx)"
+        )
+        
+        if file_path:
+            self.AAXW_CLASS_LOGGER.info(f"选择的文件: {file_path}")
+            self.statusLabel.setText("正在处理文件...")
+            
+            try:
+                # 调用知识库的添加文档方法
+                success = self.kbs.addDocument(file_path)
+                
+                if success:
+                    self.statusLabel.setText("文件添加成功")
+                    self.AAXW_CLASS_LOGGER.info(f"文件 {file_path} 已成功添加到知识库")
+                else:
+                    self.statusLabel.setText("文件添加失败")
+                    self.AAXW_CLASS_LOGGER.error(f"文件 {file_path} 添加失败")
+            
+            except Exception as e:
+                self.statusLabel.setText("处理出错")
+                self.AAXW_CLASS_LOGGER.error(f"处理文件时发生错误: {str(e)}")
 
     @override
     def onAdd(self):
@@ -1358,47 +1499,17 @@ class AAXWJumpinKBSApplet(AAXWAbstractApplet):
         self.simpleAIConnOrAgent: AAXWSimpleAIConnOrAgent = self.dependencyContainer.getAANode(
             "simpleAIConnOrAgent")
         
+        # TODO之后初始化知识库系统
+        # applet初始化时就初始化 kbs知识库系统。
+        self.kbs = FileChromaKBS()
+        self.kbs.jumpinConfig = self.jumpinConfig
+        self.kbs.initRes()
+        #
+
+        
         self.toolsFrame = self._createToolsMessagePanel()
         self.AAXW_CLASS_LOGGER.info(f"{self.name} Applet被添加")
        # 创建1个工具菜单组件-对应本applet；（界面）
-
-    def _createToolsMessagePanel(self):
-        """创建工具面板"""
-        # 创建主Frame
-        toolsframe = QFrame()
-        toolsframe.setObjectName("top_toolsframe")
-        toolsframe.setStyleSheet("""
-            QFrame#chat_history_toolsframe {
-                background-color: #f0f0f0;
-                border: 1px solid #ccc;
-                border-radius: 5px;
-            }
-        """)
-        layout = QVBoxLayout(toolsframe)
-
-
-        # 添加文本说明，设置ObjectName
-        self.descLabel = QLabel(self.getDesc())
-        self.descLabel.setObjectName("desc_label")
-        layout.addWidget(self.descLabel)
-        
-        # 添加分割线
-        line = QFrame()
-        line.setFrameShape(QFrame.Shape.HLine)
-        line.setFrameShadow(QFrame.Shadow.Sunken)
-        layout.addWidget(line)
-
-
-        # 创建工具栏
-        toolbar = QToolBar()
-        
-        # 创建保存聊天历史按钮
-        left_win_button = QPushButton("<<<")
-        left_win_button.clicked.connect(self._expButtonClicked)
-        toolbar.addWidget(left_win_button)
-
-        layout.addWidget(toolbar)
-        return toolsframe
 
     @override
     def onActivate(self):
@@ -1421,6 +1532,57 @@ class AAXWJumpinKBSApplet(AAXWAbstractApplet):
         self.mainWindow.topToolsMessageWindow.setCentralWidget(self.toolsFrame)  #type:ignore
         self.AAXW_CLASS_LOGGER.info(f"{self.name} Applet被激活")
 
+    
+    @AAXW_JUMPIN_LOG_MGR.classLogger(level=logging.DEBUG)
+    class KBSAIThread(AIThread):
+        AAXW_CLASS_LOGGER: logging.Logger
+
+        PROMPT_TEMPLE=PromptTemplate(
+            input_variables=["chat_history", "question", "knowledge"],
+            template="根据之前的对话历史:'{chat_history}'; 结合以下知识:'{knowledge}'; 请以中文，回答如下相关问题:{question}"
+        )
+
+        updateUI = Signal(str,str)  
+
+        def __init__(self, text: str, uiCellId: str, llmagent: AAXWAbstractAIConnOrAgent, kbs: FileChromaKBS):
+            super().__init__(text=text, uiCellId=uiCellId, llmagent=llmagent)
+            self.kbs = kbs
+            self.wholeResponse = ""
+
+        def run(self):
+            self.msleep(500)  # 执行前先等界面渲染
+            exec_e = None
+            prompted = self.text
+            try:
+                if self.text:
+                    # 从知识库中搜索相关内容
+                    docs = self.kbs.search(query=self.text, k=3)
+                    knowledge = "\n".join([doc.page_content for doc in docs])
+
+                    # 构建提示词
+                    prompted = self.PROMPT_TEMPLE.format(
+                        chat_history="",  # 如果有历史记录，可以在此处添加
+                        question=self.text,
+                        knowledge=knowledge
+                    )
+                    self.AAXW_CLASS_LOGGER.debug(f"将向LLM发送完整提示词: {prompted}")
+                    self.llmagent.requestAndCallback(prompted, self.onResponse)
+                else:
+                    return  # 直接结束没有提问题内容
+            except Exception as e:
+                self.AAXW_CLASS_LOGGER.error(f"An exception occurred: {str(e)}")
+                exec_e = e
+            finally:
+                if exec_e is None and self.wholeResponse:  # 没有异常才写入库
+                    # ai_message = AIMessage(content=self.wholeResponse)
+                    # 这里加入无异常的finally处理。
+                    pass
+
+                pass
+
+        def onResponse(self, str):
+            self.wholeResponse += str
+            self.callUpdateUI(str)
 
     def doInputCommitAction(self):
         """处理输入提交动作"""
@@ -1449,7 +1611,7 @@ class AAXWJumpinKBSApplet(AAXWAbstractApplet):
         )
 
         # 创建并启动AI处理线程
-        self.aiThread = AIThread(text, str(rrid), self.simpleAIConnOrAgent)
+        self.aiThread = self.KBSAIThread(text, str(rrid), self.simpleAIConnOrAgent, self.kbs)
         self.aiThread.updateUI.connect(self.mainWindow.msgShowingPanel.appendContentByRowId)
         self.aiThread.start()
        
@@ -1472,7 +1634,7 @@ class AAXWJumpinKBSApplet(AAXWAbstractApplet):
         # self.mainWindow.inputPanel.promptInputEdit.returnPressed.disconnect(self.doInputCommitAction)
         self.aiThread=None
 
-        #移除工具组件的引用(未做析构，组件本身还可维持在applet)
+        #清理工具组件引用；
         self.mainWindow.topToolsMessageWindow.removeCentralWidget() 
         #
 
@@ -1526,7 +1688,6 @@ class AAXWJumpinKBSPlugin(AAXWAbstractBasePlugin):
         # 卸载插件时的操作
         self.AAXW_CLASS_LOGGER.info(f"{self.__class__.__name__}.onUninstall()")  # 记录卸载日志
         pass
-
 
 
 
@@ -1701,4 +1862,5 @@ class AAXWJumpinTopWinExpPlugin(AAXWAbstractBasePlugin):
         # 卸载插件时的操作
         self.AAXW_CLASS_LOGGER.info(f"{self.__class__.__name__}.onUninstall()")  # 记录卸载日志
         pass
+
 
