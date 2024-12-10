@@ -1444,28 +1444,57 @@ class AAXWJumpinKBSApplet(AAXWAbstractApplet):
         
         # 创建上传文件按钮
         uploadButton = QPushButton("📄 上传材料")
-        uploadButton.clicked.connect(self._handleUploadFile)
+        uploadButton.clicked.connect(self._aHandleUploadFile)
         toolbar.addWidget(uploadButton)
+        self.uploadButton=uploadButton
         
-        # 创建第二个按钮
-        button2 = QPushButton("按钮2")
-        button2.clicked.connect(lambda: self.AAXW_CLASS_LOGGER.info("按钮2被点击"))
-        toolbar.addWidget(button2)
-        
-        # 创建第三个按钮
-        button3 = QPushButton("按钮3")
-        button3.clicked.connect(lambda: self.AAXW_CLASS_LOGGER.info("按钮3被点击"))
-        toolbar.addWidget(button3)
-        
+       
         layout.addWidget(toolbar)
         return toolsframe
 
-    #FIXME 改为异步处理上传与灌库。需要增加过程或进度获取，得到类似streaming的效果
-    #FIXME 上传时需要锁定界面特定功能。
-    def _handleUploadFile(self):
-        """处理文件上传"""
-       
+    @AAXW_JUMPIN_LOG_MGR.classLogger()
+    class KBSUploadThread(QThread):
+        """知识库文件上传处理线程"""
+        AAXW_CLASS_LOGGER: logging.Logger
         
+        # 定义信号：用于更新UI状态
+        updateStatus = Signal(str)  # 状态消息更新信号
+        updateButton = Signal(bool)  # 按钮状态更新信号
+        
+        def __init__(self, file_path: str, kbs: FileChromaKBS):
+            super().__init__()
+            self.file_path = file_path
+            self.kbs = kbs
+        
+        def run(self):
+            try:
+                # 开始处理前发送状态更新和按钮禁用信号
+                self.updateStatus.emit("正在处理文件...")
+                self.updateButton.emit(False)
+                
+                # 执行文件上传
+                success = self.kbs.addDocument(self.file_path)
+                
+                # 根据上传结果更新状态
+                if success:
+                    self.AAXW_CLASS_LOGGER.info(f"文件 {self.file_path} 已成功添加到知识库")
+                    self.updateStatus.emit("文件添加成功")
+                else:
+                    self.AAXW_CLASS_LOGGER.error(f"文件 {self.file_path} 添加失败")
+                    self.updateStatus.emit("文件添加失败")
+                    
+            except Exception as e:
+                self.AAXW_CLASS_LOGGER.error(f"Upload thread error: {str(e)}")
+                self.updateStatus.emit(f"上传失败: {str(e)}")
+                
+            finally:
+                # 确保按钮最终被启用，状态更新为完成
+                self.updateButton.emit(True)
+                self.updateStatus.emit("处理完成")
+
+    
+    def _aHandleUploadFile(self):
+        """异步处理文件上传"""
         # 打开文件选择对话框
         file_path, _ = QFileDialog.getOpenFileName(
             self.mainWindow,
@@ -1476,22 +1505,20 @@ class AAXWJumpinKBSApplet(AAXWAbstractApplet):
         
         if file_path:
             self.AAXW_CLASS_LOGGER.info(f"选择的文件: {file_path}")
-            self.statusLabel.setText("正在处理文件...")
             
             try:
-                # 调用知识库的添加文档方法
-                success = self.kbs.addDocument(file_path)
+                # 创建并启动上传线程
+                self.uploadThread = self.KBSUploadThread(file_path, self.kbs)
+                # 连接信号到对应的UI更新槽函数
+                self.uploadThread.updateStatus.connect(self.statusLabel.setText)
+                self.uploadThread.updateButton.connect(self.uploadButton.setEnabled)
+                self.uploadThread.start()
                 
-                if success:
-                    self.statusLabel.setText("文件添加成功")
-                    self.AAXW_CLASS_LOGGER.info(f"文件 {file_path} 已成功添加到知识库")
-                else:
-                    self.statusLabel.setText("文件添加失败")
-                    self.AAXW_CLASS_LOGGER.error(f"文件 {file_path} 添加失败")
-            
             except Exception as e:
-                self.statusLabel.setText("处理出错")
-                self.AAXW_CLASS_LOGGER.error(f"处理文件时发生错误: {str(e)}")
+                self.AAXW_CLASS_LOGGER.error(f"创建上传线程失败: {str(e)}")
+    
+
+
 
     @override
     def onAdd(self):
