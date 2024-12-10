@@ -1,18 +1,32 @@
+# python == 3.9.11
 # Core dependencies
-python-dotenv
-pyyaml
-typing-extensions>=4.12.2; python_version < "3.12"
+python-dotenv==1.0.1
+pyyaml==6.0.2
+typing-extensions==4.12.2; python_version < "3.12"
 
 # GUI
-PySide6
+PySide6==6.7.2
 
 # Keyboard control
-pynput
+pynput==1.7.3
 
 # Markdown support
-markdown
+markdown==3.3.6
 
 # AI/LLM related
-openai
-langchain-openai
-langchain-community
+openai==1.42.0
+langchain==0.3.0
+langchain-openai==0.2.2
+langchain-community==0.3.0
+langchain-chroma==0.1.4
+
+# Vectordb
+chromadb==0.5.23
+
+## 补偿指定依赖
+# 注意openai 1.42.0 依赖于 httpx==0.27.0  如果httpx升级比如28.1（可能是openai的bug） 会出现问题：
+#   d:\Anaconda3\envs\ananxw\lib\site-packages\openai\_base_client.py", line 742
+#   self._client = http_client or SyncHttpxClientWrapper( ... super().__init__(**kwargs)
+#   __init__() got an unexpected keyword argument 'proxies'
+#   
+httpx==0.27.0 
