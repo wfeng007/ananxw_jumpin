@@ -17,6 +17,18 @@
 # 额外的内置插件。提供样例可简单使用。
 #
 import sys,os,time
+
+def __setup_env__():
+    __package_name__="ananxw_jumpin"
+    _file_basename = os.path.splitext(os.path.basename(__file__))[0]
+    if __name__ != f"{__package_name__}.{_file_basename}":
+        sys.modules[f"{__package_name__}.{_file_basename}"] = sys.modules[__name__]
+        print(f"\n新模块名: {__package_name__}.{_file_basename} 已设置到 sys.modules")
+    else:
+        print(f"\n未增加模块名，已有模块:{__name__} 已设置到 sys.modules")
+__setup_env__()
+
+
 from datetime import datetime  # Add this import
 import logging
 from typing  import Union, List, Dict, Any
@@ -52,6 +64,30 @@ from langchain.schema import (
     )
 from langchain.memory import ConversationBufferMemory
 from langchain_openai import ChatOpenAI,OpenAIEmbeddings
+#
+# 打包chromadb后运行时导入模块会存在多个 命名未定义导入本模块失败。chroma v0.5.23
+# 临时进行部分修改，import对应命名
+# 1 import chromadb.utils.embedding_functions.__init__.py 中引用了未定义的 ONNXMiniLM_L6_V2 
+#   实际在 chromadb.utils.embedding_functions.onnx_mini_lm_l6_v2.ONNXMiniLM_L6_V2 
+#   
+# 2 chromadb 内部还有动态导入：chromadb\api\shared_system_client.py -> chromadb\config.py.get_class()
+#   先导入一下：（或者打包时放入隐含导入，方便静态分析）
+# import chromadb.telemetry.product.posthog
+# import chromadb.api.segment
+# import chromadb.db.impl
+# import chromadb.db.impl.sqlite
+# import chromadb.segment.impl.manager.local
+# import chromadb.execution.executor.local
+# import chromadb.quota.simple_quota_enforcer
+# import chromadb.rate_limit.simple_rate_limit
+# import chromadb.segment.impl.metadata
+# import chromadb.migrations # 这里面是内置的sql文件
+# import chromadb.migrations.embeddings_queue
+# import chromadb.migrations.sysdb
+# import chromadb.migrations.metadb
+# 
+# TODO 为了适配打包，考虑尝试进行动态导入；chroma相对是独立的db应用，内部有很多动态导入模块动作，不太适合打包。
+#       并尝试将Chroma的库以py脚本形式整个放入libs或libs_ext，看打包后能否解析读取执行。
 from langchain_chroma import Chroma
 from langchain_community.document_loaders import PyMuPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
@@ -60,15 +96,11 @@ from langchain_community.document_loaders.word_document import UnstructuredWordD
 from langchain_core.documents import Document
 
 
-# from langchain_chroma import Chroma
-
-
-
-if __name__ == "__main__":
-    # 获取当前文件的父目录的父目录（即 projectlab/）
-    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    if project_root not in sys.path:
-        sys.path.insert(0, project_root)  # 插入到路径最前面
+# if __name__ == "__main__":
+#     # 获取当前文件的父目录的父目录（即 projectlab/）
+#     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+#     if project_root not in sys.path:
+#         sys.path.insert(0, project_root)  # 插入到路径最前面
 
 #
 # 在必须用 ananxw_jumpin.ananxw_jumpin_allin1f 这个方式来导入。

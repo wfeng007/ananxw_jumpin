@@ -55,32 +55,68 @@
 # 
 #
 
-
 # import pstats
 import sys, os,time
+import traceback
 from datetime import datetime
 # 包与模块命名处理：
 try:
     #如果所在包有 __init__.py 且设置了__package_name__ 就能导入。如果没有则用目录名。
-    from . import __package_name__  #type:ignore
+    from __init__ import __package_name__  #type:ignore
+    print(f'导入了包__init__.py 中的 __package_name__:{__package_name__}')
 except ImportError:
-    # 当作为__main__运行时，使用目录名作为包名
-    __package_name__ = os.path.basename(os.path.dirname(os.path.abspath(__file__)))
-    # TODO 或者这里作为主程序再设定个主包名 pyinstaller 可能会出问题。
-    # __package_name__= "ananxw_jumpin"
+    #   pyinstaller 后os.path.abspath(__file__)“本文件”来确定路径会变成 _interal目录（默认资源目录）
+    __package_name__= "ananxw_jumpin"
+    print(f'导入本代码文件:{__file__} 中的 __package_name__:{__package_name__}')
 
-if __name__ == "__main__":
-    # 注册模块 包.文件主名 为模块名
-    _file_basename = os.path.splitext(os.path.basename(__file__))[0]
-    sys.modules[f"{__package_name__}.{_file_basename}"] = sys.modules["__main__"]
-    print(f"\n{__package_name__}.{_file_basename} 已设置到 sys.modules")
-    del _file_basename
 
-    # 获取当前文件的父目录的父目录（即 projectlab/）
-    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    if project_root not in sys.path:
-        sys.path.insert(0, project_root)  # 插入到路径最前面
+def _setup_app_env_():
+    #TODO 设定在不同模式下环境情况
 
+    if __name__ == "__main__": #作为入口运行
+        # 为自己增加注册模块名：以 "包.文件主名" 为模块名
+        _file_basename = os.path.splitext(os.path.basename(__file__))[0]
+        sys.modules[f"{__package_name__}.{_file_basename}"] = sys.modules["__main__"]
+        print(f"\n{__package_name__}.{_file_basename} 已设置到 sys.modules")
+        # del _file_basename
+
+        # 将当前目录作为包的根目录
+        # if base_path not in sys.path:
+        #     sys.path.insert(0, base_path)
+
+        if getattr(sys, 'frozen', False):
+            # 作为入口运行 且为打包后执行： 
+            # 注意打包后，根目录名未必是ananxw_jumpin，所以无法用增加祖父目录为扫描路径的方式发现本包
+
+            # base_path = os.path.dirname(sys.executable) #可执行文件的运行所在路径
+            # 
+            ...
+        else:
+            # 作为入口运行 且为开发环境直接执行
+            # base_path = os.path.dirname(os.path.abspath(__file__))
+
+            # 获取当前文件的父目录的父目录（如 projectlab/）
+            project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            if project_root not in sys.path:
+                sys.path.insert(0, project_root)  # 插入到路径最前面
+            ...
+    else :
+        # 作为模块导入运行        
+        pass
+_setup_app_env_()
+
+
+
+
+
+# TODO 处理打包与开发环境的基本应用位置
+# if getattr(sys, 'frozen', False):
+#     # 如果是打包后的可执行文件
+#     application_path = os.path.dirname(sys.executable)
+# else:
+#     # 如果是在开发环境中运行脚本
+#     application_path = os.path.dirname(os.path.abspath(__file__))
+# config_file_path = os.path.join(application_path, 'config.ini')
 
 
 
@@ -126,7 +162,7 @@ from PySide6.QtGui import (
 
 # pynput 用于全局键盘事件
 from pynput import keyboard
-
+# from pydantic.deprecated.decorator import ValidatedFunction
 #
 import markdown
 
@@ -152,8 +188,11 @@ import json
 # 导入结束
 ##
 
-# 环境变量，用于openai key等；
-_ = load_dotenv(find_dotenv())  # 读取本地 .env 文件，里面定义了 OPENAI_API_KEY
+# 读取补充环境变量的配置.env，find_dotenv()
+#   会以本文件为基础逐层目录往上寻找，直到寻找到为止。
+__evnpath=find_dotenv()
+print(f"Found evnpath: {__evnpath} , will load it.")
+_ = load_dotenv(__evnpath)  #
 
 # 版本
 __version__ = "0.6.0"
@@ -206,7 +245,9 @@ class AAXWLoggerManager:
             backupCount=3,
             encoding='utf-8'
         )
-        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(module)s.%(funcName)s [%(filename)s:%(lineno)d] - %(message)s')
+        formatter = logging.Formatter(
+            '%(asctime)s - %(name)s - %(levelname)s - %(module)s.%(funcName)s [%(filename)s:%(lineno)d] - %(message)s'
+        )
         self.fileHandler.setFormatter(formatter)
 
         # 更新所有现有的日志器
@@ -1009,6 +1050,9 @@ class AAXWAppletManager:
             return True
         except Exception as e:
             self.AAXW_CLASS_LOGGER.error(f"Failed to add applet {applet.getName()}: {str(e)}")
+            
+            self.AAXW_CLASS_LOGGER.error(
+                f"Failed to add applet {applet.getName()}: {str(e)}\n{traceback.format_exc()}")
             return False
 
     
@@ -1321,12 +1365,13 @@ class AAXWAbstractAIConnOrAgent(ABC):
 
 
 @AAXWJumpinDICUtilz.register(key="simpleAIConnOrAgent")
-@AAXW_JUMPIN_LOG_MGR.classLogger()
+@AAXW_JUMPIN_LOG_MGR.classLogger(level=logging.DEBUG)
 class AAXWSimpleAIConnOrAgent(AAXWAbstractAIConnOrAgent):
     """
     简单实现的连接LLM/Agent的类，支持流式获取响应。
     使用Langchain封装的OpenAI的接口实现。
     """
+    AAXW_CLASS_LOGGER:logging.Logger
 
     SYSTME_PROMPT_TEMPLE="""
     你的名字是ANAN是一个AI入口助理;
@@ -1363,6 +1408,9 @@ class AAXWSimpleAIConnOrAgent(AAXWAbstractAIConnOrAgent):
         
         if self.openai_base_url:
             chat_params["base_url"] = self.openai_base_url
+
+        # 调试打印
+        self.AAXW_CLASS_LOGGER.debug(f"chat_params: {chat_params}")
         
         self.llm: ChatOpenAI = ChatOpenAI(**chat_params)
     
@@ -3685,12 +3733,28 @@ class AAXWJumpinTrayKit(QSystemTrayIcon):
 if __name__ == "__main__":
 
     try:
+        # 这里使用了相对导入，但builtin_plugins做为自己模块增加包名的操作。
         import ananxw_jumpin.builtin_plugins
     except Exception as e: 
         AAXW_JUMPIN_MODULE_LOGGER.warning(
             f"额外的ananxw_jumpin.builtin_plugin未正常导入，不影响allin1f的单文件运行。{e}")
+        AAXW_JUMPIN_MODULE_LOGGER.warning(
+            f"错误堆栈信息: {str(e)}\n{traceback.format_exc()}")
+        # traceback.print_exc()
     finally:
         pass
+
+    try:
+        # 这里使用了相对导入，但builtin_plugins做为自己模块增加包名的操作。
+        import ananxw_jumpin.builtin_plugins_debug
+    except Exception as e: 
+        AAXW_JUMPIN_MODULE_LOGGER.warning(
+            f"额外的ananxw_jumpin.builtin_plugin_debug未正常导入，不影响allin1f的单文件运行。{e}")
+        AAXW_JUMPIN_MODULE_LOGGER.warning(
+            f"错误堆栈信息: {str(e)}\n{traceback.format_exc()}")
+    finally:
+        pass
+
 
     # all in one file main function.
     def main_allin1file():
