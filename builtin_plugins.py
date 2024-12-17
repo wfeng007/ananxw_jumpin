@@ -17,6 +17,7 @@
 # 额外的内置插件。提供样例可简单使用。
 #
 import sys,os,time
+import traceback
 
 def __setup_env__():
     __package_name__="ananxw_jumpin"
@@ -72,15 +73,26 @@ from langchain_openai import ChatOpenAI,OpenAIEmbeddings
 #   
 # 2 chromadb 内部还有动态导入：chromadb\api\shared_system_client.py -> chromadb\config.py.get_class()
 #   先导入一下：（或者打包时放入隐含导入，方便静态分析）
-# import chromadb.telemetry.product.posthog
-# import chromadb.api.segment
-# import chromadb.db.impl
-# import chromadb.db.impl.sqlite
-# import chromadb.segment.impl.manager.local
-# import chromadb.execution.executor.local
-# import chromadb.quota.simple_quota_enforcer
-# import chromadb.rate_limit.simple_rate_limit
-# import chromadb.segment.impl.metadata
+# FIXME 打包时，chromdb可能还是至少在静态分析阶段要隐含导入给与分析。
+if getattr(sys, 'frozen', False):
+    try:
+        import chromadb.telemetry.product.posthog
+        import chromadb.api.segment
+        import chromadb.db.impl
+        import chromadb.db.impl.sqlite
+        import chromadb.segment.impl.manager.local
+        import chromadb.execution.executor.local
+        import chromadb.quota.simple_quota_enforcer
+        import chromadb.rate_limit.simple_rate_limit
+        import chromadb.segment.impl.metadata
+        import tiktoken.registry
+        # langchain,  embedding模型需要 尤其用ada2,进行文档灌库时
+        import tiktoken_ext.openai_public  # embedding模型需要 尤其用ada2
+        import tiktoken_ext # embedding模型需要 尤其用ada2
+    except Exception as e:
+        print(f"用于打包分析，导入chromadb依赖包，失败:{e}\n{traceback.format_exc()}")
+
+    ...
 # import chromadb.migrations # 这里面是内置的sql文件
 # import chromadb.migrations.embeddings_queue
 # import chromadb.migrations.sysdb
@@ -1340,6 +1352,7 @@ class FileChromaKBS:
             
         except Exception as e:
             self.AAXW_CLASS_LOGGER.error(f"添加文档到集合 {collectionName or 'default'} 失败: {str(e)}")
+            self.AAXW_CLASS_LOGGER.error(f" {str(e)}\n {traceback.format_exc()}")
             if os.path.exists(target_path):
                 os.remove(target_path)
             return False
