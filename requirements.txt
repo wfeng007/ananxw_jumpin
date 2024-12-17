@@ -32,3 +32,7 @@ pymupdf==1.24.10
 #   __init__() got an unexpected keyword argument 'proxies'
 #   
 httpx==0.27.0 
+
+
+# 打包工具，需打包时安装
+# pyinstaller==6.11.1

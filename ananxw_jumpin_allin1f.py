@@ -106,20 +106,6 @@ def _setup_app_env_():
 _setup_app_env_()
 
 
-
-
-
-# TODO 处理打包与开发环境的基本应用位置
-# if getattr(sys, 'frozen', False):
-#     # 如果是打包后的可执行文件
-#     application_path = os.path.dirname(sys.executable)
-# else:
-#     # 如果是在开发环境中运行脚本
-#     application_path = os.path.dirname(os.path.abspath(__file__))
-# config_file_path = os.path.join(application_path, 'config.ini')
-
-
-
 from typing import Callable, List, Dict, Type,Any,TypeVar,Union,cast, Tuple
 
 try:
@@ -3451,7 +3437,7 @@ class AAXWJumpinMainWindow(QWidget):
         self.setLayout(mainVBoxLayout)
 
         # 主窗口设置
-        self.setWindowTitle("快捷键唤起输入框")
+        self.setWindowTitle("ANAN Jumpin!")
         # self.setGeometry(300, 300, 600, 120)
         self.setMinimumSize(600, 120)  # 限定大小
         self.setMaximumSize(600, self.MAX_HEIGHT)
