@@ -73,32 +73,31 @@ from langchain_openai import ChatOpenAI,OpenAIEmbeddings
 #   
 # 2 chromadb 内部还有动态导入：chromadb\api\shared_system_client.py -> chromadb\config.py.get_class()
 #   先导入一下：（或者打包时放入隐含导入，方便静态分析）
-# FIXME 打包时，chromdb可能还是至少在静态分析阶段要隐含导入给与分析。
-if getattr(sys, 'frozen', False):
-    try:
-        import chromadb.telemetry.product.posthog
-        import chromadb.api.segment
-        import chromadb.db.impl
-        import chromadb.db.impl.sqlite
-        import chromadb.segment.impl.manager.local
-        import chromadb.execution.executor.local
-        import chromadb.quota.simple_quota_enforcer
-        import chromadb.rate_limit.simple_rate_limit
-        import chromadb.segment.impl.metadata
-        import tiktoken.registry
-        # langchain,  embedding模型需要 尤其用ada2,进行文档灌库时
-        import tiktoken_ext.openai_public  # embedding模型需要 尤其用ada2
-        import tiktoken_ext # embedding模型需要 尤其用ada2
-    except Exception as e:
-        print(f"用于打包分析，导入chromadb依赖包，失败:{e}\n{traceback.format_exc()}")
-
-    ...
+# 打包时，chromdb可能还是至少在静态分析阶段要隐含导入给与分析。
+# if getattr(sys, 'frozen', False):
+#     try:
+#         import chromadb.telemetry.product.posthog
+#         import chromadb.api.segment
+#         import chromadb.db.impl
+#         import chromadb.db.impl.sqlite
+#         import chromadb.segment.impl.manager.local
+#         import chromadb.execution.executor.local
+#         import chromadb.quota.simple_quota_enforcer
+#         import chromadb.rate_limit.simple_rate_limit
+#         import chromadb.segment.impl.metadata
+#         import tiktoken.registry
+#         # langchain,  embedding模型需要 尤其用ada2,进行文档灌库时
+#         import tiktoken_ext.openai_public  # embedding模型需要 尤其用ada2
+#         import tiktoken_ext # embedding模型需要 尤其用ada2
+#     except Exception as e:
+#         print(f"用于打包分析，导入chromadb依赖包，失败:{e}\n{traceback.format_exc()}")
+    
 # import chromadb.migrations # 这里面是内置的sql文件
 # import chromadb.migrations.embeddings_queue
 # import chromadb.migrations.sysdb
 # import chromadb.migrations.metadb
 # 
-# TODO 为了适配打包，考虑尝试进行动态导入；chroma相对是独立的db应用，内部有很多动态导入模块动作，不太适合打包。
+# 为了适配打包，考虑尝试进行动态导入；chroma相对是独立的db应用，内部有很多动态导入模块动作，不太适合打包。
 #       并尝试将Chroma的库以py脚本形式整个放入libs或libs_ext，看打包后能否解析读取执行。
 from langchain_chroma import Chroma
 from langchain_community.document_loaders import PyMuPDFLoader
@@ -1222,7 +1221,6 @@ class AAXWJumpinChatHistoryExpPlugin(AAXWAbstractBasePlugin):
 ##
 
 # 简单知识库实现， chroma，openai-embedding，pypdf
-# TODO 增加metadata 写入辨别来源。
 @AAXW_JUMPIN_LOG_MGR.classLogger()
 class FileChromaKBS:
     '''文件，chroma方式存储的知识库系统(KBS)。用于RAG等AI相关功能的知识保存与检索。'''
@@ -1322,8 +1320,8 @@ class FileChromaKBS:
             
             # 切分文档，并为每个片段添加元数据
             text_splitter = RecursiveCharacterTextSplitter(
-                chunk_size=200,
-                chunk_overlap=100,
+                chunk_size=1000,
+                chunk_overlap=500,
                 length_function=len,
                 add_start_index=True,
             )
@@ -1331,19 +1329,22 @@ class FileChromaKBS:
             
             # 为每个文档片段添加元数据
             for doc in documents:
+                self.AAXW_CLASS_LOGGER.info(
+                    f"为每个文档片段添加元数据:{file_name} to {self.vectorstore._collection_name} ")
                 doc.metadata.update({
                     "source_file": file_name,
                     "file_path": target_path,
                     "file_type": file_ext,
                     "collection": self.vectorstore._collection_name, #TODO 需要更合理的获取
-                    "chunk_size": 200,
-                    "chunk_overlap": 100
+                    "chunk_size": 1000,
+                    "chunk_overlap": 500
                 })
             
             if not documents:
                 self.AAXW_CLASS_LOGGER.error("文档切分失败")
                 return False
             
+            self.AAXW_CLASS_LOGGER.info(f"准备添加文档到集合 {collectionName or 'default'}: {file_name}")
             # 添加到向量存储
             vectorstore.add_documents(documents)
             
