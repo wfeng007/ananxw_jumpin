@@ -41,10 +41,10 @@
 #       注释说明整体梳理，初步建设1抡项目说明与二开参考说明
 #       增加chat history（memory）与多轮对话功能，提示词模版功能；并提供例子；
 #
-# 0.7+：TODO 
+# 0.7+：TODO 2024-12-03左右开始
 #       代码块需支持plaintext/unknown 以及其他结构，未知，平文为全白。
 #       增加基本向量数据库，支持形成基本rag能力；并提供例子；
-#       打包与发布版初步建设；
+#       已完成 打包与发布版初步建设；
 #       提供其他ai相关样例，如：chateveredit等
 #       coze集成对接应用样例；
 #       dify集成对接样例；
@@ -71,7 +71,7 @@ except ImportError:
 
 
 def _setup_app_env_():
-    #TODO 设定在不同模式下环境情况
+    # 设定在不同模式下环境情况
 
     if __name__ == "__main__": #作为入口运行
         # 为自己增加注册模块名：以 "包.文件主名" 为模块名
@@ -538,8 +538,7 @@ class AAXWFileSourcePluginManager:
     # 改为内置插件前缀
     # BUILTIN_PACKAGE_PREFIX = "builtin_plugins"  # 原 SYSTEM_PACKAGE_PREFIX
     # 使用getattr()来安全地获取包名，如果不存在则使用默认值 
-    # FIXME 好像有问题。设置了__package_name__ 还用builtin_plugins,
-    #         main函数中 直接 pluginManager.builtinPackagePrefix="ananxw_jumpin"
+    #     当前本文件main函数中 直接 pluginManager.builtinPackagePrefix="ananxw_jumpin"
     BUILTIN_PACKAGE_PREFIX = getattr(globals(), '__package_name__', "builtin_plugins")
 
     
@@ -1351,7 +1350,7 @@ class AAXWAbstractAIConnOrAgent(ABC):
 
 
 @AAXWJumpinDICUtilz.register(key="simpleAIConnOrAgent")
-@AAXW_JUMPIN_LOG_MGR.classLogger(level=logging.DEBUG)
+@AAXW_JUMPIN_LOG_MGR.classLogger(level=logging.DEBUG) #
 class AAXWSimpleAIConnOrAgent(AAXWAbstractAIConnOrAgent):
     """
     简单实现的连接LLM/Agent的类，支持流式获取响应。
@@ -1395,8 +1394,8 @@ class AAXWSimpleAIConnOrAgent(AAXWAbstractAIConnOrAgent):
         if self.openai_base_url:
             chat_params["base_url"] = self.openai_base_url
 
-        # 调试打印
-        self.AAXW_CLASS_LOGGER.debug(f"chat_params: {chat_params}")
+        # 
+        # self.AAXW_CLASS_LOGGER.debug(f"chat_params: {chat_params}")
         
         self.llm: ChatOpenAI = ChatOpenAI(**chat_params)
     

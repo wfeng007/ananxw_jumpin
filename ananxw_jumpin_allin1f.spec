@@ -19,6 +19,7 @@
 #
 
 import os,sys,shutil
+import zipfile
 
 # from os.path import join, basename, dirname, exists
 # from os import walk, makedirs, sep
@@ -30,6 +31,8 @@ from PyInstaller.utils.hooks import collect_all
 
 class AppBuilder:
     def __init__(self) -> None:
+
+        ## 基本定义
         # 自定义应用名
         self.appName="ananxw_jumpin"
         # 本文件绝对路径
@@ -42,37 +45,47 @@ class AppBuilder:
         # 打包生成根目录名称文件名称
         self.name_coll_=self.moduleName
         
-        
-        # 指定包路径；默认增加1当前目录，即工程目录就是最基础1个包路径
+        ## 分析时：
+        # 指定包路径；默认增加工程目录就是最基础1个包路径
         # 在静态分析时机，即打包前指定spec的所在目录作为导入包的目录之1。应为app本身也可能是1个模块包。
         # 比如，分析时将ananxw_jumpin 作为一个包，通过init文件扫描所得
         self.scan_pkg_dirs_a_=[self.this_spec_absdir]
         # 分析阶段，指定哪些文本文件直接打包到 name_coll_
-        self.libs_datas_a_ = [
+        self.libs_datas_a_ = [ 
         #        ('icon.png', '.'), ('.env', '.'), ('LICENSE', '.')
         ]
-        # 分析阶段，指定哪些二进制文件直接打包到 name_coll_
-        self.libs_binaries_a_=[]
+        #分析阶段，指定哪些二进制文件直接打包到 name_coll_
+        self.libs_binaries_a_=[] 
         self.buildLibsBinaries()
-
-        self.hiddenimports_a_ = [
-            'posthog', #chromadb 需要
-            'ananxw_jumpin.builtin_plugins',
+        # 导入动态模块 / 添加打包程序找不到的模块
+        # 隐含导入，用了try块静态分析并不一定执行；
+        self.hiddenimports_a_ = [ 
+            'ananxw_jumpin.builtin_plugins',  # 似乎加不加无关。 只要pathex 有设定就行。
             'pydantic.deprecated.decorator'
-        ] # 导入动态模块 / 添加打包程序找不到的模块
+        ] 
+        self.addChromadbDependences() #专门处理chroma的隐含导入
         self.excludes_a_ = ['PyQt5'] # 不需要导入的包
 
+        ## 分析后打包前:
+        self.filter_after_analysis = [ #  需要分析引用，但不需要打包的文件
+            'chromadb' # chromadb之后会直接整体拷贝到libs目录中，使用原始py状态的库
+        ] 
 
+        ## 打包时:
         self.libs_contents_dirname_exe_='_libs'
         self.icon_exe_ = [] # 图标路径
         self.console_exe_ = True # 是否显示命令行窗口
-        self.private_module = [ ] #  不需要打包的文件
-
-
+        
+        ## 打包发布后：
+        #
         # 生成发布（dist）后要直接拷贝的目录、文件内容
         #
-        self.copy2workdir_files = ['icon.png','.env','LICENSE','NOTICE','requirements.txt'] # 额外所需文件
-        self.copy2workdir_folders = ['memories','_libs_ext'] # 额外所需目录
+        self.copy2workdir_files = [ # 额外所需复制的文件
+            'icon.png','.env','LICENSE','NOTICE','requirements.txt'
+        ] 
+        self.copy2workdir_folders = [ # 额外所需复制的目录
+            'memories','_libs_ext'
+        ] 
         # 
 
         pass
@@ -101,12 +114,16 @@ class AppBuilder:
 
 
     def copyFilesAndFoldersToWorkdir(self):
+
+        # 先解压Chroma()
+        self.unzipChromadb()
+
         # 拷贝文件到打包所在目录（_interal同级 coll.name下,这里使用预设的name_coll_）
         # 这里应该是从当前文件触发计算的，所以加上了dist
         dest_root = os.path.join('dist', os.path.basename(self.name_coll_))
         print(f'copyFilesAndFoldersToWorkdir, dest_root:{dest_root}')
-        AppBuilder.copyFoldersTo(self.copy2workdir_folders,dest_root)
-        AppBuilder.copyFilesTo(self.copy2workdir_files,dest_root)
+        AppBuilder.copyFolders(self.copy2workdir_folders,dest_root)
+        AppBuilder.copyFiles(self.copy2workdir_files,dest_root)
 
         ###
         # chroma无法很好的静态分析后打包，这里直接整体复制到打包后的libs目录下。
@@ -116,17 +133,87 @@ class AppBuilder:
         ###
         self.copyChromadb()
 
+
+    def unzipChromadb(self):
+         AppBuilder.unzipFiles(['_libs_ext\\chromadb_0.5.23.zip'],'_libs_ext\\')
+
+    # chromadb处理
     def copyChromadb(self):
         #直接用复制方式复制到 libs下
         dest_root = os.path.join('dist', os.path.basename(self.name_coll_),os.path.basename(self.libs_contents_dirname_exe_))
-        AppBuilder.copyFoldersTo(
+        AppBuilder.copyFolders(
             ['_libs_ext\\chromadb','_libs_ext\\chromadb-0.5.23.dist-info']
             ,dest_root
         )
 
+    def addChromadbDependences(self):
+         # langchain,  embedding模型需要 尤其用ada2,进行文档灌库时
+        self.hiddenimports_a_.append("tiktoken.registry") 
+        self.hiddenimports_a_.append("tiktoken_ext.openai_public") # embedding模型需要 尤其用ada2
+        self.hiddenimports_a_.append("tiktoken_ext") # embedding模型需要 尤其用ada2
+
+        self.hiddenimports_a_.append("chromadb.telemetry.product.posthog")
+        self.hiddenimports_a_.append("chromadb.api.segment")
+        self.hiddenimports_a_.append("chromadb.db.impl")
+        self.hiddenimports_a_.append("chromadb.db.impl.sqlite")
+        self.hiddenimports_a_.append("chromadb.segment.impl.manager.local")
+        self.hiddenimports_a_.append("chromadb.execution.executor.local")
+        self.hiddenimports_a_.append("chromadb.quota.simple_quota_enforcer")
+        self.hiddenimports_a_.append("chromadb.rate_limit.simple_rate_limit")
+        self.hiddenimports_a_.append("chromadb.segment.impl.metadata")
+       
+ 
+
+
+    def filterAnalysis(self,a:'Analysis'):
+        pure = a.pure.copy()
+        a.pure.clear()
+        for name, src, type in pure:
+            condition = [name == m or name.startswith(m + '.') for m in self.filter_after_analysis]
+            if condition and any(condition):
+                print(f"打包前，已过滤模块/包: {name} ")
+                ...
+            else:
+                a.pure.append((name, src, type))    # 把需要保留打包的 py 文件重新添加回 a.pure
 
     @classmethod
-    def copyFoldersTo(cls, src_folders: list[str], dest_dir: str):
+    def unzipFiles(cls, src_files: list[str], dest_dir: str):
+        
+        for zip_file in src_files:
+            try:
+                print(f"准备解压文件 {zip_file} 到 {dest_dir}。")
+                if not os.path.exists(zip_file):
+                    print(f"warning:源文件 {zip_file} 不存在，跳过。")
+                    continue
+                
+                # 创建目标目录（如果不存在）
+                os.makedirs(dest_dir, exist_ok=True)
+                
+                with zipfile.ZipFile(zip_file, 'r') as zip_ref:
+
+                    # 仅遍历 ZIP 文件中的第一层文件和目录目标位置已有则删除。
+                    for member in zip_ref.namelist():
+                        # print(f"遍历zip中...存在内容: {member}。")
+                        # 只处理第一层目录与文件；
+                        if member.count('/') == 0 or (member.count('/') == 1 and member.endswith('/')):  
+                            member_path = os.path.join(dest_dir, member)
+                            
+                            # 如果目标文件已存在，先删除
+                            if os.path.exists(member_path):
+                                if os.path.isdir(member_path):
+                                    shutil.rmtree(member_path)  # 删除目录
+                                else:
+                                    os.remove(member_path)  # 删除文件
+                                print(f"已删除已存在的文件或目录 {member_path}。")
+                            
+                    # 解压文件到目标目录
+                    zip_ref.extractall(dest_dir)
+                    print(f"已将文件 {zip_file} 解压到 {dest_dir}。")
+            except Exception as e:
+                print(f"解压文件 {zip_file} 到 {dest_dir} 时发生错误: {e}")
+
+    @classmethod
+    def copyFolders(cls, src_folders: list[str], dest_dir: str):
         for folder in src_folders:
             try:
                 dest_folder = os.path.join(dest_dir, os.path.basename(folder))  # 保留文件夹名称
@@ -145,7 +232,7 @@ class AppBuilder:
 
 
     @classmethod
-    def copyFilesTo(cls, files: list[str], dest_dir: str ):
+    def copyFiles(cls, files: list[str], dest_dir: str ):
         for file in files:
             try:
                 print(f"准备复制文件{file} 到 {dest_dir}。")
@@ -166,6 +253,7 @@ class AppBuilder:
 appBuilder=AppBuilder()
 
 
+
 a = Analysis(
     appBuilder.entrance_scripts_a_,
     pathex=appBuilder.scan_pkg_dirs_a_,
@@ -180,6 +268,10 @@ a = Analysis(
     optimize=0,
     # init_hook='import ananxw_jumpin.__init__',
 )
+
+# 过滤分析结果
+appBuilder.filterAnalysis(a)
+
 pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
