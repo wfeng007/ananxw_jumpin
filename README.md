@@ -64,7 +64,19 @@ python ananxw_jumpin_allin1f.py
 ```
 
 ### ⚙️ 快速安装运行 
-（建设中...）
+
+先已得到dist的打包版，将ananxw_jumpin目录解压或按照到任意位置。  
+1 直接双击，ananxw_jumpin.exe文件。
+2 或者在命令行中运行：
+```cmd
+cd ananxw_jumpin
+ananxw_jumpin.exe
+```
+打包版获取：
+- 直接下载.zip，或安装包：（带建设... 需要找包存放点）
+- 下载工程后，使用pyinstaller 进行打包后，在dist目录下得到。参考：[`📦打包发布版应用包`](#📦打包发布版应用包)
+
+
 
 ### ⚙️ 快速配置
 默认使用环境变量配置或 `.env` 中设置环境变量配置，默认为OpenAI api需要。**可以不做任何其他配置，均会使用默认参数。**
@@ -92,11 +104,31 @@ Applet切换：
 
 
 ### 📦 主要外部依赖
+详细版本请见：[`requirements.txt`](requirements.txt)  
+简要说明：
 - python 3.9+
 - pyside6：界面主要为qt开发；
 - pynput：全局快捷键；
 - openai-api：AI-LLM对接；
-- langchain(0.3.0)：AI建设；(langchain版本变更较快，已使用尽量基本功能，如使用其他版本报错，请告知。)
+- langchain：AI建设；(langchain版本变更较快，已使用尽量基本功能，如使用其他版本报错，请告知。) 
+- chromadb: 向量数据库，(尝试) 实现**知识库**基础建设；（当前在插件中实现）
+- pyinstaller: app执行包，打包；
+
+### 📦打包发布版应用包
+
+本应用使用pyinstaller进行解析与打包可独立运行的发布版。 pyinstaller的构建文件为：
+[`ananxw_jumpin_allin1f.spec`](ananxw_jumpin_allin1f.spec) 
+（其中包含chromadb不分，chromadb可能打包时不稳定，必要时可以移除插件内容与打包内容。chromadb打包时是使用拷贝方式整体拷贝到包内目录，来源为_libs_ext目录中的包。）
+开发打包前建议先用conda建立开发环境，然后切换进入环境中安装依赖，并打包：
+```cmd
+conda activate ananxw
+# 如未安装依赖则要执行。
+pip install -r requirements.txt 
+
+# 构建打包
+pyinstaller --noconfirm ananxw_jumpin_allin1f.spec 
+```
+打包成功后的独立运行包为，打包时生成的dist目录下的**整个ananx_jumpin目录**。
 
 ### 📝 插件开发
 
@@ -171,45 +203,50 @@ class MyPlugin(AAXWAbstractPlugin):
 **注意：如位置变更请直接对应文件中搜索类名**
 
 1. 内置的插件样例，附加输入框的快键键功能等（位置可能会有变化）：   
-[`ananxw_jumpin_allin1f.py #L2735 AAXWJumpinDefaultBuiltinPlugin` ](ananxw_jumpin_allin1f.py#L2735) # 内置插件实现样例
+[`ananxw_jumpin_allin1f.py 中 AAXWJumpinDefaultBuiltinPlugin` ](ananxw_jumpin_allin1f.py) # 内置插件实现样例
 
 2. 内置的Applet样例，1个由插件去加载的简单applet实现~~ollama访问~~ （位置可能会有变化）；
-[`ananxw_jumpin_allin1f.py #L2440 AAXWJumpinDefaultSimpleApplet` ](ananxw_jumpin_allin1f.py#L2651) # 内置applet样例
+[`ananxw_jumpin_allin1f.py 中 AAXWJumpinDefaultSimpleApplet` ](ananxw_jumpin_allin1f.py) # 内置applet样例
 
 3. 内置的Applet样例，默认applet实现各种默认主要应用功能（位置可能会有变化）；
-[`ananxw_jumpin_allin1f.py #L2827 AAXWJumpinDefaultCompoApplet` ](ananxw_jumpin_allin1f.py#L2827) # 内置applet样例
+[`ananxw_jumpin_allin1f.py 中 AAXWJumpinDefaultCompoApplet` ](ananxw_jumpin_allin1f.py#L2827) # 内置applet样例
 
 
 **注意：当前版本[`builtin_plugins.py`](builtin_plugins.py) 文件样例：**
 
-4. 本地Ollama及其模型使用与基本管理样例，包含插件与applet实现：[`builtin_plugins.py #L239 AAXWJumpinOllamaSimpleApplet` ](builtin_plugins.py#L239)
+4. 本地Ollama及其模型使用与基本管理样例，包含插件与applet实现：[`builtin_plugins.py 中 AAXWJumpinOllamaSimpleApplet` ](builtin_plugins.py)
     - Applet-title:"OLAM"；
     - 界面如下图：![Ollama Ex UI1](./readme_ref_res/ollama_ex_ui1.png)
 
-5. 本地Memory实现样例，包含插件与applet实现：[`builtin_plugins.py #L718 AAXWJumpinChatHistoryExpApplet` ](builtin_plugins.py#L718)
-    - Applet-title:"OLAM"
+5. 本地Memory与历史记录实现样例，包含插件与applet实现：[`builtin_plugins.py #L718 AAXWJumpinChatHistoryExpApplet` ](builtin_plugins.py#L718)
+    - Applet-title:"CHIS"
     - 当前使用Langchian的本地文件持久化，在工作目录下，memories目录下保存；
     - 界面如下图：![Chat history or memory UI1](./readme_ref_res/chathistory_memory_ex_ui1.png)
 
+
+6. 本地知识库与Rag(chromadb)实现样例，包含插件与applet实现：（本功能在打包版本中可能不稳定，请注意使用。）[`builtin_plugins.py 中 AAXWJumpinKBSApplet` ](builtin_plugins.py)
+    - Applet-title:"KBS"
+    - chromadb实现vectordb能力，可上传小尺寸pdf，作为LLM反馈时的搜索查询来源。
+    - 在工作目录下会生成 chroma_db,kbs_store来保存知识文档与索引数据。
+
 ## 📝 版本历史与计划
-
-
+- v0.7: 增加：
+    - 已增加基本向量数据库（基于chroma 0.5.23实现），支持形成基本rag能力；并提供例子
+    - 已完成 打包与发布版初步建设；且支持chroma 0.5.23版本；
 - v0.6: 已增加
     - builtin_plugins.py 用于孵化的独立内置插件与applet样例；
     - 本地Ollama模型使用与简单管理功能；
     - 通用工具消息面板（上或下），附加展示功能面板（左或右）；
     - chat history（memory）与多轮对话功能，提示词模版功能；并提供例子；
 - v0.5: 已增加可切换Applet功能，完善插件框架与机制；
-- v0.4: 已增加工作目录配置，日志功能，简易注入框架
-- v0.3: 已增加Markdown展示气泡
-- v0.2: 已增加托盘功能，支持全局热键
+- v0.4: 已增加工作目录配置，日志功能，简易注入框架；
+- v0.3: 已增加Markdown展示气泡；
+- v0.2: 已增加托盘功能，支持全局热键。
 
 ### 🌈 计划与路线概要
 
-v0.7+ 计划  
+v0.8+ 计划  
 - 代码块需支持plaintext/unknown 以及其他结构，未知，平文为全白。
-- 增加基本向量数据库，支持形成基本rag能力；并提供例子；
-- 打包与发布版初步建设；
 - 提供其他ai相关集成样例，如：chateveredit，xbrain等
 - coze集成对接应用样例；
 - dify集成对接样例；
