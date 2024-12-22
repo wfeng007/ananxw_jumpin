@@ -41,11 +41,12 @@
 #       注释说明整体梳理，初步建设1抡项目说明与二开参考说明
 #       增加chat history（memory）与多轮对话功能，提示词模版功能；并提供例子；
 #
-# 0.7+：TODO 2024-12-03左右开始
+# 0.7+：@Date: 2024-12-03 - 12-21日
 #       已增加基本向量数据库（基于chroma 0.5.23实现），支持形成基本rag能力；并提供例子
 #       已完成 打包与发布版初步建设；且支持chroma 0.5.23版本；
+
+# 0.8+  @TODO 0.8
 #       代码块需支持plaintext/unknown 以及其他结构，未知，平文为全白。
-#       
 #       提供其他ai相关样例，如：chateveredit等
 #       coze集成对接应用样例；
 #       dify集成对接样例；
@@ -182,7 +183,7 @@ print(f"Found evnpath: {__evnpath} , will load it.")
 _ = load_dotenv(__evnpath)  #
 
 # 版本
-__version__ = "0.6.0"
+__version__ = "0.7.0"
 
 
 # 日志器
