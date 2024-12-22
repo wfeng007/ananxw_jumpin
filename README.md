@@ -52,11 +52,12 @@ pip install -r requirements.txt
 
 配置
 
-1. 创建 `.env` 文件并配置你的OpenAI API密钥:
+1. 创建 `.env` 文件并配置你的OpenAI API密钥（或兼容模型的秘钥）:
 ```
 OPENAI_API_KEY=<your_api_key_here>
 OPENAI_BASE_URL=<baseurl,http://xxx/v1>
 ```
+**注意**：.env 内容也可直接设置环境变量，不适用.env文件配置。
 
 2. 运行“all in 1 file”的内置主程序:
 ```bash
@@ -66,14 +67,23 @@ python ananxw_jumpin_allin1f.py
 ### ⚙️ 快速安装运行 
 
 先已得到dist的打包版，将ananxw_jumpin目录解压或按照到任意位置。  
-1 直接双击，ananxw_jumpin.exe文件。
-2 或者在命令行中运行：
+1. 在ananxw_jumpin工作目录，创建 `.env` 文件并配置你的OpenAI API密钥（或兼容模型的秘钥）:
+```
+OPENAI_API_KEY=<your_api_key_here>
+OPENAI_BASE_URL=<baseurl,http://xxx/v1>
+```
+**注意**：.env 内容也可直接设置环境变量，不适用.env文件配置。
+
+2. 直接双击，ananxw_jumpin.exe文件。
+
+3. 或者在命令行中运行：
 ```cmd
 cd ananxw_jumpin
 ananxw_jumpin.exe
 ```
-打包版获取：
-- 直接下载.zip，或安装包：（带建设... 需要找包存放点）
+
+**打包版获取：**
+- 直接下载.zip，或安装包：（待建设... 需要找包存放点）
 - 下载工程后，使用pyinstaller 进行打包后，在dist目录下得到。参考：[`📦打包发布版应用包`](#📦打包发布版应用包)
 
 
@@ -100,7 +110,9 @@ Applet切换：
 ## 🔧 开发者快速指南
 
 - 主干程序均在[`ananxw_jumpin_allin1f.py`](ananxw_jumpin_allin1f.py)文件实现。如当前版本迭代后如未及时更新说明，请按照实际代码为准。该除环境变量必须得设定外，可以在任意位置上建立anaxw_jumpin目录，只用该文件启动本工具。其中包含主干框架与最简单的内置插件与Applet，AI-访问程序等。
-- 内置插件独立文件[`builtin_plugins.py`](builtin_plugins.py)，该文件为孵化中的内置插件与Applet及样例代码。如运行[`ananxw_jumpin_allin1f.py`](ananxw_jumpin_allin1f.py) 时同目录有[`builtin_plugins.py`](builtin_plugins.py) 会自动加载。 其中包含的插件，见以下样例代码部分说明。
+- 内置插件独立文件[`builtin_plugins.py`](builtin_plugins.py)，该文件为孵化中的内置插件与Applet及样例代码。如运行[`ananxw_jumpin_allin1f.py`](ananxw_jumpin_allin1f.py) 时同目录有[`builtin_plugins.py`](builtin_plugins.py) 会自动加载。 其中包含的插件，见以下样例代码部分说明。  
+- 使用pyinstaller进行打包，打包配置脚本 [` ananxw_jumpin_allin1f.spec `](ananxw_jumpin_allin1f.spec) 。
+
 
 
 ### 📦 主要外部依赖
@@ -247,6 +259,7 @@ class MyPlugin(AAXWAbstractPlugin):
 
 v0.8+ 计划  
 - 代码块需支持plaintext/unknown 以及其他结构，未知，平文为全白。
+- 提升一轮基本功能健壮性，误操作容错兼容。
 - 提供其他ai相关集成样例，如：chateveredit，xbrain等
 - coze集成对接应用样例；
 - dify集成对接样例；
@@ -257,8 +270,8 @@ v0.8+ 计划
 
 ## 🤝 贡献
 
-欢迎提交Issue和Pull Request！
-欢迎先联系，沟通交流。
+欢迎提交Issue；  
+欢迎联系，沟通交流。
 
 ## 📄 许可证
 
