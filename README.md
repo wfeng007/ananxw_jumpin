@@ -66,7 +66,7 @@ python ananxw_jumpin_allin1f.py
 
 ### ⚙️ 快速安装运行 
 
-先已得到dist的打包版，将ananxw_jumpin目录解压或按照到任意位置。  
+先已得到dist的打包版，将ananxw_jumpin目录解压或安装到任意位置。  
 1. 在ananxw_jumpin工作目录，创建 `.env` 文件并配置你的OpenAI API密钥（或兼容模型的秘钥）:
 ```
 OPENAI_API_KEY=<your_api_key_here>
@@ -84,7 +84,7 @@ ananxw_jumpin.exe
 
 **打包版获取：**
 - 直接下载.zip，或安装包：（待建设... 需要找包存放点）
-- 下载工程后，使用pyinstaller 进行打包后，在dist目录下得到。参考：[`📦打包发布版应用包`](#📦打包发布版应用包)
+- 下载工程后，使用pyinstaller 进行打包后，在dist目录下得到。参考后续章节：[`📦打包发布版应用包`](#打包发布版应用包)
 
 
 
@@ -126,7 +126,7 @@ Applet切换：
 - chromadb: 向量数据库，(尝试) 实现**知识库**基础建设；（当前在插件中实现）
 - pyinstaller: app执行包，打包；
 
-### 📦打包发布版应用包
+### 打包发布版应用包
 
 本应用使用pyinstaller进行解析与打包可独立运行的发布版。 pyinstaller的构建文件为：
 [`ananxw_jumpin_allin1f.spec`](ananxw_jumpin_allin1f.spec) 
