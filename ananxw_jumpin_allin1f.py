@@ -148,6 +148,14 @@ from PySide6.QtGui import (
 # WebEngineView用hide()方式时会崩溃，默认展示框用了textbrowser
 # from PySide6.QtWebEngineWidgets import QWebEngineView 
 
+# qfluentwidgets(PySide6-Fluent-Widgets) pyside6上的界面扩展
+from qfluentwidgets import (NavigationInterface,NavigationItemPosition, NavigationAvatarWidget,
+                            NavigationWidget, MessageBox,
+                            isDarkTheme, setTheme, Theme, qrouter)
+from qfluentwidgets import FluentIcon as FIF
+#
+
+
 # pynput 用于全局键盘事件
 from pynput import keyboard
 # from pydantic.deprecated.decorator import ValidatedFunction
@@ -3394,75 +3402,293 @@ class AAXWFollowerWindow(QWidget):
     #     super().showEvent(event)
     #     self.update_position()
 
-class AAXWJumpinMainWindow(QWidget):
+
+class AAXWFramelessWindow(QWidget):
+    def __init__(self,parent):
+        super().__init__(parent=parent)
+        self._init_frameless_ui()
+
+    DEFAULT_QSS="""
+    AAXWFramelessWindow#ananxw_frameless_window {
+        background-color: #fff;
+        border-radius: 10px;
+    }
+    """
+
+    def _init_frameless_ui(self):
+        # self.setWindowTitle("ANAN!")
+        # self.setObjectName("ananxw_frame_window")
+
+        self.setWindowTitle("ANAN")
+        self.setObjectName("ananxw_main_window")
+        self.setStyleSheet(self.DEFAULT_QSS)
+        # self.setStyleSheet(AAXWJumpinConfig.MAIN_WINDOWS_QSS)
+        self.setFrameless()
+        
+
+    def setFrameless(self):
+        self.setWindowFlags(self.windowFlags()| Qt.WindowType.FramelessWindowHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        ...
+
+    #直接绘制窗口背景
+    # 这里是画了圆角透明主窗口。
+    # TODO 之后还是改为主窗口中加1个widget作为伪主窗口的面板，基于此定制以及绘制异形主窗口。
+    #      暂时使用重绘简单实现。
+    def paintEvent(self, event):    
+        #为主窗口 绘制圆角 这里只取了qss的背景色
+        
+        # qss获取
+        opt:QStyleOption = QStyleOption() 
+        opt.initFrom(self) #加载自己对应qss
+
+        # 获取 QSS 中定义的背景颜色
+        # bg_color = opt.palette.window().color() #python层可能有类型问题
+        bg_color = self.palette().color(self.backgroundRole()) #
+        ##
+        
+        #绘制
+        painter = QPainter(self) 
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = self.rect()
+        # painter.setBrush(QColor(255, 255, 255)) 
+        painter.setBrush(bg_color) 
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawRoundedRect(rect, 20, 20) #圆角
+
+
+class AAXWJumpinMainWindow(AAXWFramelessWindow):
     """
     主窗口:
         包含所有组件关联：
+        - 导航栏
+        - 输入面板
+        - 消息展示面板
     """
     
     MAX_HEIGHT = 500
     def __init__(self,parent=None):
         super().__init__(parent=parent)
         self.movedCallbacks=[]
-        self.init_ui()
+        
+        # 设置基本窗口属性
+        self.setWindowTitle("ANAN Jumpin!")
+        self.setObjectName("jumpin_main_window")
+        self.setStyleSheet(AAXWJumpinConfig.MAIN_WINDOWS_QSS)
+
+        
+        # 主垂直布局
+        self.mainVBoxLayout = QVBoxLayout(self)
+        self.mainVBoxLayout.setContentsMargins(10, 10, 10, 10)
+        self.mainVBoxLayout.setSpacing(0)
+
+        # 输入面板
+        self.inputPanel = AAXWJumpinInputPanel(self,self)
+        self.mainVBoxLayout.addWidget(self.inputPanel)
+        self.mainVBoxLayout.addWidget(self._createAcrossLine(QFrame.Shape.HLine))
+
+        
+        # self.setWindowFlags(self.windowFlags()| Qt.WindowType.WindowStaysOnTopHint)
+    
+        # 内容区域容器
+        self.contentContainer = QWidget(self)
+        self.contentHBoxLayout = QHBoxLayout(self.contentContainer)
+        self.mainVBoxLayout.addWidget(self.contentContainer)
+
+        # 导航栏
+        self.navigationInterface = NavigationInterface(self, showMenuButton=True)
+        
+        # self.stackWidget = QStackedWidget(self)
+
+        # 消息展示面板 interface
+        self.msgShowingPanel = AAXWScrollPanel(
+            mainWindow=self,
+            qss=AAXWJumpinConfig.MSGSHOWINGPANEL_QSS,
+            parent=self
+        )
+
+        # initialize content layout
+        self.initContentLayout()
+        # 初始化导航栏
+        self.initNavigation()
+
+        # 初始化window
+        self.initWindow()
+
+        # 工具窗口
+        self.topToolsMessageWindow = AAXWFollowerWindow(
+            refWidget=self,
+            refPosition=AAXWFollowerWindow.TOP,
+            mainWindow=self,
+            parent=self
+        )
+        self.leftToolsMessageWindow = AAXWFollowerWindow(
+            refWidget=self,
+            refPosition=AAXWFollowerWindow.LEFT,
+            mainWindow=self,
+            parent=self
+        )
+
+        
+        self.inputPanel.promptInputEdit.setFocus()
+
+
         self.installAppHotKey()
 
         # 转容器关联；
         self.jumpinConfig:AAXWJumpinConfig = None #type:ignore
-        # self.llmagent:AAWXAbstractAIConnOrAgent=AAXWSimpleAIConnOrAgent() # 同时也可能会有容器注入
-        # 
 
-    def init_ui(self):
+    def initContentLayout(self):
+        self.contentHBoxLayout.setSpacing(0)
+        self.contentHBoxLayout.setContentsMargins(0, 0, 0, 0)
+        self.contentHBoxLayout.addWidget(self.navigationInterface)
+        #
+        # self.contentHBoxLayout.addWidget(self.stackWidget)
+        # self.contentHBoxLayout.setStretchFactor(self.stackWidget, 1)
+        self.contentHBoxLayout.addWidget(self.msgShowingPanel)
+        self.contentHBoxLayout.setStretchFactor(self.msgShowingPanel, 1)
+        #
+
+    def initNavigation(self):
+        """初始化导航栏项目"""
+        self.navigationInterface.setExpandWidth(210)
         
-        self.setObjectName("jumpin_main_window")
-        self.setStyleSheet(AAXWJumpinConfig.MAIN_WINDOWS_QSS)
-        
-        # 界面主布局，垂直上下布局；
-        mainVBoxLayout = QVBoxLayout()  
-
-        self.inputPanel = AAXWJumpinInputPanel(self,self)
-        # self.inputPanel.sendRequest.connect(self.handleInputRequest)
-
-        msgShowingPanelQss = AAXWJumpinConfig.MSGSHOWINGPANEL_QSS
-        # 在main这里改为了compoMarkdownContentStrategy 
-        # 
-        self.msgShowingPanel = AAXWScrollPanel(
-            mainWindow=self, 
-            qss=msgShowingPanelQss, 
-            parent=self,
+        # 初始化导航与菜单项
+        # 添加导航项
+        self.navigationInterface.addItem(
+            routeKey='new_interaction',
+            icon=FIF.ADD,
+            selectable=False,
+            text='新开互动',
+            onClick=lambda: print('新开互动 clicked'),
+            position=NavigationItemPosition.TOP,
+            tooltip='新开互动',
         )
 
-        mainVBoxLayout.addWidget(self.inputPanel)
-        mainVBoxLayout.addWidget(self._createAcrossLine(QFrame.Shape.HLine))
-        mainVBoxLayout.addWidget(self.msgShowingPanel)  # showing panel
-        self.setLayout(mainVBoxLayout)
+        self.navigationInterface.addSeparator(NavigationItemPosition.TOP)
 
-        # 主窗口设置
-        self.setWindowTitle("ANAN Jumpin!")
-        # self.setGeometry(300, 300, 600, 120)
-        self.setMinimumSize(600, 120)  # 限定大小
-        self.setMaximumSize(600, self.MAX_HEIGHT)
-        
-        self.setWindowFlags(self.windowFlags()| Qt.WindowType.FramelessWindowHint)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-         # self.setWindowFlags(self.windowFlags()| Qt.WindowType.WindowStaysOnTopHint) #默认钉在最上层
-        
 
+        # self.navigationInterface.addItem(
+        #     routeKey='history',
+        #     icon=FIF.CHAT,
+        #     selectable=False,
+        #     text='历史信息',
+        #     onClick=lambda: print('历史信息 clicked'),
+        #     position=NavigationItemPosition.SCROLL,
+        #     tooltip='历史信息',
+        # )
+
+        for i in range(1, 5):
+            self.navigationInterface.addItem(
+                routeKey=f'history_{i}',
+                selectable=True,
+                icon=FIF.CHAT,
+                text=f'历史互动 {i}',
+                onClick=lambda: print(f'历史互动 {i} clicked'),
+                position=NavigationItemPosition.SCROLL,
+                tooltip=f'历史互动 {i}',
+                # parentRouteKey='history',
+            )
+        
+        self.navigationInterface.addItem(
+            routeKey='all_history',
+            icon=FIF.CHAT,
+            selectable=False,
+            text='查看所有历史',
+            onClick=lambda: print('历史信息 clicked'),
+            position=NavigationItemPosition.SCROLL,
+            tooltip='查看所有历史',
+        )
+
+        self.navigationInterface.addSeparator(NavigationItemPosition.SCROLL)
+
+
+        self.navigationInterface.addItem(
+            routeKey='aiagent_applet',
+            icon=FIF.CHAT,
+            selectable=False,
+            text='伙伴与应用',
+            onClick=lambda: print('伙伴与应用 clicked'),
+            position=NavigationItemPosition.SCROLL,
+            tooltip='伙伴与应用',
+        )
+        for i in range(1, 5):
+            self.navigationInterface.addItem(
+                routeKey=f'aiagent_applet_{i}',
+                selectable=False,
+                icon=FIF.FOLDER,
+                text=f'伙伴与应用 {i}',
+                onClick=lambda: print(f'伙伴与应用 {i} clicked'),
+                tooltip=f'伙伴与应用 {i}',
+                # position=NavigationItemPosition.SCROLL
+                parentRouteKey='aiagent_applet',
+            )
+
+
+        self.navigationInterface.addSeparator(NavigationItemPosition.BOTTOM)
+
+        # self.navigationInterface.addItem(
+        #     routeKey='plugins',
+        #     icon=FIF.SETTING,
+        #     text='插件管理',
+        #     onClick=lambda: print('插件管理 clicked'),
+        #     position=NavigationItemPosition.BOTTOM,
+        #     tooltip='插件管理',
+        # )
+
+        self.navigationInterface.addWidget(
+            routeKey='brief_introduce',
+            widget=NavigationAvatarWidget('ANAN', 'anan.png'), #
+            onClick=self.showFirefMessageBox,
+            position=NavigationItemPosition.BOTTOM,
+        )
+
+        self.navigationInterface.addItem(
+            routeKey='settings',
+            icon=FIF.SETTING,
+            text='Settings',
+            onClick=lambda: print('Settings clicked'),
+            position=NavigationItemPosition.BOTTOM,
+            tooltip='Settings',
+        )
+
+        #默认展开导航栏
+        self.navigationInterface.setMinimumExpandWidth(400)
+        self.navigationInterface.expand(useAni=False)
+
+
+    def initWindow(self):
+        # self.resize(650, 500)
+        # self.setWindowIcon(QIcon('fw_ex_res/logo.png'))
+        # self.setWindowTitle('PyQt-Fluent-Widgets')
+        # self.titleBar.setAttribute(Qt.WA_StyledBackground)
+
+        self.setMinimumSize(700, 300)
+        self.setMaximumSize(700, self.MAX_HEIGHT)
+        
         # 设置窗口大小策略
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
+          # 初始高度 200 像素
+        self.resize(self.width(), 350) 
 
-        # 初始高度 200 像素
-        # self.setFixedHeight(200) 
-        self.resize(self.width(), 200)
+        # desktop = QApplication.screens()[0].availableGeometry()
+        # w, h = desktop.width(), desktop.height()
+        # self.move(w//2 - self.width()//2, h//2 - self.height()//2)
 
-        self.topToolsMessageWindow=AAXWFollowerWindow(
-            refWidget=self,refPosition=AAXWFollowerWindow.TOP,
-            mainWindow=self,parent=self)
-        self.leftToolsMessageWindow=AAXWFollowerWindow(
-            refWidget=self,refPosition=AAXWFollowerWindow.LEFT,
-            mainWindow=self,parent=self)
-        
-        self.inputPanel.promptInputEdit.setFocus()
+        # self.setQss()
+
+    def showFirefMessageBox(self):
+        w = MessageBox(
+            title='ANAN欢迎您🥰',
+            content='ANAN Jumpin 欢迎您-超级个体🚀!',
+            parent=self
+        )
+        w.yesButton.setText('你也好')
+        w.cancelButton.setText('下次一定说“你也好”')
+
+        if w.exec():
+            # QDesktopServices.openUrl(QUrl("https://xxxxx"))
+            print("messagebox:你也好")
 
     #本来让topToolsWindow来注册的，不过用了evetFilter了。暂时没用这里。
     def registerMovedCallbacks(self, callback):
@@ -3473,30 +3699,6 @@ class AAXWJumpinMainWindow(QWidget):
     def moveEvent(self, event):
         super().moveEvent(event)
         self._triggerMoved()
-
-    # 这里是画了圆角透明主窗口。
-    # TODO 之后还是改为主窗口中加1个widget作为伪主窗口的面板，基于此定制以及绘制异形主窗口。
-    #      暂时使用重绘简单实现。
-    def paintEvent(self, event):    
-        #为主窗口 绘制圆角 这里只取了qss的背景色
-        
-        # qss获取
-        opt:QStyleOption = QStyleOption()
-        opt.initFrom(self) #加载自己对应qss
-
-        # 获取 QSS 中定义的背景颜色
-        # bg_color = opt.palette.window().color() #python层可能有类型问题
-        bg_color = self.palette().color(self.backgroundRole()) #
-        ##
-        
-        #绘制
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        rect = self.rect()
-        # painter.setBrush(QColor(255, 255, 255)) 
-        painter.setBrush(bg_color) 
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawRoundedRect(rect, 20, 20)
 
     #   
     # ui初始化 end
@@ -3722,6 +3924,7 @@ if __name__ == "__main__":
     try:
         # 这里使用了相对导入，但builtin_plugins做为自己模块增加包名的操作。
         import ananxw_jumpin.builtin_plugins
+        pass
     except Exception as e: 
         AAXW_JUMPIN_MODULE_LOGGER.warning(
             f"额外的ananxw_jumpin.builtin_plugin未正常导入，不影响allin1f的单文件运行。{e}")

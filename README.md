@@ -140,7 +140,7 @@ pip install -r requirements.txt
 # 构建打包
 pyinstaller --noconfirm ananxw_jumpin_allin1f.spec 
 ```
-打包成功后的独立运行包为，打包时生成的dist目录下的**整个ananx_jumpin目录**。
+打包成功后的独立运行包为，打包时生成的dist目录下的**整个ananxw_jumpin目录**。
 
 ### 📝 插件开发
 
