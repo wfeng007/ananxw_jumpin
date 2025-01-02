@@ -25,14 +25,13 @@ langchain-chroma==0.1.4
 chromadb==0.5.23
 pymupdf==1.24.10
 
-## 补偿指定依赖
-# 注意openai 1.42.0 依赖于 httpx==0.27.0  如果httpx升级比如28.1（可能是openai的bug） 会出现问题：
+## Compensate for dependencies
+# Note: openai 1.42.0 depends on httpx==0.27.0. If httpx is upgraded (e.g. to 28.1), issues may occur (possibly an openai bug):
 #   d:\Anaconda3\envs\ananxw\lib\site-packages\openai\_base_client.py", line 742
 #   self._client = http_client or SyncHttpxClientWrapper( ... super().__init__(**kwargs)
 #   __init__() got an unexpected keyword argument 'proxies'
 #   
 httpx==0.27.0 
 
-
-# 打包工具，需打包时安装
+#
 # pyinstaller==6.11.1
