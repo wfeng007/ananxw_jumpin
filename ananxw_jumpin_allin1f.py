@@ -45,7 +45,16 @@
 #       已增加基本向量数据库（基于chroma 0.5.23实现），支持形成基本rag能力；并提供例子
 #       已完成 打包与发布版初步建设；且支持chroma 0.5.23版本；
 
-# 0.8+  @TODO 0.8
+# 0.8+  @Date: 2025-01-05 
+#       提供整体导航栏；
+#       主导航中增加applet/agent列表与切换能力；
+#       沉淀前期样例中的功能，如历史记忆等到核心功能中；
+#       提供基础线程框架，集中异步处理与界面异步处理；保证可用性与稳定性，防止QTread崩溃；
+#       基于线程框架甚至基础多进程框架，构建初步的agent能力；
+#       coze集成对接应用样例；
+#       MAC环境打包发布尝试；
+# 
+# 0.9+
 #       代码块需支持plaintext/unknown 以及其他结构，未知，平文为全白。
 #       提供其他ai相关样例，如：chateveredit等
 #       coze集成对接应用样例；
@@ -133,7 +142,7 @@ import yaml
 # pyside6 
 from PySide6.QtCore import (
     Qt, QEvent, QObject, QThread, Signal, QTimer, QSize, QPoint,
-    QRegularExpression
+    QRegularExpression,QMutex,QRunnable,QThreadPool
 )
 from PySide6.QtWidgets import (
     QApplication, QSystemTrayIcon, QFrame, QWidget, QScrollArea,
@@ -172,8 +181,17 @@ from langchain_openai import ChatOpenAI
 # from langchain.embeddings import OllamaEmbeddings
 from langchain_community.embeddings import OpenAIEmbeddings
 # from langchain_community.embeddings import OllamaEmbeddings
+
+from langchain_community.chat_message_histories.file import FileChatMessageHistory
 from langchain.prompts import PromptTemplate
-from langchain.schema import BaseMessage,HumanMessage,SystemMessage
+from langchain.schema import (
+        BaseMessage,
+        AIMessage,  # 等价于OpenAI接口中的assistant role
+        HumanMessage,  # 等价于OpenAI接口中的user role
+        SystemMessage  # 等价于OpenAI接口中的system role
+    )
+from langchain.memory import ConversationBufferMemory
+
 
 # ollama使用web客户端工具
 import urllib.parse
@@ -1456,6 +1474,9 @@ class AAXWSimpleAIConnOrAgent(AAXWAbstractAIConnOrAgent):
 
 
 
+
+
+
 @AAXWJumpinDICUtilz.register(key="ollamaAIConnOrAgent")
 @AAXW_JUMPIN_LOG_MGR.classLogger()
 class AAXWOllamaAIConnOrAgent(AAXWAbstractAIConnOrAgent):
@@ -1666,6 +1687,128 @@ class AAXWOllamaAIConnOrAgent(AAXWAbstractAIConnOrAgent):
 
 #     def setInnerInstance(self, innerInst: AAWXAbstractAIConnOrAgent):
 #         self.innerInstance = innerInst
+
+
+##
+# 支持互动历史与记忆持久化管理器，
+# chat history /memory persistence
+##
+
+#列出指定目录对话历史（或记录）列表；
+#载入项的历史记录，成为Memory/session或可进行互动操作的访问-操作器；（内部挂用LLMconn-或外层 agent进行互动操作。）
+#新建一个互动Session；
+@AAXW_JUMPIN_LOG_MGR.classLogger()
+class AAXWJumpinHistoriedMemory:
+    """封装单个对话的历史和内存"""
+    AAXW_CLASS_LOGGER: logging.Logger
+    
+    def __init__(self, chat_id: str, memories_store_dir: str):
+        self.chat_id = chat_id
+        self.chat_history_path = os.path.join(memories_store_dir, f"{chat_id}_history.json")
+        #如果文件不存在，自己会创建1个新的文件。
+        self.message_history = FileChatMessageHistory(self.chat_history_path)
+        self.memory = ConversationBufferMemory()
+        
+        # 加载之前的对话历史
+        self.load()
+
+    def load(self):
+        """从文件中读取之前的对话历史"""
+        try:
+            # # 检查聊天历史文件是否存在
+            # if not os.path.exists(self.chat_history_path):
+            #     # 如果文件不存在，创建一个新的空文件
+            #     with open(self.chat_history_path, 'w') as f:
+            #         f.write('[]')  # 初始化为空的 JSON 数组
+
+            # 加载消息
+            messages: List[BaseMessage] = self.message_history.messages
+            self.memory.chat_memory.add_messages(messages)
+            self.AAXW_CLASS_LOGGER.info(f"加载的消息: {messages}")
+        except Exception as e:
+            self.AAXW_CLASS_LOGGER.warning(f"加载历史消息时发生错误: {e}")
+
+    def save(self, message: Union[AIMessage,HumanMessage,SystemMessage]):
+        """保存对话历史记录"""
+        try:
+            # 添加消息到内存
+            self.memory.chat_memory.add_message(message)
+            # 持久化写入文件
+            self.message_history.add_message(message)
+        except Exception as e:
+            self.AAXW_CLASS_LOGGER.warning(f"保存消息时发生错误: {e}")
+
+    def getMemory(self):
+        """获取当前内存状态"""
+        return self.memory.load_memory_variables({})
+
+    def rename(self, new_chat_id: str):
+        """重命名聊天历史文件并更新实例指向新的文件"""
+        new_chat_history_path = os.path.join(os.path.dirname(self.chat_history_path), f"{new_chat_id}_history.json")
+        
+        # 检查新文件是否已存在
+        if os.path.exists(new_chat_history_path):
+            self.AAXW_CLASS_LOGGER.info(f"聊天历史 {new_chat_id} 已存在，无法重命名。")
+            return False
+        
+        # 重命名文件
+        os.rename(self.chat_history_path, new_chat_history_path)
+        
+        # 更新实例的属性
+        self.chat_id = new_chat_id
+        self.chat_history_path = new_chat_history_path
+        self.message_history = FileChatMessageHistory(self.chat_history_path)  # 重新初始化 FileChatMessageHistory
+        
+        self.AAXW_CLASS_LOGGER.info(f"聊天历史已重命名为: {new_chat_id}")
+        return True
+
+@AAXWJumpinDICUtilz.register(
+    key="jumpinAIMemoryManager",
+    jumpinConfig="jumpinConfig"
+)
+@AAXW_JUMPIN_LOG_MGR.classLogger()
+class AAXWJumpinFileAIMemoryManager:
+    """管理多个AI(LLM) 交互或记忆功能及其持久化的管理器"""
+    AAXW_CLASS_LOGGER: logging.Logger
+
+    def __init__(self):
+        # 移除config参数,改为DI注入
+        # self.dependencyContainer: Union[AAXWDependencyContainer,None] = None
+        self.jumpinConfig: Union[AAXWJumpinConfig,None] = None
+        
+        self.storeDirName = "memories"
+        # 使用注入的config
+        self.memoriesStoreDir:str = None # 初始化为None,等config注入后再设置 #type:ignore
+
+    def initRes(self):
+        """初始化存储目录"""
+        # 设置存储目录路径
+        if self.jumpinConfig:
+            self.memoriesStoreDir = os.path.join(self.jumpinConfig.appWorkDir, self.storeDirName)
+            
+        self.AAXW_CLASS_LOGGER.info(f"检测到的记忆存储目录: {self.memoriesStoreDir}")
+        if not os.path.exists(self.memoriesStoreDir):
+            os.makedirs(self.memoriesStoreDir)
+
+    def listMemories(self) -> List[str]:
+        """列出所有聊天历史的ID"""
+        return [f[
+            :-len('_history.json')
+        ] for f in os.listdir(self.memoriesStoreDir) if f.endswith('_history.json')]
+
+    def loadOrCreateMemories(self, chat_id: str = None) -> AAXWJumpinHistoriedMemory: #type:ignore
+        """加载指定聊天历史"""
+        chId=chat_id if chat_id else self._newName() 
+            
+        chat_history_path = os.path.join(self.memoriesStoreDir, f"{chId}_history.json")
+        print(f"准备加载或创建 {chId} 对应文件。")
+        return AAXWJumpinHistoriedMemory(chId, self.memoriesStoreDir)
+    
+    def _newName(self) ->str :
+        """Generate a new name based on time"""
+        return f"interact{datetime.now().strftime('%Y%m%d%H%M%S')}"
+
+
 
 
 # 线程异步处理AI IO任务。
@@ -2863,11 +3006,24 @@ class AAXWJumpinDefaultBuiltinPlugin(AAXWAbstractBasePlugin):
         pass
     pass
 
-
+class TimeoutMutexLocker:
+    def __init__(self, mutex: QMutex, timeout_ms: int = 3000):
+        self.mutex = mutex
+        self.timeout = timeout_ms
+        self.locked = False
+        
+    def __enter__(self):
+        self.locked = self.mutex.tryLock(self.timeout)
+        return self.locked
+        
+    def __exit__(self, *args):
+        if self.locked:
+            self.mutex.unlock()
 
 # applet-example
 @AAXW_JUMPIN_LOG_MGR.classLogger()
 class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
+    "默认带有组合功能的Applet实现"
     AAXW_CLASS_LOGGER:logging.Logger
 
 
@@ -2880,6 +3036,13 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
         self.title="🐶OP"
 
         self.backupContentBlockStrategy:AAXWContentBlockStrategy=None #type:ignore
+        
+        # 添加线程池
+        self.threadPool = QThreadPool()
+        self.threadPool.setMaxThreadCount(3)  # 限制最大并发线程数
+        
+        # 用于追踪活动的线程
+        self.activeThreads = []
         pass
 
     @override
@@ -2894,8 +3057,22 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
         self.simpleAIConnOrAgent:AAXWSimpleAIConnOrAgent=self.dependencyContainer.getAANode(
             "simpleAIConnOrAgent")
         # 
+
+        self.jumpinAIMemoryManager:AAXWJumpinFileAIMemoryManager=self.dependencyContainer.getAANode(
+            "jumpinAIMemoryManager")
+
+        self.currentHistoriedMemory:AAXWJumpinHistoriedMemory=None #type:ignore
+
+
+        #直接在applet初始化时初始化
+        self._initAIMemoryUI()
         
         pass
+
+
+
+
+
     @override
     def onRemove(self):
         self.AAXW_CLASS_LOGGER.warning(
@@ -2903,6 +3080,7 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
         
         pass
 
+    
 
     @override
     def onActivate(self): 
@@ -2926,6 +3104,197 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
         #按钮标志与基本按钮曹关联
         self.mainWindow.inputPanel.funcButtonLeft.setText(self.getTitle())
         pass
+
+    @override
+    def onInactivate(self):
+        #
+        self.showingPanel.contentBlockStrategy=self.backupContentBlockStrategy
+        self.backupContentBlockStrategy=None #type:ignore
+
+
+        #去除 槽函数
+        self.mainWindow.inputPanel.funcButtonRight.clicked.disconnect(self.doInputCommitAction)
+        # self.mainWindow.inputPanel.promptInputEdit.returnPressed.disconnect(self.doInputCommitAction)
+        self.aiThread=None
+        
+        # 等待所有线程完成
+        for thread in self.activeThreads[:]:
+            thread.wait()
+        self.activeThreads.clear()
+        
+        # 无特别后台资源变更，无需恢复；
+        
+        pass
+    
+
+
+    #初始化记忆/历史记录列表
+    def _initAIMemoryUI(self):
+        """ """
+        #初始化界面上的记忆列表（近期）
+        mems = self.jumpinAIMemoryManager.listMemories()
+        # record=None
+        for record in mems:
+            self.mainWindow.navigationInterface.insertItem(0, #在每次在首个位置插入
+                routeKey=f'{record}',
+                selectable=True,
+                icon=FIF.CHAT,
+                text=f'{record}',
+                #click 可能额外传入了其他参数，循环中闭包使用默认参数，需要_来屏蔽；
+                # qt在点击时应该还会传入1个bool类型的参数。
+                onClick=lambda _,rr=record: self._memItemOnClicked(record=rr),
+                position=NavigationItemPosition.SCROLL,
+                tooltip=f'{record}',
+                # parentRouteKey='history',
+            )
+
+        ...
+
+    #
+    def _memItemOnClicked(self, record:str):
+        print(f'记录:{record} clicked')
+        chat_id = record  # 获取被点击项的文本内容
+        self.load_memory(chat_id)  # 调用加载方法
+
+
+
+    def _refreshMemoriesList(self):
+        """刷新历史记录列表"""
+        self.AAXW_CLASS_LOGGER.warning(f"**********warning 尚未实现刷新界面列表的展示*********")
+        pass
+    
+
+    def create_new_memory(self):
+        """创建新的对话和记忆"""
+        self.AAXW_CLASS_LOGGER.info("创建新的对话和记忆")
+        #创建1个新的chat/memo 并且作为当前chat/memo
+        self.currentHistoriedMemory=self.jumpinAIMemoryManager.loadOrCreateMemories()
+        #刷新列表展示
+        self._refreshMemoriesList()
+
+    def load_memory(self, chat_id: str):
+        """加载指定的聊天历史或记忆"""
+        self.AAXW_CLASS_LOGGER.info(f"加载聊天历史: {chat_id}")
+        
+        self.currentHistoriedMemory = self.jumpinAIMemoryManager.loadOrCreateMemories(chat_id)
+        
+        # 创建新的加载线程
+        loadThread = self.LoadMemoryThread(self.currentHistoriedMemory)
+        loadThread.clearContentSignal.connect(self.clearContent)
+        loadThread.addRowContentSignal.connect(self.addRowContent)
+        loadThread.appendContentSignal.connect(self.appendContent)
+        
+        # 添加完成回调以清理线程
+        def cleanup():
+            if loadThread in self.activeThreads:
+                self.activeThreads.remove(loadThread)
+            loadThread.deleteLater()
+            
+        loadThread.finished.connect(cleanup)
+        
+        # 将线程添加到追踪列表
+        self.activeThreads.append(loadThread)
+        
+        # 使用线程池启动线程
+        self.threadPool.start(loadThread)
+
+    def clearContent(self):
+        self.mainWindow.msgShowingPanel.clearContent()
+
+
+    def addRowContent(self, content: str, rowId: str, contentOwner: str,contentOwnerType:str):
+        """添加行内容的槽函数"""
+        self.mainWindow.msgShowingPanel.addRowContent(
+            content=content, rowId=rowId, contentOwner=contentOwner, 
+            contentOwnerType=contentOwnerType
+        )
+
+    def appendContent(self, content: str, rowId: str):
+        """追加内容的槽函数"""
+        self.mainWindow.msgShowingPanel.appendContentByRowId(content, rowId=rowId)
+        # 同步更新界面会阻塞界面- 参考_mockAIUpdateUI方法。
+       
+    
+
+    @AAXW_JUMPIN_LOG_MGR.classLogger()
+    class LoadMemoryThread(QThread, QRunnable):
+        """用于加载历史消息并更新UI的线程"""
+        AAXW_CLASS_LOGGER: logging.Logger
+        addRowContentSignal = Signal(str, str, str,str)  # (内容, rowId, contentOwner,contentOwnerType)
+        appendContentSignal = Signal(str, str)        # (内容, rowId)
+        clearContentSignal = Signal()
+
+        MUTEX_LOCKER=QMutex()
+
+        def __init__(self, memory: AAXWJumpinHistoriedMemory):
+            QThread.__init__(self)
+            QRunnable.__init__(self)
+            self.memory = memory
+
+        def run(self):
+            """线程运行方法"""
+            try:
+                self.synchRun()
+            except Exception as e:
+                self.AAXW_CLASS_LOGGER.error(f"线程执行过程中发生错误: {e}")
+                self.AAXW_CLASS_LOGGER.error(traceback.format_exc())
+            finally:
+                self.AAXW_CLASS_LOGGER.info("线程执行完成。")
+
+        def synchRun(self):
+            with TimeoutMutexLocker(self.MUTEX_LOCKER, 3000) as locked:
+                if not locked:
+                    self.AAXW_CLASS_LOGGER.warning("获取锁超时，可能已有线程在执行。请不要连续重复操作！")
+                    return
+                else:
+                    messages = self.memory.message_history.messages
+                    self.clearContentSignal.emit()
+                    for msg in messages:
+                        rowId = str(datetime.now().timestamp())
+                        if isinstance(msg, HumanMessage):
+                            user_content = msg.content
+                            self.addRowContentSignal.emit(user_content, rowId, "user",
+                                AAXWScrollPanel.ROW_CONTENT_OWNER_TYPE_USER)  # 通过信号更新用户消息
+                        elif isinstance(msg, AIMessage):
+                            self.addRowContentSignal.emit("", rowId,"ai",
+                                AAXWScrollPanel.ROW_CONTENT_OWNER_TYPE_OTHERS)  # 发送占位符
+                            self.msleep(50)  # 模拟延迟
+                            ai_content = msg.content
+                            ai_content = str(ai_content)
+                            for chunk in ai_content.splitlines(keepends=True):
+                                self.appendContentSignal.emit(chunk, rowId)  # 通过信号更新AI消息
+                                # self.msleep(100)
+                        self.msleep(50)  # 模拟延迟
+
+    # def _mockAIUpdateUI(self):
+    #     """模拟更新UI的方法，循环读取消息并更新界面"""
+    #     messages = self.currentHistoriedMemory.message_history.messages
+
+    #     # 遍历消息并更新UI
+    #     for msg in messages:
+    #         if isinstance(msg, HumanMessage):
+    #             # 处理用户消息
+    #             user_content = msg.content
+    #             # 使用 addRowContent 方法添加用户消息
+    #             self.mainWindow.msgShowingPanel.addRowContent(user_content, rowId=str(datetime.now().timestamp()), contentOwner="user", contentOwnerType=self.mainWindow.msgShowingPanel.ROW_CONTENT_OWNER_TYPE_USER)
+            
+    #         elif isinstance(msg, AIMessage):
+    #             # 处理AI消息
+    #             ai_content = msg.content
+    #             # 生成一个唯一的 rowId
+    #             rowId = str(datetime.now().timestamp())
+    #             # 添加一个空内容行作为占位符
+    #             self.mainWindow.msgShowingPanel.addRowContent("", rowId=rowId, contentOwner="ai", contentOwnerType=self.mainWindow.msgShowingPanel.ROW_CONTENT_OWNER_TYPE_OTHERS)
+
+    #             # 确保 ai_content 是字符串类型
+    #             ai_content = str(ai_content)  # 添加此行以确保类型正确
+    #             # 模拟流式更新AI消息
+    #             for chunk in ai_content.splitlines(keepends=True):  # 保留换行符
+    #                 # 使用 appendContentByRowId 方法追加AI消息
+    #                 self.mainWindow.msgShowingPanel.appendContentByRowId(chunk, rowId=rowId)
+    #                 time.sleep(0.05)  # 模拟延迟，给用户更好的体验
+
+    #         time.sleep(0.1)  # 模拟延迟，给用户更好的体验
 
     def doInputCommitAction(self):
         self.AAXW_CLASS_LOGGER.debug("Right button clicked!")
@@ -2954,11 +3323,19 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
         #注入要用来执行的ai引擎以及 问题文本+ ui组件id
         #FIXME 执行时需要基于资源，暂时锁定输入框；
         #           多重提交，多线程处理还没很好的做，会崩溃；
-        self.aiThread = AIThread(text, str(rrid), self.simpleAIConnOrAgent)
+
+        # 暂时使用当前HistoriedMemory
+        if self.currentHistoriedMemory is None:
+            self.currentHistoriedMemory=self.jumpinAIMemoryManager.loadOrCreateMemories()
+            #刷新列表展示
+            self._refreshMemoriesList() #需要信号发送去执行；这里是doInputCommitAction本身是槽函数
+            
+        
+        self.aiThread = self.MemoAIThread(
+            text, str(rrid), self.simpleAIConnOrAgent, self.currentHistoriedMemory)
         self.aiThread.updateUI.connect(self.mainWindow.msgShowingPanel.appendContentByRowId)
         self.aiThread.start()
        
-        self._logInput()
         self.mainWindow.inputPanel.promptInputEdit.clear()
 
         ...
@@ -2968,21 +3345,67 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
         # 打印输入框中的内容
         self.AAXW_CLASS_LOGGER.debug(f"Input: {self.mainWindow.inputPanel.promptInputEdit.text()}")
 
-    
-    @override
-    def onInactivate(self):
-        #
-        self.showingPanel.contentBlockStrategy=self.backupContentBlockStrategy
-        self.backupContentBlockStrategy=None #type:ignore
 
+    @AAXW_JUMPIN_LOG_MGR.classLogger()#level=logging.INFO
+    class MemoAIThread(AIThread):
+        AAXW_CLASS_LOGGER: logging.Logger
 
-        #去除 槽函数
-        self.mainWindow.inputPanel.funcButtonRight.clicked.disconnect(self.doInputCommitAction)
-        # self.mainWindow.inputPanel.promptInputEdit.returnPressed.disconnect(self.doInputCommitAction)
-        self.aiThread=None
-        # 无特别后台资源变更，无需恢复；
+        PROMPT_TEMPLE=PromptTemplate(
+            input_variables=["chat_history", "question"],
+            template="根据之前的对话历史:'{chat_history}'; 回答相关问题:{question}"
+        )
+
+        #newContent,id 对应：ShowingPanel.appendToContentById 回调
+        updateUI = Signal(str,str)  
+
+        def __init__(self,text:str,uiCellId:str,llmagent:AAXWAbstractAIConnOrAgent,
+                hMemo:AAXWJumpinHistoriedMemory):
+            #
+
+            super().__init__(text=text,uiCellId=uiCellId,llmagent=llmagent)
+            self.hMemo=hMemo
+            self.wholeResponse=""
+            
         
-        pass
+            
+        def run(self):
+            self.msleep(500)  # 执行前先等界面渲染
+            exec_e=None
+            prompted=self.text
+            try:
+                #onstart
+                #这里应该增加合并 历史信息到指定模版位置
+                if self.text:
+
+                    #获取历史信息,并基于历史memo/chat构建提示词；
+                    hMsgs=self.hMemo.memory.chat_memory.messages
+                    chat_history_str = "\n".join([str(msg.content) for msg in hMsgs])
+                    prompted=self.PROMPT_TEMPLE.format(
+                        chat_history=chat_history_str, question=self.text)
+                    human_message = HumanMessage(content=self.text)
+
+                    #只记录 question/当前命令（不包含构建的完整prompt）
+                    self.hMemo.save(human_message)
+                else:
+                    return #直接结束没有提问题内容
+                self.AAXW_CLASS_LOGGER.debug(f"将向LLM发送完整提示词: {prompted}")
+                self.llmagent.requestAndCallback(prompted, self.onResponse)
+            except Exception as e:
+                self.AAXW_CLASS_LOGGER.error(f"An exception occurred: {str(e)}")
+                exec_e=e
+                # raise e
+            finally:
+                #onfinish
+                if exec_e is None and self.wholeResponse: #没有异常才写入库
+                    ai_message = AIMessage(content=self.wholeResponse)
+                    self.hMemo.save(ai_message)
+                pass
+
+        def onResponse(self,str):
+            self.wholeResponse += str
+            self.callUpdateUI(str)
+    
+
     pass
 
 
@@ -3456,7 +3879,7 @@ class AAXWFramelessWindow(QWidget):
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawRoundedRect(rect, 20, 20) #圆角
 
-
+@AAXW_JUMPIN_LOG_MGR.classLogger()
 class AAXWJumpinMainWindow(AAXWFramelessWindow):
     """
     主窗口:
@@ -3465,7 +3888,8 @@ class AAXWJumpinMainWindow(AAXWFramelessWindow):
         - 输入面板
         - 消息展示面板
     """
-    
+    AAXW_CLASS_LOGGER:logging.Logger
+
     MAX_HEIGHT = 500
     def __init__(self,parent=None):
         super().__init__(parent=parent)
@@ -3537,6 +3961,7 @@ class AAXWJumpinMainWindow(AAXWFramelessWindow):
 
         # 转容器关联；
         self.jumpinConfig:AAXWJumpinConfig = None #type:ignore
+        self.diContainer:AAXWDependencyContainer = None #type:ignore
 
     def initContentLayout(self):
         self.contentHBoxLayout.setSpacing(0)
@@ -3577,18 +4002,6 @@ class AAXWJumpinMainWindow(AAXWFramelessWindow):
         #     position=NavigationItemPosition.SCROLL,
         #     tooltip='历史信息',
         # )
-
-        for i in range(1, 5):
-            self.navigationInterface.addItem(
-                routeKey=f'history_{i}',
-                selectable=True,
-                icon=FIF.CHAT,
-                text=f'历史互动 {i}',
-                onClick=lambda: print(f'历史互动 {i} clicked'),
-                position=NavigationItemPosition.SCROLL,
-                tooltip=f'历史互动 {i}',
-                # parentRouteKey='history',
-            )
         
         self.navigationInterface.addItem(
             routeKey='all_history',
@@ -3636,12 +4049,12 @@ class AAXWJumpinMainWindow(AAXWFramelessWindow):
         #     tooltip='插件管理',
         # )
 
-        self.navigationInterface.addWidget(
-            routeKey='brief_introduce',
-            widget=NavigationAvatarWidget('ANAN', 'anan.png'), #
-            onClick=self.showFirefMessageBox,
-            position=NavigationItemPosition.BOTTOM,
-        )
+        # self.navigationInterface.addWidget(
+        #     routeKey='brief_introduce',
+        #     widget=NavigationAvatarWidget('ANAN', 'anan.png'), #
+        #     onClick=self.showFirefMessageBox,
+        #     position=NavigationItemPosition.BOTTOM,
+        # )
 
         self.navigationInterface.addItem(
             routeKey='settings',
@@ -3676,6 +4089,15 @@ class AAXWJumpinMainWindow(AAXWFramelessWindow):
         # self.move(w//2 - self.width()//2, h//2 - self.height()//2)
 
         # self.setQss()
+
+
+    def initAppRes(self):
+        
+        pass
+
+
+
+
 
     def showFirefMessageBox(self):
         w = MessageBox(
@@ -3923,7 +4345,7 @@ if __name__ == "__main__":
 
     try:
         # 这里使用了相对导入，但builtin_plugins做为自己模块增加包名的操作。
-        import ananxw_jumpin.builtin_plugins
+        # import ananxw_jumpin.builtin_plugins
         pass
     except Exception as e: 
         AAXW_JUMPIN_MODULE_LOGGER.warning(
@@ -3953,12 +4375,22 @@ if __name__ == "__main__":
         appletManager:AAXWJumpinAppletManager=None #type:ignore
         try:
             app = QApplication(sys.argv)
+
+            # 实例化历史/记忆存储管理器
+            aiMemoryManager:AAXWJumpinFileAIMemoryManager=AAXWJumpinDICUtilz.getAANode(
+                "jumpinAIMemoryManager")
+            aiMemoryManager.initRes() #初始化历史/记忆存储管理器
+
+
+            # TODO mainWindow的实例化与初始化比比较特殊，需要在app启动后初始化？之后看是否特别处理？
             mainWindow = AAXWJumpinMainWindow()
             AAXWJumpinDICUtilz.setAANode(
                 key="mainWindow",node=mainWindow,
-                # llmagent='simpleAIConnOrAgent', 界面不再直接引用ai相关对象
-                jumpinConfig='jumpinConfig'
+                diContainer="_nativeDependencyContainer", #需要时使用di容器获取资源
+                jumpinConfig='jumpinConfig',
             )
+            mainWindow.initAppRes()
+            
 
             # 实例化插件管理器，并做默认初始化；
             pluginManager=AAXWJumpinDICUtilz.getAANode(
