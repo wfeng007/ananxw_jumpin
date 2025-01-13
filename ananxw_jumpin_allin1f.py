@@ -117,7 +117,8 @@ def _setup_app_env_():
 _setup_app_env_()
 
 
-from typing import Callable, List, Dict, Type,Any,TypeVar,Union,cast, Tuple
+from typing import Callable, List, Dict, Type,Any,TypeVar,Union,cast, Tuple,Protocol
+from functools import wraps
 
 try:
     from typing import override #python 3.12+ #type:ignore
@@ -142,12 +143,13 @@ import yaml
 # pyside6 
 from PySide6.QtCore import (
     Qt, QEvent, QObject, QThread, Signal, QTimer, QSize, QPoint,
-    QRegularExpression,QMutex,QRunnable,QThreadPool
+    QRegularExpression,QMutex,QRunnable,QThreadPool,Slot,
 )
 from PySide6.QtWidgets import (
     QApplication, QSystemTrayIcon, QFrame, QWidget, QScrollArea,
     QHBoxLayout, QVBoxLayout, QSizePolicy, QLineEdit, QPushButton,
-    QTextBrowser, QStyleOption, QMenu, QPlainTextEdit, QLabel,QToolBar
+    QTextBrowser, QStyleOption, QMenu, QPlainTextEdit, QLabel,QToolBar,
+    QStackedWidget,
 )
 from PySide6.QtGui import (
     QKeySequence, QShortcut, QTextDocument, QTextCursor, QMouseEvent,
@@ -3006,8 +3008,16 @@ class AAXWJumpinDefaultBuiltinPlugin(AAXWAbstractBasePlugin):
         pass
     pass
 
-class TimeoutMutexLocker:
+##
+# 界面异步处理相关
+##
+#资源互斥锁，多线程中使用。
+class QTimeoutMutexLocker:
     def __init__(self, mutex: QMutex, timeout_ms: int = 3000):
+        '''
+        互斥锁超时锁
+        timeoutMs =-1 表示永久等待
+        '''
         self.mutex = mutex
         self.timeout = timeout_ms
         self.locked = False
@@ -3019,6 +3029,262 @@ class TimeoutMutexLocker:
     def __exit__(self, *args):
         if self.locked:
             self.mutex.unlock()
+
+class QThreadSafeResourceRegistry:
+    """线程安全资源-锁绑定管理器"""
+
+
+    class ThreadSafeMethod(Protocol):
+        _isThreadSafe: bool
+        _resourceId: str
+        def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
+    
+    T = TypeVar('T', bound=Callable)
+
+
+    def __init__(self):
+        """初始化装饰器管理器"""
+        self._mutexRegistry: Dict[str, QMutex] = {}
+        self._registryMutex = QMutex()  # 保护注册表的互斥锁
+
+    def getMutex(self, resourceId: str) -> QMutex:
+        """获取或创建资源的互斥锁"""
+        with QTimeoutMutexLocker(self._registryMutex):
+            if resourceId not in self._mutexRegistry:
+                self._mutexRegistry[resourceId] = QMutex()
+            return self._mutexRegistry[resourceId]
+
+    def safeOperation(self, resourceId: str, timeoutMs: int = 3000):
+        """创建线程安全的方法装饰器
+        主要通过装饰资源的操作方法，对资源进行线程加锁完成线程安全保护。
+        """
+        def decorator(method: QThreadSafeResourceRegistry.T) -> QThreadSafeResourceRegistry.ThreadSafeMethod:
+            # 如果直接内部方法已经有相同的resource_id锁，直接返回原方法
+            if (hasattr(method, '_isThreadSafe') and 
+                getattr(method, '_resourceId') == resourceId):
+                return method # type: ignore
+            
+            @wraps(method)
+            def wrapper(*args: Any, **kwargs: Any) -> Any:
+                mutex = self.getMutex(resourceId)
+                with QTimeoutMutexLocker(mutex, timeoutMs) as locked:
+                    if not locked:
+                        raise TimeoutError(f"Unable to acquire lock for {resourceId}, timeout={timeoutMs}ms")
+                    return method(*args, **kwargs)
+            
+            wrapper._isThreadSafe = True  # type: ignore
+            wrapper._resourceId = resourceId  # type: ignore
+            return wrapper  # type: ignore
+        return decorator
+
+    def registerSafeOperation(self, objOrCls, resourceId: str, methodNames: list[str], timeoutMs: int = 3000):
+        """为实例或类注册多个需要线程安全的方法"""
+        for methodName in methodNames:
+            if hasattr(objOrCls, methodName):
+                method = getattr(objOrCls, methodName)
+                safeMethod = self.safeOperation(resourceId, timeoutMs)(method)
+                setattr(objOrCls, methodName, safeMethod)
+
+#模块级统一资源-锁注册
+AAXW_JUMPIN_QTSRR=QThreadSafeResourceRegistry()
+
+#线程封装-工作器
+class JumpinQRSignalWorker(QRunnable):
+    """
+    统一的工作线程封装，支持函数式任务和QRunnable代理
+    """
+    class WorkerSignals(QObject):
+        """
+        定义工作线程的信号
+        """
+        ON_FINISHED = Signal()  # 任务完成信号
+        ON_EXCEPTION = Signal(tuple)  # 错误信号
+        GET_RESULT = Signal(object)  # 结果信号
+        PROGRESS = Signal(int)  # 进度信号
+        BEFORE_RUNNING = Signal()  # 开始信号
+        # STATUS = Signal(str)  # 状态信号
+
+
+    def __init__(self, task: Union[Callable, QRunnable], *args, **kwargs):
+        super().__init__()
+        # 信号与管理
+        self.signals = JumpinQRSignalWorker.WorkerSignals()
+        self.isInterrupted = False
+        #
+        
+        # 判断任务类型
+        if isinstance(task, QRunnable):
+            self.taskType = "runnable"
+            self.runnable = task
+        else:
+            self.taskType = "function"
+            self.fn = task
+            self.args = args
+            self.kwargs = kwargs
+
+    @override
+    def run(self):
+        try:
+            if not self.isInterrupted:
+                self.signals.BEFORE_RUNNING.emit()
+                if self.taskType == "runnable":
+                    # 执行被代理的runnable的run方法
+                    self.runnable.run()
+                    self.signals.GET_RESULT.emit(None)
+                else:
+                    # 执行函数式任务
+                    if 'progressSignal' in self.fn.__code__.co_varnames:
+                        result = self.fn(
+                            progressSignal=self.signals.PROGRESS,
+                            *self.args, **self.kwargs
+                        )
+                    else:
+                        result = self.fn(*self.args, **self.kwargs)
+                    self.signals.GET_RESULT.emit(result)
+        except:
+            traceback.print_exc()
+            exctype, value = sys.exc_info()[:2]
+            self.signals.ON_EXCEPTION.emit((exctype, value, traceback.format_exc()))
+        finally:
+            self.signals.ON_FINISHED.emit()
+
+    def interrupt(self):
+        self.isInterrupted = True
+        if self.taskType == "runnable":
+            # 如果被代理的runnable实现了kill方法，也调用它
+            if hasattr(self.runnable, 'kill'):
+                self.runnable.kill() # type:ignore
+            elif hasattr(self.runnable, 'interrupt'):
+                self.runnable.interrupt() # type:ignore
+            elif hasattr(self.runnable, 'stop'):
+                self.runnable.stop() # type:ignore
+            else:
+                print("runnable没有实现用于中断的方法")
+
+class JumpinQRWorkerPool(QObject):
+    """
+    worker池，用来池化管理Worker的运行。
+    """
+    POOL_STATUS_CHANGED = Signal(dict)  # 池状态变化信号
+
+    def __init__(self, maxThreads=None,hasMonitor=True):
+        super().__init__()
+        self.threadPool = QThreadPool()
+        if maxThreads:
+            self.threadPool.setMaxThreadCount(maxThreads)
+        self.activeWorkers = []
+        
+
+        #
+        self.hasMonitor=hasMonitor
+        if self.hasMonitor:
+            # 添加监控用定时器
+            self.monitorTimer = QTimer()
+            self.monitorTimer.setInterval(10000)  # 每10秒更新一次
+            self.monitorTimer.timeout.connect(self._updatePoolStatus)
+
+    def createWorker(self, task: Union[Callable, QRunnable], *args, **kwargs):
+        """创建工作线程但不启动
+        Args:
+            task: 可以是函数或QRunnable实例
+            *args, **kwargs: 如果task是函数，这些参数会传递给函数
+        """
+        worker = JumpinQRSignalWorker(task, *args, **kwargs)
+        # worker.setAutoDelete(True)
+        worker.signals.ON_FINISHED.connect(lambda: self._removeWorker(worker))
+        return worker
+
+    def startWorker(self, worker):
+        """启动指定的工作线程"""
+        self.activeWorkers.append(worker)
+        self.threadPool.start(worker)
+
+    def createAndStartWorker(self, task: Union[Callable, QRunnable], *args, **kwargs):
+        """直接提交并启动任务（便捷方法）
+        Args:
+            task: 可以是函数或QRunnable实例
+            *args, **kwargs: 如果task是函数，这些参数会传递给函数
+        """
+        worker = self.createWorker(task, *args, **kwargs)
+        self.startWorker(worker)
+        return worker
+
+    def _removeWorker(self, worker):
+        """移除完成的工作线程"""
+        if worker in self.activeWorkers:
+            self.activeWorkers.remove(worker)
+
+    
+    def startMonitoring(self):
+        """开始定时监控线程池状态"""
+        self._updatePoolStatus()
+        self.monitorTimer.start()
+
+    def stopMonitoring(self):
+        """停止监控"""
+        self.monitorTimer.stop()
+        
+    @Slot()
+    def _updatePoolStatus(self):
+        """更新并发送线程池状态"""
+        status = {
+            'activeThreadCount': self.threadPool.activeThreadCount(),
+            'maxThreadCount': self.threadPool.maxThreadCount(),
+            'activeWorkers': len(self.activeWorkers)
+        }
+        self.POOL_STATUS_CHANGED.emit(status)
+
+    def clearActiveWorkers(self):
+        """清空任务队列"""
+        worker:JumpinQRSignalWorker=None #type:ignore
+        for worker in self.activeWorkers:
+            worker.interrupt()
+        self.activeWorkers.clear()
+        
+    def onClose(self):
+        self.stopMonitoring()
+        self.clearActiveWorkers()
+        self.threadPool.clear()
+
+    def waitForDone(self, msecs=-1):
+        """等待所有任务完成
+        Args:
+            msecs: 等待超时时间(毫秒)。默认-1表示无限等待
+        Returns:
+            bool: 是否所有任务都完成
+        """
+        #在界面的线程中不要执行，会卡死界面主线程
+        return self.threadPool.waitForDone(msecs)
+# 界面异步处理相关 end
+
+
+#临时实现
+class AIRunnable(QRunnable,QObject):
+    """
+    异步AI处理线程
+    """
+    #newContent,id 对应：ShowingPanel.appendToContentById 回调
+    updateUI = Signal(str,str)  
+
+    def __init__(self,text:str,uiCellId:str,llmagent:AAXWAbstractAIConnOrAgent):
+        super().__init__()
+        
+        # self.mutex = QMutex()
+        self.text:str=text
+        self.uiId:str=uiCellId
+        self.llmagent:AAXWAbstractAIConnOrAgent=llmagent
+        
+    def run(self):
+        QThread.msleep(500)  # 执行前先等界面渲染
+        # self.mutex.lock()
+        # print(f"thread inner str:{self.text} \n")
+        self.llmagent.requestAndCallback(self.text, self.callUpdateUI)
+        # self.mutex.unlock()
+        
+    def callUpdateUI(self,newContent:str):
+        # 最好强制类型转换。self.uiId:str 或 str(self.uiId)
+        self.updateUI.emit(str(newContent), str(self.uiId)) 
+
 
 # applet-example
 @AAXW_JUMPIN_LOG_MGR.classLogger()
@@ -3036,13 +3302,6 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
         self.title="🐶OP"
 
         self.backupContentBlockStrategy:AAXWContentBlockStrategy=None #type:ignore
-        
-        # 添加线程池
-        self.threadPool = QThreadPool()
-        self.threadPool.setMaxThreadCount(3)  # 限制最大并发线程数
-        
-        # 用于追踪活动的线程
-        self.activeThreads = []
         pass
 
     @override
@@ -3068,8 +3327,6 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
         self._initAIMemoryUI()
         
         pass
-
-
 
 
 
@@ -3115,14 +3372,6 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
         #去除 槽函数
         self.mainWindow.inputPanel.funcButtonRight.clicked.disconnect(self.doInputCommitAction)
         # self.mainWindow.inputPanel.promptInputEdit.returnPressed.disconnect(self.doInputCommitAction)
-        self.aiThread=None
-        
-        # 等待所有线程完成
-        for thread in self.activeThreads[:]:
-            thread.wait()
-        self.activeThreads.clear()
-        
-        # 无特别后台资源变更，无需恢复；
         
         pass
     
@@ -3184,19 +3433,11 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
         loadThread.addRowContentSignal.connect(self.addRowContent)
         loadThread.appendContentSignal.connect(self.appendContent)
         
+        # 使用mainWindow的线程池来管理线程
+        worker = self.mainWindow.qworkerpool.createAndStartWorker(loadThread)
+        
         # 添加完成回调以清理线程
-        def cleanup():
-            if loadThread in self.activeThreads:
-                self.activeThreads.remove(loadThread)
-            loadThread.deleteLater()
-            
-        loadThread.finished.connect(cleanup)
-        
-        # 将线程添加到追踪列表
-        self.activeThreads.append(loadThread)
-        
-        # 使用线程池启动线程
-        self.threadPool.start(loadThread)
+        worker.signals.ON_FINISHED.connect(lambda: loadThread.deleteLater())
 
     def clearContent(self):
         self.mainWindow.msgShowingPanel.clearContent()
@@ -3217,7 +3458,7 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
     
 
     @AAXW_JUMPIN_LOG_MGR.classLogger()
-    class LoadMemoryThread(QThread, QRunnable):
+    class LoadMemoryThread(QObject, QRunnable):
         """用于加载历史消息并更新UI的线程"""
         AAXW_CLASS_LOGGER: logging.Logger
         addRowContentSignal = Signal(str, str, str,str)  # (内容, rowId, contentOwner,contentOwnerType)
@@ -3227,10 +3468,12 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
         MUTEX_LOCKER=QMutex()
 
         def __init__(self, memory: AAXWJumpinHistoriedMemory):
-            QThread.__init__(self)
+            QObject.__init__(self)
             QRunnable.__init__(self)
             self.memory = memory
-
+            self.setAutoDelete(True)  # 设置自动删除
+            
+        @override
         def run(self):
             """线程运行方法"""
             try:
@@ -3242,7 +3485,7 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
                 self.AAXW_CLASS_LOGGER.info("线程执行完成。")
 
         def synchRun(self):
-            with TimeoutMutexLocker(self.MUTEX_LOCKER, 3000) as locked:
+            with QTimeoutMutexLocker(self.MUTEX_LOCKER, 3000) as locked:
                 if not locked:
                     self.AAXW_CLASS_LOGGER.warning("获取锁超时，可能已有线程在执行。请不要连续重复操作！")
                     return
@@ -3258,43 +3501,15 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
                         elif isinstance(msg, AIMessage):
                             self.addRowContentSignal.emit("", rowId,"ai",
                                 AAXWScrollPanel.ROW_CONTENT_OWNER_TYPE_OTHERS)  # 发送占位符
-                            self.msleep(50)  # 模拟延迟
+                            QThread.msleep(50)  # 模拟延迟
                             ai_content = msg.content
                             ai_content = str(ai_content)
                             for chunk in ai_content.splitlines(keepends=True):
                                 self.appendContentSignal.emit(chunk, rowId)  # 通过信号更新AI消息
                                 # self.msleep(100)
-                        self.msleep(50)  # 模拟延迟
+                        QThread.msleep(50)  # 模拟延迟
 
-    # def _mockAIUpdateUI(self):
-    #     """模拟更新UI的方法，循环读取消息并更新界面"""
-    #     messages = self.currentHistoriedMemory.message_history.messages
 
-    #     # 遍历消息并更新UI
-    #     for msg in messages:
-    #         if isinstance(msg, HumanMessage):
-    #             # 处理用户消息
-    #             user_content = msg.content
-    #             # 使用 addRowContent 方法添加用户消息
-    #             self.mainWindow.msgShowingPanel.addRowContent(user_content, rowId=str(datetime.now().timestamp()), contentOwner="user", contentOwnerType=self.mainWindow.msgShowingPanel.ROW_CONTENT_OWNER_TYPE_USER)
-            
-    #         elif isinstance(msg, AIMessage):
-    #             # 处理AI消息
-    #             ai_content = msg.content
-    #             # 生成一个唯一的 rowId
-    #             rowId = str(datetime.now().timestamp())
-    #             # 添加一个空内容行作为占位符
-    #             self.mainWindow.msgShowingPanel.addRowContent("", rowId=rowId, contentOwner="ai", contentOwnerType=self.mainWindow.msgShowingPanel.ROW_CONTENT_OWNER_TYPE_OTHERS)
-
-    #             # 确保 ai_content 是字符串类型
-    #             ai_content = str(ai_content)  # 添加此行以确保类型正确
-    #             # 模拟流式更新AI消息
-    #             for chunk in ai_content.splitlines(keepends=True):  # 保留换行符
-    #                 # 使用 appendContentByRowId 方法追加AI消息
-    #                 self.mainWindow.msgShowingPanel.appendContentByRowId(chunk, rowId=rowId)
-    #                 time.sleep(0.05)  # 模拟延迟，给用户更好的体验
-
-    #         time.sleep(0.1)  # 模拟延迟，给用户更好的体验
 
     def doInputCommitAction(self):
         self.AAXW_CLASS_LOGGER.debug("Right button clicked!")
@@ -3306,7 +3521,6 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
             content=text, rowId=rid, contentOwner="user_xiaowang",
             contentOwnerType=AAXWScrollPanel.ROW_CONTENT_OWNER_TYPE_USER,
         )
-        # self.msgShowingPanel.repaint() #重绘然后然后再等待？
         
         # 等待0.5秒
         # 使用QThread让当前主界面线程等待0.5秒 #TODO 主要为了生成rowid，没必要等待。
@@ -3330,15 +3544,15 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
             #刷新列表展示
             self._refreshMemoriesList() #需要信号发送去执行；这里是doInputCommitAction本身是槽函数
             
-        
-        self.aiThread = self.MemoAIThread(
+        # 创建并启动AI处理线程
+        aiThread = self.MemoryAIThread(
             text, str(rrid), self.simpleAIConnOrAgent, self.currentHistoriedMemory)
-        self.aiThread.updateUI.connect(self.mainWindow.msgShowingPanel.appendContentByRowId)
-        self.aiThread.start()
+        aiThread.updateUI.connect(self.mainWindow.msgShowingPanel.appendContentByRowId)
+        
+        # 使用mainWindow的线程池来管理线程
+        self.mainWindow.qworkerpool.createAndStartWorker(aiThread)
        
         self.mainWindow.inputPanel.promptInputEdit.clear()
-
-        ...
 
     #
     def _logInput(self):
@@ -3347,7 +3561,7 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
 
 
     @AAXW_JUMPIN_LOG_MGR.classLogger()#level=logging.INFO
-    class MemoAIThread(AIThread):
+    class MemoryAIThread(AIRunnable):
         AAXW_CLASS_LOGGER: logging.Logger
 
         PROMPT_TEMPLE=PromptTemplate(
@@ -3360,16 +3574,17 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
 
         def __init__(self,text:str,uiCellId:str,llmagent:AAXWAbstractAIConnOrAgent,
                 hMemo:AAXWJumpinHistoriedMemory):
-            #
-
-            super().__init__(text=text,uiCellId=uiCellId,llmagent=llmagent)
-            self.hMemo=hMemo
-            self.wholeResponse=""
-            
-        
+            QObject.__init__(self)
+            QRunnable.__init__(self)
+            self.text = text
+            self.uiCellId = uiCellId
+            self.llmagent = llmagent
+            self.hMemo = hMemo
+            self.wholeResponse = ""
+            self.setAutoDelete(True)  # 设置自动删除
             
         def run(self):
-            self.msleep(500)  # 执行前先等界面渲染
+            QThread.msleep(500)  # 执行前先等界面渲染
             exec_e=None
             prompted=self.text
             try:
@@ -3389,6 +3604,8 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
                 else:
                     return #直接结束没有提问题内容
                 self.AAXW_CLASS_LOGGER.debug(f"将向LLM发送完整提示词: {prompted}")
+
+                #如果是steaming则内部是循环调用onRespone
                 self.llmagent.requestAndCallback(prompted, self.onResponse)
             except Exception as e:
                 self.AAXW_CLASS_LOGGER.error(f"An exception occurred: {str(e)}")
@@ -3405,9 +3622,7 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
             self.wholeResponse += str
             self.callUpdateUI(str)
     
-
     pass
-
 
 
 
@@ -3656,6 +3871,11 @@ class AAXWScrollPanel(QFrame):
     pass  # AAXWScrollPanel end
 
 
+
+
+
+
+
 class AAXWFollowerWindow(QWidget):
     """
     工具窗口，可以相对于参考widget固定位置，并根据参考位置调整尺寸
@@ -3894,6 +4114,9 @@ class AAXWJumpinMainWindow(AAXWFramelessWindow):
     def __init__(self,parent=None):
         super().__init__(parent=parent)
         self.movedCallbacks=[]
+
+        # 初始化(界面操作相关)异步运行线程池
+        self.qworkerpool=JumpinQRWorkerPool(maxThreads=10)
         
         # 设置基本窗口属性
         self.setWindowTitle("ANAN Jumpin!")
@@ -3922,14 +4145,18 @@ class AAXWJumpinMainWindow(AAXWFramelessWindow):
         # 导航栏
         self.navigationInterface = NavigationInterface(self, showMenuButton=True)
         
-        # self.stackWidget = QStackedWidget(self)
+        # 初始化可切换的页面
+        self.mainStackedFrame = QStackedWidget(self)
 
         # 消息展示面板 interface
         self.msgShowingPanel = AAXWScrollPanel(
             mainWindow=self,
             qss=AAXWJumpinConfig.MSGSHOWINGPANEL_QSS,
-            parent=self
+            parent=self.mainStackedFrame
         )
+        self.mainStackedFrame.addWidget(self.msgShowingPanel)
+        self.mainStackedFrame.setCurrentWidget(self.msgShowingPanel)
+        
 
         # initialize content layout
         self.initContentLayout()
@@ -3967,11 +4194,10 @@ class AAXWJumpinMainWindow(AAXWFramelessWindow):
         self.contentHBoxLayout.setSpacing(0)
         self.contentHBoxLayout.setContentsMargins(0, 0, 0, 0)
         self.contentHBoxLayout.addWidget(self.navigationInterface)
-        #
-        # self.contentHBoxLayout.addWidget(self.stackWidget)
-        # self.contentHBoxLayout.setStretchFactor(self.stackWidget, 1)
-        self.contentHBoxLayout.addWidget(self.msgShowingPanel)
-        self.contentHBoxLayout.setStretchFactor(self.msgShowingPanel, 1)
+        
+        # 修改为使用mainStackedFrame
+        self.contentHBoxLayout.addWidget(self.mainStackedFrame)
+        self.contentHBoxLayout.setStretchFactor(self.mainStackedFrame, 1)
         #
 
     def initNavigation(self):
@@ -4200,22 +4426,25 @@ class AAXWJumpinMainWindow(AAXWFramelessWindow):
     #
     # 根据内部部件大小调整主窗口自身大小；还是本来就有这个设置？
     def adjustHeight(self):
-
         # print(f"showing panel  height :{self.msgShowingPanel.height()}")
 
-        newHeight = (
-            self.sizeHint().height()
-            - self.msgShowingPanel.sizeHint().height() + self.msgShowingPanel.expectantHeight()
-        )
+        # 获取当前显示的widget
+        currentWidget = self.mainStackedFrame.currentWidget()
+    
+        if isinstance(currentWidget, AAXWScrollPanel):
+            newHeight = (
+                self.sizeHint().height()
+                - currentWidget.sizeHint().height() 
+                + currentWidget.expectantHeight()
+            )
+        else:
+            # 如果不是ScrollPanel,使用默认高度
+            newHeight = self.sizeHint().height()
 
-        if newHeight > self.MAX_HEIGHT: newHeight = self.MAX_HEIGHT
-        # print(f"adjustHeight new:{newHeight}")
-        # print(f"showing panel - scroll-widget Size :{self.msgShowingPanel.scrollArea.widget().size()}")
+        if newHeight > self.MAX_HEIGHT: 
+            newHeight = self.MAX_HEIGHT
 
         self.resize(self.width(), newHeight)
-        # self.setFixedHeight(newHeight)
-        pass
-
     # TODO: 修改为类静态方法即可。
     def _createAcrossLine(self, shape: QFrame.Shape = QFrame.Shape.VLine):
         # 垂直线 VL 水平线 HL
