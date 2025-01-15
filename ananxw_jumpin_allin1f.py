@@ -46,10 +46,10 @@
 #       已完成 打包与发布版初步建设；且支持chroma 0.5.23版本；
 
 # 0.8+  @Date: 2025-01-05 
-#       提供整体导航栏；
+#       已提供整体导航栏；
+#       已提供基础线程框架，集中异步处理与界面异步处理；保证可用性与稳定性，防止QTread崩溃；
 #       主导航中增加applet/agent列表与切换能力；
 #       沉淀前期样例中的功能，如历史记忆等到核心功能中；
-#       提供基础线程框架，集中异步处理与界面异步处理；保证可用性与稳定性，防止QTread崩溃；
 #       基于线程框架甚至基础多进程框架，构建初步的agent能力；
 #       coze集成对接应用样例；
 #       MAC环境打包发布尝试；
@@ -160,9 +160,13 @@ from PySide6.QtGui import (
 # from PySide6.QtWebEngineWidgets import QWebEngineView 
 
 # qfluentwidgets(PySide6-Fluent-Widgets) pyside6上的界面扩展
-from qfluentwidgets import (NavigationInterface,NavigationItemPosition, NavigationAvatarWidget,
-                            NavigationWidget, MessageBox,
-                            isDarkTheme, setTheme, Theme, qrouter)
+from qfluentwidgets import (
+    NavigationInterface, NavigationItemPosition, NavigationAvatarWidget,
+    NavigationWidget, MessageBox, SettingCardGroup, SwitchSettingCard, FolderListSettingCard,
+    OptionsSettingCard, PushSettingCard, HyperlinkCard, PrimaryPushSettingCard, ScrollArea,
+    ComboBoxSettingCard, ExpandLayout, Theme, CustomColorSettingCard,
+    setTheme, setThemeColor, RangeSettingCard, isDarkTheme, ConfigItem, SettingCard, qrouter
+)
 from qfluentwidgets import FluentIcon as FIF
 #
 
@@ -3013,7 +3017,7 @@ class AAXWJumpinDefaultBuiltinPlugin(AAXWAbstractBasePlugin):
 ##
 #资源互斥锁，多线程中使用。
 class QTimeoutMutexLocker:
-    def __init__(self, mutex: QMutex, timeout_ms: int = 3000):
+    def __init__(self, mutex: QMutex,_verboseName=None, timeout_ms: int = 3000):
         '''
         互斥锁超时锁
         timeoutMs =-1 表示永久等待
@@ -3021,14 +3025,21 @@ class QTimeoutMutexLocker:
         self.mutex = mutex
         self.timeout = timeout_ms
         self.locked = False
+        self._verboseName=_verboseName
         
     def __enter__(self):
         self.locked = self.mutex.tryLock(self.timeout)
+        if self._verboseName and self.locked:
+            print(f"QTimeoutMutexLocker:获取锁成功：{self._verboseName}")
+        if self._verboseName and not self.locked:
+            print(f"QTimeoutMutexLocker:获取锁失败：{self._verboseName}")
         return self.locked
         
     def __exit__(self, *args):
         if self.locked:
             self.mutex.unlock()
+            if self._verboseName:
+                print(f"QTimeoutMutexLocker:已解锁 {self._verboseName}")
 
 class QThreadSafeResourceRegistry:
     """线程安全资源-锁绑定管理器"""
@@ -3259,7 +3270,7 @@ class JumpinQRWorkerPool(QObject):
 
 
 #临时实现
-class AIRunnable(QRunnable,QObject):
+class AIConnectRunnable(QRunnable,QObject):
     """
     异步AI处理线程
     """
@@ -3289,7 +3300,7 @@ class AIRunnable(QRunnable,QObject):
 # applet-example
 @AAXW_JUMPIN_LOG_MGR.classLogger()
 class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
-    "默认带有组合功能的Applet实现"
+    "默认带有复合功能的Applet实现"
     AAXW_CLASS_LOGGER:logging.Logger
 
 
@@ -3399,9 +3410,12 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
 
         ...
 
-    #
+    @Slot()
     def _memItemOnClicked(self, record:str):
-        print(f'记录:{record} clicked')
+        self.AAXW_CLASS_LOGGER.info(f'记录:{record} clicked')
+        #首先显示默认的消息展示面板
+        self.mainWindow.showMsgShowingPanel()
+
         chat_id = record  # 获取被点击项的文本内容
         self.load_memory(chat_id)  # 调用加载方法
 
@@ -3421,6 +3435,7 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
         #刷新列表展示
         self._refreshMemoriesList()
 
+    
     def load_memory(self, chat_id: str):
         """加载指定的聊天历史或记忆"""
         self.AAXW_CLASS_LOGGER.info(f"加载聊天历史: {chat_id}")
@@ -3428,7 +3443,9 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
         self.currentHistoriedMemory = self.jumpinAIMemoryManager.loadOrCreateMemories(chat_id)
         
         # 创建新的加载线程
-        loadThread = self.LoadMemoryThread(self.currentHistoriedMemory)
+        loadThread = self.LoadMemoryUpdateShowingPanelRunnable(
+                    self.currentHistoriedMemory
+                    ,self.mainWindow)
         loadThread.clearContentSignal.connect(self.clearContent)
         loadThread.addRowContentSignal.connect(self.addRowContent)
         loadThread.appendContentSignal.connect(self.appendContent)
@@ -3457,62 +3474,15 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
        
     
 
-    @AAXW_JUMPIN_LOG_MGR.classLogger()
-    class LoadMemoryThread(QObject, QRunnable):
-        """用于加载历史消息并更新UI的线程"""
-        AAXW_CLASS_LOGGER: logging.Logger
-        addRowContentSignal = Signal(str, str, str,str)  # (内容, rowId, contentOwner,contentOwnerType)
-        appendContentSignal = Signal(str, str)        # (内容, rowId)
-        clearContentSignal = Signal()
 
-        MUTEX_LOCKER=QMutex()
-
-        def __init__(self, memory: AAXWJumpinHistoriedMemory):
-            QObject.__init__(self)
-            QRunnable.__init__(self)
-            self.memory = memory
-            self.setAutoDelete(True)  # 设置自动删除
-            
-        @override
-        def run(self):
-            """线程运行方法"""
-            try:
-                self.synchRun()
-            except Exception as e:
-                self.AAXW_CLASS_LOGGER.error(f"线程执行过程中发生错误: {e}")
-                self.AAXW_CLASS_LOGGER.error(traceback.format_exc())
-            finally:
-                self.AAXW_CLASS_LOGGER.info("线程执行完成。")
-
-        def synchRun(self):
-            with QTimeoutMutexLocker(self.MUTEX_LOCKER, 3000) as locked:
-                if not locked:
-                    self.AAXW_CLASS_LOGGER.warning("获取锁超时，可能已有线程在执行。请不要连续重复操作！")
-                    return
-                else:
-                    messages = self.memory.message_history.messages
-                    self.clearContentSignal.emit()
-                    for msg in messages:
-                        rowId = str(datetime.now().timestamp())
-                        if isinstance(msg, HumanMessage):
-                            user_content = msg.content
-                            self.addRowContentSignal.emit(user_content, rowId, "user",
-                                AAXWScrollPanel.ROW_CONTENT_OWNER_TYPE_USER)  # 通过信号更新用户消息
-                        elif isinstance(msg, AIMessage):
-                            self.addRowContentSignal.emit("", rowId,"ai",
-                                AAXWScrollPanel.ROW_CONTENT_OWNER_TYPE_OTHERS)  # 发送占位符
-                            QThread.msleep(50)  # 模拟延迟
-                            ai_content = msg.content
-                            ai_content = str(ai_content)
-                            for chunk in ai_content.splitlines(keepends=True):
-                                self.appendContentSignal.emit(chunk, rowId)  # 通过信号更新AI消息
-                                # self.msleep(100)
-                        QThread.msleep(50)  # 模拟延迟
-
-
-
+    @Slot()
     def doInputCommitAction(self):
         self.AAXW_CLASS_LOGGER.debug("Right button clicked!")
+
+        #首先显示默认的消息展示面板
+        self.mainWindow.showMsgShowingPanel()
+
+        # 获取用户输入
         text = self.mainWindow.inputPanel.promptInputEdit.text()
 
          # 用户输入容消息气泡与内容初始化
@@ -3545,8 +3515,9 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
             self._refreshMemoriesList() #需要信号发送去执行；这里是doInputCommitAction本身是槽函数
             
         # 创建并启动AI处理线程
-        aiThread = self.MemoryAIThread(
-            text, str(rrid), self.simpleAIConnOrAgent, self.currentHistoriedMemory)
+        aiThread = self.MemorisedAIConnectUpdateShowingPanelRunnable(
+            text=text, uiCellId=str(rrid), llmagent=self.simpleAIConnOrAgent, 
+            hMemo=self.currentHistoriedMemory,mainWindow=self.mainWindow)
         aiThread.updateUI.connect(self.mainWindow.msgShowingPanel.appendContentByRowId)
         
         # 使用mainWindow的线程池来管理线程
@@ -3560,8 +3531,68 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
         self.AAXW_CLASS_LOGGER.debug(f"Input: {self.mainWindow.inputPanel.promptInputEdit.text()}")
 
 
+
+
+    @AAXW_JUMPIN_LOG_MGR.classLogger()
+    class LoadMemoryUpdateShowingPanelRunnable(QRunnable,QObject):
+        """用于加载历史消息并更新到界面msgShowingPanel运行时逻辑"""
+        AAXW_CLASS_LOGGER: logging.Logger
+        addRowContentSignal = Signal(str, str, str,str)  # (内容, rowId, contentOwner,contentOwnerType)
+        appendContentSignal = Signal(str, str)        # (内容, rowId)
+        clearContentSignal = Signal()
+
+        # MUTEX_LOCKER=QMutex()
+        # MUTEX_LOCKER=AAXW_JUMPIN_QTSRR.getMutex(resourceId='')
+
+        def __init__(self,memory: AAXWJumpinHistoriedMemory,mainWindow:'AAXWJumpinMainWindow'):
+            QRunnable.__init__(self)
+            QObject.__init__(self)
+            self.memory = memory
+            self.mainWindow=mainWindow
+            #避免递归锁定。线程级别使用线程锁。
+            self.mutexLocker= AAXW_JUMPIN_QTSRR.getMutex(
+                resourceId="Thread_"+str(self.mainWindow.msgShowingPanel.THREAD_SAFE_RESOURCE_ID))
+            self.setAutoDelete(True)  # 设置自动删除
+            
+        @override
+        def run(self):
+            """线程运行方法"""
+            try:
+                self.synchRun()
+            except Exception as e:
+                self.AAXW_CLASS_LOGGER.error(f"线程执行过程中发生错误: {e}")
+                self.AAXW_CLASS_LOGGER.error(traceback.format_exc())
+            finally:
+                self.AAXW_CLASS_LOGGER.info("线程执行完成。")
+
+        def synchRun(self):
+            with QTimeoutMutexLocker(mutex=self.mutexLocker, 
+                    _verboseName="LoadMemoryUpdateShowingPanelRunnable", timeout_ms=3000) as locked:
+                if not locked:
+                    self.AAXW_CLASS_LOGGER.warning("获取锁超时，可能已有线程在执行。请不要连续重复操作！")
+                    return
+                else:
+                    messages = self.memory.message_history.messages
+                    self.clearContentSignal.emit()
+                    for msg in messages:
+                        rowId = str(datetime.now().timestamp())
+                        if isinstance(msg, HumanMessage):
+                            user_content = msg.content
+                            self.addRowContentSignal.emit(user_content, rowId, "user",
+                                AAXWScrollPanel.ROW_CONTENT_OWNER_TYPE_USER)  # 通过信号更新用户消息
+                        elif isinstance(msg, AIMessage):
+                            self.addRowContentSignal.emit("", rowId,"ai",
+                                AAXWScrollPanel.ROW_CONTENT_OWNER_TYPE_OTHERS)  # 发送占位符
+                            QThread.msleep(50)  # 模拟延迟
+                            ai_content = msg.content
+                            ai_content = str(ai_content)
+                            for chunk in ai_content.splitlines(keepends=True):
+                                self.appendContentSignal.emit(chunk, rowId)  # 通过信号更新AI消息
+                                # self.msleep(100)
+                        QThread.msleep(50)  # 模拟延迟
+
     @AAXW_JUMPIN_LOG_MGR.classLogger()#level=logging.INFO
-    class MemoryAIThread(AIRunnable):
+    class MemorisedAIConnectUpdateShowingPanelRunnable(AIConnectRunnable,QObject):
         AAXW_CLASS_LOGGER: logging.Logger
 
         PROMPT_TEMPLE=PromptTemplate(
@@ -3570,53 +3601,64 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
         )
 
         #newContent,id 对应：ShowingPanel.appendToContentById 回调
-        updateUI = Signal(str,str)  
+        # updateUI = Signal(str,str)  
 
         def __init__(self,text:str,uiCellId:str,llmagent:AAXWAbstractAIConnOrAgent,
-                hMemo:AAXWJumpinHistoriedMemory):
+                hMemo:AAXWJumpinHistoriedMemory,mainWindow:'AAXWJumpinMainWindow'):
             QObject.__init__(self)
-            QRunnable.__init__(self)
-            self.text = text
-            self.uiCellId = uiCellId
-            self.llmagent = llmagent
+            AIConnectRunnable.__init__(self,text=text,uiCellId=uiCellId,llmagent=llmagent)
             self.hMemo = hMemo
+            self.mainWindow=mainWindow
+            #线程级别锁
+            self.mutexLocker= AAXW_JUMPIN_QTSRR.getMutex(
+                resourceId="Thread_"+str(self.mainWindow.msgShowingPanel.THREAD_SAFE_RESOURCE_ID))
             self.wholeResponse = ""
             self.setAutoDelete(True)  # 设置自动删除
             
         def run(self):
-            QThread.msleep(500)  # 执行前先等界面渲染
-            exec_e=None
-            prompted=self.text
-            try:
-                #onstart
-                #这里应该增加合并 历史信息到指定模版位置
-                if self.text:
+            # 等待之前user快更新完成
+            QThread.msleep(500) 
+            #米面递归锁定。资源名称还是要分开。
+            with QTimeoutMutexLocker(self.mutexLocker,
+                    _verboseName="MemorisedAIConnectUpdateShowingPanelRunnable", timeout_ms=3000) as locked:
+                if not locked:
+                    self.AAXW_CLASS_LOGGER.warning("获取锁超时，可能已有线程在执行。请不要连续重复操作！")
+                    return
+                
+                self.AAXW_CLASS_LOGGER.info("已加锁")
+                exec_e=None
+                prompted=self.text
+                try:
+                    #onstart
+                    #这里应该增加合并 历史信息到指定模版位置
+                    if self.text:
 
-                    #获取历史信息,并基于历史memo/chat构建提示词；
-                    hMsgs=self.hMemo.memory.chat_memory.messages
-                    chat_history_str = "\n".join([str(msg.content) for msg in hMsgs])
-                    prompted=self.PROMPT_TEMPLE.format(
-                        chat_history=chat_history_str, question=self.text)
-                    human_message = HumanMessage(content=self.text)
+                        #获取历史信息,并基于历史memo/chat构建提示词；
+                        hMsgs=self.hMemo.memory.chat_memory.messages
+                        chat_history_str = "\n".join([str(msg.content) for msg in hMsgs])
+                        prompted=self.PROMPT_TEMPLE.format(
+                            chat_history=chat_history_str, question=self.text)
+                        human_message = HumanMessage(content=self.text)
 
-                    #只记录 question/当前命令（不包含构建的完整prompt）
-                    self.hMemo.save(human_message)
-                else:
-                    return #直接结束没有提问题内容
-                self.AAXW_CLASS_LOGGER.debug(f"将向LLM发送完整提示词: {prompted}")
+                        #只记录 question/当前命令（不包含构建的完整prompt）
+                        self.hMemo.save(human_message)
+                    else:
+                        return #直接结束没有提问题内容
+                    self.AAXW_CLASS_LOGGER.debug(f"将向LLM发送完整提示词: {prompted}")
 
-                #如果是steaming则内部是循环调用onRespone
-                self.llmagent.requestAndCallback(prompted, self.onResponse)
-            except Exception as e:
-                self.AAXW_CLASS_LOGGER.error(f"An exception occurred: {str(e)}")
-                exec_e=e
-                # raise e
-            finally:
-                #onfinish
-                if exec_e is None and self.wholeResponse: #没有异常才写入库
-                    ai_message = AIMessage(content=self.wholeResponse)
-                    self.hMemo.save(ai_message)
-                pass
+                    #如果是steaming则内部是循环调用onRespone
+                    #TODO 如果服务卡顿一直不返回，有时候需要提供强制终端的手段；
+                    self.llmagent.requestAndCallback(prompted, self.onResponse)
+                except Exception as e:
+                    self.AAXW_CLASS_LOGGER.error(f"An exception occurred: {str(e)}")
+                    exec_e=e
+                    # raise e
+                finally:
+                    #onfinish
+                    if exec_e is None and self.wholeResponse: #没有异常才写入库
+                        ai_message = AIMessage(content=self.wholeResponse)
+                        self.hMemo.save(ai_message)
+                    pass
 
         def onResponse(self,str):
             self.wholeResponse += str
@@ -4100,6 +4142,192 @@ class AAXWFramelessWindow(QWidget):
         painter.drawRoundedRect(rect, 20, 20) #圆角
 
 @AAXW_JUMPIN_LOG_MGR.classLogger()
+class AAXWJumpinThreadSafeMsgShowingPanel(AAXWScrollPanel):
+    """
+    消息展示面板代理类
+    通过继承原始面板类来实现代理
+    """
+    AAXW_CLASS_LOGGER:logging.Logger
+
+    THREAD_SAFE_RESOURCE_ID='AAXWJumpinThreadSafeMsgShowingPanel'
+
+    def __init__(self, mainWindow, qss, parent=None):
+        super().__init__(mainWindow=mainWindow, qss=qss, parent=parent)
+        self.resourceId = f"msg_panel_{id(self)}"
+        
+        # 注册需要线程安全保护的方法
+        # AAXW_JUMPIN_QTSRR.registerSafeOperation(
+        #     self,
+        #     self.resourceId,
+        #     ['addRowContent', 'appendContentByRowId', 'clearContent']
+        # )
+    AAXW_JUMPIN_QTSRR.safeOperation(resourceId=THREAD_SAFE_RESOURCE_ID)
+    def addRowContent(self, content: str, rowId: str, contentOwner: str, 
+                     contentOwnerType: str, isAtTop: bool = True) -> None:
+        # 在父类方法调用前后可以添加额外的处理逻辑
+        return super().addRowContent(content, rowId, contentOwner, 
+                                   contentOwnerType, isAtTop)
+    
+    # TODO 该方法加锁消耗可能会比较大。streaming方式可能是1个字符1个字符更新到界面的。
+    AAXW_JUMPIN_QTSRR.safeOperation(resourceId=THREAD_SAFE_RESOURCE_ID)
+    def appendContentByRowId(self, content: str, rowId: str) -> None:
+        return super().appendContentByRowId(content, rowId)
+    
+    AAXW_JUMPIN_QTSRR.safeOperation(resourceId=THREAD_SAFE_RESOURCE_ID,timeoutMs=60*100)
+    def clearContent(self) -> None:
+        return super().clearContent()
+
+
+@AAXW_JUMPIN_LOG_MGR.classLogger()
+class AAXWJumpinSettingPanel(ScrollArea):
+    """ Setting interface """
+    AAXW_CLASS_LOGGER:logging.Logger
+
+    def __init__(self, parent=None):
+        super().__init__(parent=parent)
+        self.scrollWidget = QWidget()
+        self.expandLayout = ExpandLayout(self.scrollWidget)
+
+        # setting label
+        self.settingLabel = QLabel(self.tr("Settings"), self)
+
+        # music folders
+        self.musicInThisPCGroup = SettingCardGroup(
+            self.tr("Music on this PC"), self.scrollWidget)
+        # self.musicFolderCard = FolderListSettingCard(
+        #     cfg.musicFolders,
+        #     self.tr("Local music library"),
+        #     directory=QStandardPaths.writableLocation(
+        #         QStandardPaths.MusicLocation),
+        #     parent=self.musicInThisPCGroup
+        # )
+        self.downloadFolderCard = PushSettingCard(
+            text='选择目录',
+            icon=FIF.DOWNLOAD,
+            title="工作目录",
+            content='D:/home/eclipse_workspace/hipython/',
+            parent=self.musicInThisPCGroup
+        )
+        self.downloadFolderCard.setEnabled(False)
+
+        # personalization
+        self.personalGroup = SettingCardGroup(
+            self.tr('Personalization'), self.scrollWidget)
+        self.micaCard = SettingCard(
+            icon=FIF.TRANSPARENT,
+            title='Mica effect',
+            content='Apply semi transparent to windows and surfaces',
+            parent=self.personalGroup
+        )
+        
+        # material
+        self.materialGroup = SettingCardGroup(
+            self.tr('Material'), self.scrollWidget)
+  
+        # update software
+        self.updateSoftwareGroup = SettingCardGroup(
+            self.tr("Software update"), self.scrollWidget)
+
+
+        # application
+        self.aboutGroup = SettingCardGroup(self.tr('About'), self.scrollWidget)
+        self.helpCard = HyperlinkCard(
+            "www.baidu.com",
+            text='打开帮助页面',
+            icon=FIF.HELP,
+            title='Help',
+            content='Discover new features and learn useful tips about PyQt-Fluent-Widgets',
+            parent=self.aboutGroup
+        )
+        self.feedbackCard = PrimaryPushSettingCard(
+            'Primary Push',
+            FIF.FEEDBACK,
+            'Primary Push',
+            'Help us improve PyQt-Fluent-Widgets by providing feedback',
+            parent=self.aboutGroup
+        )
+
+        self.__initWidget()
+
+    def __initWidget(self):
+        self.resize(1000, 800)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+        self.setViewportMargins(0, 80, 0, 20)
+        self.setWidget(self.scrollWidget)
+        self.setWidgetResizable(True)
+        self.setObjectName('settingInterface')
+
+        # initialize style sheet
+        self.scrollWidget.setObjectName('scrollWidget')
+        self.settingLabel.setObjectName('settingLabel')
+        # StyleSheet.SETTING_INTERFACE.apply(self)
+
+
+        # initialize layout
+        self.__initLayout()
+        self.__connectSignalToSlot()
+
+    def __initLayout(self):
+        self.settingLabel.move(36, 30)
+
+        # add cards to group
+        self.musicInThisPCGroup.addSettingCard(self.downloadFolderCard)
+
+        self.personalGroup.addSettingCard(self.micaCard)
+   
+
+        self.aboutGroup.addSettingCard(self.helpCard)
+        self.aboutGroup.addSettingCard(self.feedbackCard)
+
+        # add setting card group to layout
+        self.expandLayout.setSpacing(28)
+        self.expandLayout.setContentsMargins(36, 10, 36, 0)
+        self.expandLayout.addWidget(self.musicInThisPCGroup)
+        self.expandLayout.addWidget(self.personalGroup)
+        self.expandLayout.addWidget(self.materialGroup)
+        self.expandLayout.addWidget(self.updateSoftwareGroup)
+        self.expandLayout.addWidget(self.aboutGroup)
+
+    # def __showRestartTooltip(self):
+    #     """ show restart tooltip """
+    #     InfoBar.success(
+    #         self.tr('Updated successfully'),
+    #         self.tr('Configuration takes effect after restart'),
+    #         duration=1500,
+    #         parent=self
+    #     )
+
+    def __onDownloadFolderCardClicked(self):
+        """ download folder card clicked slot """
+        # folder = QFileDialog.getExistingDirectory(
+        #     self, self.tr("Choose folder"), "./")
+        # if not folder or cfg.get(cfg.downloadFolder) == folder:
+        #     return
+
+        # cfg.set(cfg.downloadFolder, folder)
+        # self.downloadFolderCard.setContent(folder)
+        pass
+
+    def __connectSignalToSlot(self):
+        """ connect signal to slot """
+        # cfg.appRestartSig.connect(self.__showRestartTooltip)
+
+        # # music in the pc
+        # self.downloadFolderCard.clicked.connect(
+        #     self.__onDownloadFolderCardClicked)
+
+        # # personalization
+        # cfg.themeChanged.connect(setTheme)
+        # self.themeColorCard.colorChanged.connect(lambda c: setThemeColor(c))
+        # self.micaCard.checkedChanged.connect(signalBus.micaEnableChanged)
+
+        # # about
+        # self.feedbackCard.clicked.connect(
+        #     lambda: QDesktopServices.openUrl(QUrl(FEEDBACK_URL)))
+        pass
+
+@AAXW_JUMPIN_LOG_MGR.classLogger()
 class AAXWJumpinMainWindow(AAXWFramelessWindow):
     """
     主窗口:
@@ -4110,7 +4338,7 @@ class AAXWJumpinMainWindow(AAXWFramelessWindow):
     """
     AAXW_CLASS_LOGGER:logging.Logger
 
-    MAX_HEIGHT = 500
+    MAX_HEIGHT = 550
     def __init__(self,parent=None):
         super().__init__(parent=parent)
         self.movedCallbacks=[]
@@ -4148,16 +4376,23 @@ class AAXWJumpinMainWindow(AAXWFramelessWindow):
         # 初始化可切换的页面
         self.mainStackedFrame = QStackedWidget(self)
 
-        # 消息展示面板 interface
-        self.msgShowingPanel = AAXWScrollPanel(
+        # 使用线程安全的消息展示面板
+        self.msgShowingPanel = AAXWJumpinThreadSafeMsgShowingPanel(
             mainWindow=self,
             qss=AAXWJumpinConfig.MSGSHOWINGPANEL_QSS,
             parent=self.mainStackedFrame
         )
         self.mainStackedFrame.addWidget(self.msgShowingPanel)
-        self.mainStackedFrame.setCurrentWidget(self.msgShowingPanel)
         
 
+
+        # 设置面板加入展示堆 
+        self.settingPanel = AAXWJumpinSettingPanel(self)
+        self.mainStackedFrame.addWidget(self.settingPanel)
+        
+
+        # 默认显示消息展示面板
+        self.mainStackedFrame.setCurrentWidget(self.msgShowingPanel)
         # initialize content layout
         self.initContentLayout()
         # 初始化导航栏
@@ -4211,7 +4446,7 @@ class AAXWJumpinMainWindow(AAXWFramelessWindow):
             icon=FIF.ADD,
             selectable=False,
             text='新开互动',
-            onClick=lambda: print('新开互动 clicked'),
+            onClick=lambda: self.AAXW_CLASS_LOGGER.warning('新开互动 clicked'),
             position=NavigationItemPosition.TOP,
             tooltip='新开互动',
         )
@@ -4234,7 +4469,7 @@ class AAXWJumpinMainWindow(AAXWFramelessWindow):
             icon=FIF.CHAT,
             selectable=False,
             text='查看所有历史',
-            onClick=lambda: print('历史信息 clicked'),
+            onClick=lambda: self.AAXW_CLASS_LOGGER.warning('历史信息 clicked'),
             position=NavigationItemPosition.SCROLL,
             tooltip='查看所有历史',
         )
@@ -4247,7 +4482,7 @@ class AAXWJumpinMainWindow(AAXWFramelessWindow):
             icon=FIF.CHAT,
             selectable=False,
             text='伙伴与应用',
-            onClick=lambda: print('伙伴与应用 clicked'),
+            onClick=lambda: self.AAXW_CLASS_LOGGER.warning('伙伴与应用 clicked'),
             position=NavigationItemPosition.SCROLL,
             tooltip='伙伴与应用',
         )
@@ -4257,7 +4492,7 @@ class AAXWJumpinMainWindow(AAXWFramelessWindow):
                 selectable=False,
                 icon=FIF.FOLDER,
                 text=f'伙伴与应用 {i}',
-                onClick=lambda: print(f'伙伴与应用 {i} clicked'),
+                onClick=lambda: self.AAXW_CLASS_LOGGER.warning(f'伙伴与应用 {i} clicked'),
                 tooltip=f'伙伴与应用 {i}',
                 # position=NavigationItemPosition.SCROLL
                 parentRouteKey='aiagent_applet',
@@ -4286,7 +4521,7 @@ class AAXWJumpinMainWindow(AAXWFramelessWindow):
             routeKey='settings',
             icon=FIF.SETTING,
             text='Settings',
-            onClick=lambda: print('Settings clicked'),
+            onClick=self.showSettingPanel,
             position=NavigationItemPosition.BOTTOM,
             tooltip='Settings',
         )
@@ -4319,9 +4554,20 @@ class AAXWJumpinMainWindow(AAXWFramelessWindow):
 
     def initAppRes(self):
         
+        # 初始化
         pass
 
-
+    @Slot()
+    def showSettingPanel(self):
+        # 显示设置面板
+        self.AAXW_CLASS_LOGGER.info('Settings clicked')
+        self.mainStackedFrame.setCurrentWidget(self.settingPanel)
+    
+    @Slot()
+    def showMsgShowingPanel(self):
+        # 显示消息展示面板
+        self.mainStackedFrame.setCurrentWidget(self.msgShowingPanel)
+    
 
 
 
@@ -4336,7 +4582,7 @@ class AAXWJumpinMainWindow(AAXWFramelessWindow):
 
         if w.exec():
             # QDesktopServices.openUrl(QUrl("https://xxxxx"))
-            print("messagebox:你也好")
+            self.AAXW_CLASS_LOGGER.info("messagebox:你也好")
 
     #本来让topToolsWindow来注册的，不过用了evetFilter了。暂时没用这里。
     def registerMovedCallbacks(self, callback):
