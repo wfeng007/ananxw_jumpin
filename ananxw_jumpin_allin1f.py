@@ -162,6 +162,7 @@ from PySide6.QtGui import (
 # qfluentwidgets(PySide6-Fluent-Widgets) pyside6上的界面扩展
 from qfluentwidgets import (
     NavigationInterface, NavigationItemPosition, NavigationAvatarWidget,NavigationTreeWidget,
+    NavigationPushButton,
     NavigationWidget, MessageBox, SettingCardGroup, SwitchSettingCard, FolderListSettingCard,
     OptionsSettingCard, PushSettingCard, HyperlinkCard, PrimaryPushSettingCard, ScrollArea,
     ComboBoxSettingCard, ExpandLayout, Theme, CustomColorSettingCard,
@@ -1796,19 +1797,80 @@ class AAXWJumpinFileAIMemoryManager:
         if not os.path.exists(self.memoriesStoreDir):
             os.makedirs(self.memoriesStoreDir)
 
-    def listMemories(self) -> List[str]:
-        """列出所有聊天历史的ID"""
-        return [f[
-            :-len('_history.json')
-        ] for f in os.listdir(self.memoriesStoreDir) if f.endswith('_history.json')]
+    def listMemoryNames(self, 
+        offset: int = 0, 
+        limit: int = 5,
+        sortByModified: bool = True,
+        ascending: bool = False
+    ) -> List[str]:
+        """列出聊天历史的ID，支持分页和排序
+    
+        Args:
+            offset: 起始位置，默认0表示从头开始
+            limit: 返回数量限制，默认5条, 为-1表示返回全部
+            sortByModified: 是否按修改时间排序，默认True
+            ascending: 排序方向，默认False表示降序(新的在前)
+    
+        Returns:
+            List[str]: 聊天历史ID列表
+        """
+        # 获取所有历史文件
+        history_files = [f for f in os.listdir(self.memoriesStoreDir) 
+                        if f.endswith('_history.json')]
+        
+        total_count = len(history_files)
+        
+        # 边界检查
+        if offset < 0:
+            offset = 0
+        if offset >= total_count:
+            return []  # 如果偏移量超过总数,返回空列表
+        
+        if sortByModified:
+            # 获取文件修改时间并排序
+            history_files.sort(
+                key=lambda x: os.path.getmtime(os.path.join(self.memoriesStoreDir, x)),
+                reverse=not ascending
+            )
+        
+        # 处理分页
+        if limit > 0:
+            # 确保不会超出实际可用数量
+            available_count = total_count - offset
+            actual_limit = min(limit, available_count)
+            history_files = history_files[offset:offset + actual_limit]
+        elif offset > 0:
+            history_files = history_files[offset:]
+            
+        # 移除文件扩展名返回ID列表
+        return [f[:-len('_history.json')] for f in history_files]
+    
+    def getMemoriesCount(self) -> int:
+        """获取聊天历史总数"""
+        return len([f for f in os.listdir(self.memoriesStoreDir) 
+                if f.endswith('_history.json')])
 
-    def loadOrCreateMemories(self, chat_id: str = None) -> AAXWJumpinHistoriedMemory: #type:ignore
+    def loadOrCreateMemory(self, chat_id: str = None) -> AAXWJumpinHistoriedMemory: #type:ignore
         """加载指定聊天历史"""
         chId=chat_id if chat_id else self._newName() 
             
         chat_history_path = os.path.join(self.memoriesStoreDir, f"{chId}_history.json")
         print(f"准备加载或创建 {chId} 对应文件。")
         return AAXWJumpinHistoriedMemory(chId, self.memoriesStoreDir)
+
+
+    def deleteMemory(self, chat_id: str):
+       """删除指定的记忆"""
+       history_path = os.path.join(self.memoriesStoreDir, f"{chat_id}_history.json")
+       if os.path.exists(history_path) and os.path.isfile(history_path):
+           os.remove(history_path)
+
+#    def renameMemory(self, old_id: str, new_id: str):
+#        """重命名记忆"""
+#        old_path = os.path.join(self.memoriesStoreDir, f"{old_id}_history.json")
+#        new_path = os.path.join(self.memoriesStoreDir, f"{new_id}_history.json")
+#        if os.path.exists(old_path):
+#            os.rename(old_path, new_path)
     
     def _newName(self) ->str :
         """Generate a new name based on time"""
@@ -1846,29 +1908,6 @@ class AIThread(QThread):
 # ai  end
 
 
-
-    # 只有有界面的才有相应功能 可以先去掉；
-    # def showApplet(self, name: str) -> bool:
-    #     """显示指定的Applet"""
-    #     success = False
-    #     for applet in self.getApplet(name):
-    #         try:
-    #             applet.show()
-    #             success = True
-    #         except Exception as e:
-    #             self.AAXW_CLASS_LOGGER.error(f"Failed to show applet {name}: {str(e)}")
-    #     return success
-
-    # def hideApplet(self, name: str) -> bool:
-    #     """隐藏指定的Applet"""
-    #     success = False
-    #     for applet in self.getApplet(name):
-    #         try:
-    #             applet.hide()
-    #             success = True
-    #         except Exception as e:
-    #             self.AAXW_CLASS_LOGGER.error(f"Failed to hide applet {name}: {str(e)}")
-    #     return success
 
 
 
@@ -3337,6 +3376,7 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
         #直接在applet初始化时初始化；
         self._initAIMemoryUI()
 
+        # 初始化“新互动”的功能
         self._initNewInteractionUI()
         
         pass
@@ -3398,24 +3438,116 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
     # ui-init    
     #初始化记忆/历史记录列表
     def _initAIMemoryUI(self):
-        """ """
-        #初始化界面上的记忆列表（近期）
-        mems = self.jumpinAIMemoryManager.listMemories()
-        # record=None
-        for record in mems:
-            self.mainWindow.navigationInterface.insertItem(0, #在每次在首个位置插入
+        """初始化界面上的记忆列表
+        由于界面是从头部插入,而查询结果是新的在前,所以需要反转列表顺序再插入
+        """
+        # 获取记忆列表(默认按修改时间降序,新的在前)
+        mems = self.jumpinAIMemoryManager.listMemoryNames(
+            offset=0,
+            limit=5,  # 默认只展示最近5条
+            sortByModified=True,
+            ascending=False
+        )
+        
+        # 反转列表,这样插入到界面时顺序就正确了
+        # 因为界面是从头部插入,而我们希望最新的在最上面
+        for record in reversed(mems):
+            # 定义右键菜单项
+            menuItems = [
+                ("重命名", lambda _,r=record: self._renameMemoryAction(record=r)),
+                ("删除", lambda _,r=record: self._deleteMemoryAction(record=r))
+            ]
+
+            self.mainWindow.navigationInterface.insertItemWithContextMenu(
+                0,  # 在首个位置插入
                 routeKey=f'{record}',
-                selectable=True,
                 icon=FIF.CHAT,
                 text=f'{record}',
-                #click 可能额外传入了其他参数，循环中闭包使用默认参数，需要_来屏蔽；
-                # qt在点击时应该还会传入1个bool类型的参数。
-                onClick=lambda _,rr=record: self.loadMemoryAction(record=rr),
+                # 原insertItem 的onClick默认有1个bool 参数，所有要有 _ 占位符
+                # onClick=lambda _,rr=record: self.loadMemoryAction(record=rr),
+                onClick=lambda rr=record: self.loadMemoryAction(record=rr),
+                menuItems=menuItems,
+                selectable=True,
                 position=NavigationItemPosition.SCROLL,
-                tooltip=f'{record}',
-                # parentRouteKey='history',
+                tooltip=f'{record}'
             )
 
+    @Slot()
+    def _deleteMemoryAction(self, record: str):
+        """删除记忆操作
+        Args:
+            record: 记忆ID
+        """
+        # TODO: 可以添加确认对话框
+        self.AAXW_CLASS_LOGGER.info(f"删除记忆操作:{record}")
+        try:
+            # 从文件系统删除
+            self.jumpinAIMemoryManager.deleteMemory(record)
+            # 从导航栏移除
+            self.mainWindow.navigationInterface.removeWidget(record)
+            # 如果当前加载的就是这条记忆,清空显示
+            if (self.currentHistoriedMemory and 
+                self.currentHistoriedMemory.chat_id == record):
+                self.currentHistoriedMemory = None
+                self.clearContentAction()
+            # 刷新列表
+            self.refreshMemoryListUIAction()
+        except Exception as e:
+            self.AAXW_CLASS_LOGGER.error(
+                f"删除记忆失败: {str(e)}\n{traceback.format_exc()}")
+
+    def _renameMemoryAction(self, record: str):
+        """重命名记忆操作
+        Args:
+            record: 记忆ID
+        """
+        self.AAXW_CLASS_LOGGER.warning(f"重命名记忆操作:{record}")
+        # TODO: 弹出重命名对话框
+        # from qfluentwidgets import Dialog, LineEdit
+        # dialog = Dialog(title="重命名", content="请输入新名称:", parent=self.mainWindow)
+        # lineEdit = LineEdit(dialog)
+        # lineEdit.setText(record)
+        # # dialog.textLabel.setText("请输入新名称:")
+        # dialog.vBoxLayout.addWidget(lineEdit,0,Qt.AlignTop)
+        
+        # def onAccepted():
+        #     newName = lineEdit.text().strip()
+        #     if not newName or newName == record:
+        #         return
+                
+        #     try:
+        #         # 重命名文件
+        #         self.jumpinAIMemoryManager.renameMemory(record, newName)
+        #         # 更新导航项
+        #         navWidget = self.mainWindow.navigationInterface.widget(record)
+        #         if navWidget:
+        #             navWidget.setText(newName)
+        #             self.mainWindow.navigationInterface.removeWidget(record)
+        #             # 重新插入以更新routeKey
+        #             menuItems = [
+        #                 ("重命名", lambda: self._renameMemoryAction(newName)),
+        #                 ("删除", lambda: self._deleteMemoryAction(newName))
+        #             ]
+        #             self.mainWindow.navigationInterface.insertItemWithContextMenu(
+        #                 0,
+        #                 routeKey=newName,
+        #                 icon=FIF.CHAT,
+        #                 text=newName,
+        #                 onClick=lambda _, r=newName: self.loadMemoryAction(record=r),
+        #                 menuItems=menuItems,
+        #                 selectable=True,
+        #                 position=NavigationItemPosition.SCROLL,
+        #                 tooltip=newName
+        #             )
+        #             # 更新当前记忆引用
+        #             if (self.currentHistoriedMemory and 
+        #                 self.currentHistoriedMemory.chat_id == record):
+        #                 self.currentHistoriedMemory.chat_id = newName
+        #     except Exception as e:
+        #         self.AAXW_CLASS_LOGGER.error(f"重命名记忆失败: {e}")
+
+        # dialog.accepted.connect(onAccepted)
+        # dialog.exec()
         ...
 
     @Slot()
@@ -3443,19 +3575,6 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
                 not isinstance(widget.parent(), NavigationTreeWidget)):
                 self.mainWindow.navigationInterface.removeWidget(routeKey)
         
-        # 重新获取并添加最新的历史记录
-        # mems = self.jumpinAIMemoryManager.listMemories()
-        # for record in mems:
-        #     self.mainWindow.navigationInterface.insertItem(
-        #         0,  # 在每次在首个位置插入
-        #         routeKey=f'{record}',
-        #         selectable=True, 
-        #         icon=FIF.CHAT,
-        #         text=f'{record}',
-        #         onClick=lambda _,rr=record: self.loadMemoryAction(record=rr),
-        #         position=NavigationItemPosition.SCROLL,
-        #         tooltip=f'{record}'
-        #     )
 
         #重新加载初始化Memory列表
         self._initAIMemoryUI()
@@ -3469,7 +3588,7 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
         """加载指定的聊天历史或记忆"""
         self.AAXW_CLASS_LOGGER.info(f"加载聊天历史: {chat_id}")
         
-        self.currentHistoriedMemory = self.jumpinAIMemoryManager.loadOrCreateMemories(chat_id)
+        self.currentHistoriedMemory = self.jumpinAIMemoryManager.loadOrCreateMemory(chat_id)
         
         # 创建新的加载线程
         loadThread = self.LoadMemoryUpdateShowingPanelRunnable(
@@ -3508,7 +3627,7 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
         # 清除当前展示内容
         self.clearContentAction()
         #创建1个新的chat/memo 并且作为当前chat/memo
-        self.currentHistoriedMemory=self.jumpinAIMemoryManager.loadOrCreateMemories()
+        self.currentHistoriedMemory=self.jumpinAIMemoryManager.loadOrCreateMemory()
         # 加载新的记忆
         self.loadMemory(self.currentHistoriedMemory.chat_id)
         # 刷新列表展示
@@ -3550,7 +3669,7 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
 
         # 暂时使用当前HistoriedMemory
         if self.currentHistoriedMemory is None:
-            self.currentHistoriedMemory=self.jumpinAIMemoryManager.loadOrCreateMemories()
+            self.currentHistoriedMemory=self.jumpinAIMemoryManager.loadOrCreateMemory()
             #刷新列表展示
             self.refreshMemoryListUIAction() #需要信号发送去执行；这里是doInputCommitAction本身是槽函数
             
@@ -4367,6 +4486,145 @@ class AAXWJumpinSettingPanel(ScrollArea):
         #     lambda: QDesktopServices.openUrl(QUrl(FEEDBACK_URL)))
         pass
 
+class JumpinNavigationWidget(NavigationPushButton):
+    """简单的导航组件，区分左右键点击"""
+    
+    leftClicked = Signal()  # 左键点击信号 这个原始信号不太一样原来是有个bool参数的。
+
+    def __init__(self, icon, text: str, isSelectable: bool = True, parent=None):
+        super().__init__(icon=icon, text=text, isSelectable=isSelectable, parent=parent)
+        
+    def mouseReleaseEvent(self, e):
+        """重写鼠标释放事件"""
+        if e.button() == Qt.MouseButton.LeftButton:
+            self.leftClicked.emit()
+        super().mouseReleaseEvent(e)
+
+class JumpinNavigationInterface(NavigationInterface):
+    """扩展的导航界面"""
+
+    def __init__(
+            self, parent=None, showMenuButton=True, showReturnButton=False, collapsible=True):
+        super().__init__(
+            parent=parent, 
+            showMenuButton=showMenuButton, 
+            showReturnButton=showReturnButton, 
+            collapsible=collapsible)
+        self.contextMenus = {}
+
+    def insertItemWithContextMenu(self, 
+            index: int,
+            routeKey: str, 
+            icon: Union[str, QIcon, FIF], 
+            text: str, 
+            onClick: Callable = None, 
+            menuItems: list[tuple[str,Callable]] = None,
+            selectable=True, 
+            position=NavigationItemPosition.TOP, 
+            tooltip: str = None,
+            parentRouteKey: str = None
+        ):
+        """插入带右键菜单的导航项
+        
+        Args:
+            index: 插入位置
+            routeKey: 唯一标识键
+            icon: 图标
+            text: 显示文本
+            onClick: 左键点击回调
+            menuItems: 右键菜单项列表,格式为[(text, callback),...]
+                callback有1个bool参数会尝试传入
+            selectable: 是否可选中
+            position: 插入位置类型
+            tooltip: 提示文本
+            parentRouteKey: 父节点routeKey
+        """
+        navItem = JumpinNavigationWidget(icon, text, selectable, self)
+        if onClick:
+            navItem.leftClicked.connect(onClick)
+            
+        self.insertWidget(index, routeKey, navItem, None, position, tooltip, parentRouteKey)
+        
+        if menuItems:
+            menu = QMenu(self)
+            for text, callback in menuItems:
+                action = menu.addAction(text)
+                action.triggered.connect(callback) #triggered(bool) 有1个bool参数
+            
+            self.contextMenus[routeKey] = menu
+            navItem.customContextMenuRequested.connect(
+                lambda pos, key=routeKey: self._showContextMenu(pos, key)
+            )
+            navItem.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        
+        return navItem
+
+    def addItemWithContextMenu(self, 
+            routeKey: str, 
+            icon: Union[str, QIcon, FIF], 
+            text: str, 
+            onClick: Callable = None, 
+            menuItems: list[tuple[str,Callable]] = None,
+            selectable=True, 
+            position=NavigationItemPosition.TOP, 
+            tooltip: str = None,
+            parentRouteKey: str = None
+        ):
+        """添加带右键菜单的导航项(包装insertItemWithContextMenu)
+        
+        Args:
+            routeKey: 唯一标识键
+            icon: 图标
+            text: 显示文本
+            onClick: 左键点击回调
+            menuItems: 右键菜单项列表,格式为[(text, callback),...]
+            selectable: 是否可选中
+            position: 插入位置类型
+            tooltip: 提示文本
+            parentRouteKey: 父节点routeKey
+        """
+        return self.insertItemWithContextMenu(
+            index=-1,
+            routeKey=routeKey,
+            icon=icon, 
+            text=text,
+            onClick=onClick,
+            menuItems=menuItems,
+            selectable=selectable,
+            position=position,
+            tooltip=tooltip,
+            parentRouteKey=parentRouteKey
+        )
+
+    def removeWidget(self, routeKey: str):
+        """重写移除方法,确保清理相关的右键菜单"""
+        if routeKey in self.contextMenus:
+            menu = self.contextMenus.pop(routeKey)
+            menu.deleteLater()
+            
+        super().removeWidget(routeKey)
+
+    def _showContextMenu(self, pos, routeKey: str):
+        """显示右键菜单"""
+        if routeKey in self.contextMenus:
+            menu = self.contextMenus[routeKey]
+            widget = self.widget(routeKey)
+            if widget:
+                menu.exec(widget.mapToGlobal(pos))
+
+    def clearContextMenus(self):
+        """清理所有右键菜单"""
+        for menu in self.contextMenus.values():
+            menu.deleteLater()
+        self.contextMenus.clear()
+
+    def __del__(self):
+        """析构时确保清理菜单"""
+        self.clearContextMenus()
+        
+
+
+
 @AAXW_JUMPIN_LOG_MGR.classLogger()
 class AAXWJumpinMainWindow(AAXWFramelessWindow):
     """
@@ -4411,7 +4669,8 @@ class AAXWJumpinMainWindow(AAXWFramelessWindow):
         self.mainVBoxLayout.addWidget(self.contentContainer)
 
         # 导航栏
-        self.navigationInterface = NavigationInterface(self, showMenuButton=True)
+        # self.navigationInterface = NavigationInterface(self, showMenuButton=True)
+        self.navigationInterface = JumpinNavigationInterface(self,showMenuButton=True)
         
         # 初始化可切换的页面
         self.mainStackedFrame = QStackedWidget(self)
@@ -4485,10 +4744,10 @@ class AAXWJumpinMainWindow(AAXWFramelessWindow):
             routeKey='new_interaction',
             icon=FIF.ADD,
             selectable=False,
-            text='新开互动',
-            onClick=lambda: self.AAXW_CLASS_LOGGER.warning('新开互动 clicked'),
+            text='新互动',
+            onClick=lambda: self.AAXW_CLASS_LOGGER.warning('新互动 clicked'),
             position=NavigationItemPosition.TOP,
-            tooltip='新开互动',
+            tooltip='新互动',
         )
 
         self.navigationInterface.addSeparator(NavigationItemPosition.TOP)
