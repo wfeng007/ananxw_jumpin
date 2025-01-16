@@ -161,7 +161,7 @@ from PySide6.QtGui import (
 
 # qfluentwidgets(PySide6-Fluent-Widgets) pyside6上的界面扩展
 from qfluentwidgets import (
-    NavigationInterface, NavigationItemPosition, NavigationAvatarWidget,
+    NavigationInterface, NavigationItemPosition, NavigationAvatarWidget,NavigationTreeWidget,
     NavigationWidget, MessageBox, SettingCardGroup, SwitchSettingCard, FolderListSettingCard,
     OptionsSettingCard, PushSettingCard, HyperlinkCard, PrimaryPushSettingCard, ScrollArea,
     ComboBoxSettingCard, ExpandLayout, Theme, CustomColorSettingCard,
@@ -3333,9 +3333,11 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
 
         self.currentHistoriedMemory:AAXWJumpinHistoriedMemory=None #type:ignore
 
-
-        #直接在applet初始化时初始化
+        #持续展示近期列表；只要applet还在mgr运行，就持续展示；
+        #直接在applet初始化时初始化；
         self._initAIMemoryUI()
+
+        self._initNewInteractionUI()
         
         pass
 
@@ -3386,8 +3388,14 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
         
         pass
     
+    # ui-init
+    def _initNewInteractionUI(self):
+        # 初始化“新互动”的功能
+        niWg:NavigationWidget=self.mainWindow.navigationInterface.widget('new_interaction')
+        niWg.clicked.connect(self.doNewInteractionAction)
+        pass
 
-
+    # ui-init    
     #初始化记忆/历史记录列表
     def _initAIMemoryUI(self):
         """ """
@@ -3402,7 +3410,7 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
                 text=f'{record}',
                 #click 可能额外传入了其他参数，循环中闭包使用默认参数，需要_来屏蔽；
                 # qt在点击时应该还会传入1个bool类型的参数。
-                onClick=lambda _,rr=record: self._memItemOnClicked(record=rr),
+                onClick=lambda _,rr=record: self.loadMemoryAction(record=rr),
                 position=NavigationItemPosition.SCROLL,
                 tooltip=f'{record}',
                 # parentRouteKey='history',
@@ -3411,32 +3419,53 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
         ...
 
     @Slot()
-    def _memItemOnClicked(self, record:str):
+    def loadMemoryAction(self, record:str):
         self.AAXW_CLASS_LOGGER.info(f'记录:{record} clicked')
         #首先显示默认的消息展示面板
         self.mainWindow.showMsgShowingPanel()
 
         chat_id = record  # 获取被点击项的文本内容
-        self.load_memory(chat_id)  # 调用加载方法
+        self.loadMemory(chat_id)  # 调用加载方法
 
 
+    @Slot()
+    def refreshMemoryListUIAction(self):
+        """刷新历史记录列表
+        1. 删除已有的历史记录导航项
+        2. 重新添加最新的历史记录列表
+        """
+        # 获取所有导航项(在scrollWidget中的项)
+        scrollWidget = self.mainWindow.navigationInterface.panel.scrollWidget
+        for widget in scrollWidget.findChildren(NavigationWidget):
+            routeKey = widget.property('routeKey')
+            # 过滤掉固定项和树形节点的子项
+            if (routeKey not in ['all_history', 'aiagent_applet'] and 
+                not isinstance(widget.parent(), NavigationTreeWidget)):
+                self.mainWindow.navigationInterface.removeWidget(routeKey)
+        
+        # 重新获取并添加最新的历史记录
+        # mems = self.jumpinAIMemoryManager.listMemories()
+        # for record in mems:
+        #     self.mainWindow.navigationInterface.insertItem(
+        #         0,  # 在每次在首个位置插入
+        #         routeKey=f'{record}',
+        #         selectable=True, 
+        #         icon=FIF.CHAT,
+        #         text=f'{record}',
+        #         onClick=lambda _,rr=record: self.loadMemoryAction(record=rr),
+        #         position=NavigationItemPosition.SCROLL,
+        #         tooltip=f'{record}'
+        #     )
 
-    def _refreshMemoriesList(self):
-        """刷新历史记录列表"""
-        self.AAXW_CLASS_LOGGER.warning(f"**********warning 尚未实现刷新界面列表的展示*********")
-        pass
+        #重新加载初始化Memory列表
+        self._initAIMemoryUI()
+        
+        # 刷新界面
+        self.mainWindow.navigationInterface.panel.update()
     
 
-    def create_new_memory(self):
-        """创建新的对话和记忆"""
-        self.AAXW_CLASS_LOGGER.info("创建新的对话和记忆")
-        #创建1个新的chat/memo 并且作为当前chat/memo
-        self.currentHistoriedMemory=self.jumpinAIMemoryManager.loadOrCreateMemories()
-        #刷新列表展示
-        self._refreshMemoriesList()
-
     
-    def load_memory(self, chat_id: str):
+    def loadMemory(self, chat_id: str):
         """加载指定的聊天历史或记忆"""
         self.AAXW_CLASS_LOGGER.info(f"加载聊天历史: {chat_id}")
         
@@ -3446,9 +3475,9 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
         loadThread = self.LoadMemoryUpdateShowingPanelRunnable(
                     self.currentHistoriedMemory
                     ,self.mainWindow)
-        loadThread.clearContentSignal.connect(self.clearContent)
-        loadThread.addRowContentSignal.connect(self.addRowContent)
-        loadThread.appendContentSignal.connect(self.appendContent)
+        loadThread.clearContentSignal.connect(self.clearContentAction)
+        loadThread.addRowContentSignal.connect(self.addRowContentAction)
+        loadThread.appendContentSignal.connect(self.appendContentAction)
         
         # 使用mainWindow的线程池来管理线程
         worker = self.mainWindow.qworkerpool.createAndStartWorker(loadThread)
@@ -3456,24 +3485,35 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
         # 添加完成回调以清理线程
         worker.signals.ON_FINISHED.connect(lambda: loadThread.deleteLater())
 
-    def clearContent(self):
+    @Slot()
+    def clearContentAction(self):
         self.mainWindow.msgShowingPanel.clearContent()
 
-
-    def addRowContent(self, content: str, rowId: str, contentOwner: str,contentOwnerType:str):
+    @Slot()
+    def addRowContentAction(self, content: str, rowId: str, contentOwner: str,contentOwnerType:str):
         """添加行内容的槽函数"""
         self.mainWindow.msgShowingPanel.addRowContent(
             content=content, rowId=rowId, contentOwner=contentOwner, 
             contentOwnerType=contentOwnerType
         )
 
-    def appendContent(self, content: str, rowId: str):
+    @Slot()
+    def appendContentAction(self, content: str, rowId: str):
         """追加内容的槽函数"""
         self.mainWindow.msgShowingPanel.appendContentByRowId(content, rowId=rowId)
         # 同步更新界面会阻塞界面- 参考_mockAIUpdateUI方法。
        
-    
-
+    @Slot()
+    def doNewInteractionAction(self):
+        # 清除当前展示内容
+        self.clearContentAction()
+        #创建1个新的chat/memo 并且作为当前chat/memo
+        self.currentHistoriedMemory=self.jumpinAIMemoryManager.loadOrCreateMemories()
+        # 加载新的记忆
+        self.loadMemory(self.currentHistoriedMemory.chat_id)
+        # 刷新列表展示
+        self.refreshMemoryListUIAction()
+        pass
 
     @Slot()
     def doInputCommitAction(self):
@@ -3488,7 +3528,7 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
          # 用户输入容消息气泡与内容初始化
         rid = int(time.time() * 1000)
         self.mainWindow.msgShowingPanel.addRowContent(
-            content=text, rowId=rid, contentOwner="user_xiaowang",
+            content=text, rowId=str(rid), contentOwner="user_xiaowang",
             contentOwnerType=AAXWScrollPanel.ROW_CONTENT_OWNER_TYPE_USER,
         )
         
@@ -3498,7 +3538,7 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
         # 反馈内容消息气泡与内容初始化
         rrid = int(time.time() * 1000)
         self.mainWindow.msgShowingPanel.addRowContent(
-            content="", rowId=rrid, contentOwner="assistant_aaxw",
+            content="", rowId=str(rrid), contentOwner="assistant_aaxw",
             contentOwnerType=AAXWScrollPanel.ROW_CONTENT_OWNER_TYPE_OTHERS,
         )
 
@@ -3512,7 +3552,7 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
         if self.currentHistoriedMemory is None:
             self.currentHistoriedMemory=self.jumpinAIMemoryManager.loadOrCreateMemories()
             #刷新列表展示
-            self._refreshMemoriesList() #需要信号发送去执行；这里是doInputCommitAction本身是槽函数
+            self.refreshMemoryListUIAction() #需要信号发送去执行；这里是doInputCommitAction本身是槽函数
             
         # 创建并启动AI处理线程
         aiThread = self.MemorisedAIConnectUpdateShowingPanelRunnable(
@@ -3532,7 +3572,7 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
 
 
 
-
+    
     @AAXW_JUMPIN_LOG_MGR.classLogger()
     class LoadMemoryUpdateShowingPanelRunnable(QRunnable,QObject):
         """用于加载历史消息并更新到界面msgShowingPanel运行时逻辑"""
