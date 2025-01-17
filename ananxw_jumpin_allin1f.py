@@ -48,8 +48,9 @@
 # 0.8+  @Date: 2025-01-05 
 #       已提供整体导航栏；
 #       已提供基础线程框架，集中异步处理与界面异步处理；保证可用性与稳定性，防止QTread崩溃；
+#       已沉淀前期样例中的功能-历史记忆等到核心功能中；
 #       主导航中增加applet/agent列表与切换能力；
-#       沉淀前期样例中的功能，如历史记忆等到核心功能中；
+#       沉淀前期样例中的其他功能-ollama模型管理等；
 #       基于线程框架甚至基础多进程框架，构建初步的agent能力；
 #       coze集成对接应用样例；
 #       MAC环境打包发布尝试；
@@ -68,6 +69,7 @@
 
 # import pstats
 import sys, os,time
+import re 
 import traceback
 from datetime import datetime
 # 包与模块命名处理：
@@ -162,7 +164,7 @@ from PySide6.QtGui import (
 # qfluentwidgets(PySide6-Fluent-Widgets) pyside6上的界面扩展
 from qfluentwidgets import (
     NavigationInterface, NavigationItemPosition, NavigationAvatarWidget,NavigationTreeWidget,
-    NavigationPushButton,
+    NavigationPushButton,MessageBoxBase,SubtitleLabel,LineEdit,CaptionLabel,
     NavigationWidget, MessageBox, SettingCardGroup, SwitchSettingCard, FolderListSettingCard,
     OptionsSettingCard, PushSettingCard, HyperlinkCard, PrimaryPushSettingCard, ScrollArea,
     ComboBoxSettingCard, ExpandLayout, Theme, CustomColorSettingCard,
@@ -1704,7 +1706,7 @@ class AAXWOllamaAIConnOrAgent(AAXWAbstractAIConnOrAgent):
 #列出指定目录对话历史（或记录）列表；
 #载入项的历史记录，成为Memory/session或可进行互动操作的访问-操作器；（内部挂用LLMconn-或外层 agent进行互动操作。）
 #新建一个互动Session；
-@AAXW_JUMPIN_LOG_MGR.classLogger()
+@AAXW_JUMPIN_LOG_MGR.classLogger(level=logging.DEBUG)
 class AAXWJumpinHistoriedMemory:
     """封装单个对话的历史和内存"""
     AAXW_CLASS_LOGGER: logging.Logger
@@ -1731,7 +1733,7 @@ class AAXWJumpinHistoriedMemory:
             # 加载消息
             messages: List[BaseMessage] = self.message_history.messages
             self.memory.chat_memory.add_messages(messages)
-            self.AAXW_CLASS_LOGGER.info(f"加载的消息: {messages}")
+            self.AAXW_CLASS_LOGGER.debug(f"加载的消息: {messages}")
         except Exception as e:
             self.AAXW_CLASS_LOGGER.warning(f"加载历史消息时发生错误: {e}")
 
@@ -1865,12 +1867,29 @@ class AAXWJumpinFileAIMemoryManager:
        if os.path.exists(history_path) and os.path.isfile(history_path):
            os.remove(history_path)
 
-#    def renameMemory(self, old_id: str, new_id: str):
-#        """重命名记忆"""
-#        old_path = os.path.join(self.memoriesStoreDir, f"{old_id}_history.json")
-#        new_path = os.path.join(self.memoriesStoreDir, f"{new_id}_history.json")
-#        if os.path.exists(old_path):
-#            os.rename(old_path, new_path)
+    def renameMemory(self, old_id: str, new_id: str) -> bool:
+        """重命名记忆
+        
+        Args:
+            old_id: 原记忆ID
+            new_id: 新记忆ID
+            
+        Returns:
+            bool: 重命名是否成功
+        """
+        # old_path = os.path.join(self.memoriesStoreDir, f"{old_id}_history.json")
+        # new_path = os.path.join(self.memoriesStoreDir, f"{new_id}_history.json")
+        # if os.path.exists(old_path):
+        #     os.rename(old_path, new_path)
+  
+        try:
+            # 加载原有记忆实例
+            memory = self.loadOrCreateMemory(old_id)
+            # 使用 AAXWJumpinHistoriedMemory 的 rename 方法
+            return memory.rename(new_id)
+        except Exception as e:
+            self.AAXW_CLASS_LOGGER.error(f"重命名记忆失败: {str(e)}")
+            return False
     
     def _newName(self) ->str :
         """Generate a new name based on time"""
@@ -1917,7 +1936,7 @@ class AIThread(QThread):
     dependencyContainer="_nativeDependencyContainer",
     jumpinConfig="jumpinConfig",
     mainWindow="mainWindow")
-@AAXW_JUMPIN_LOG_MGR.classLogger(level=logging.DEBUG)
+@AAXW_JUMPIN_LOG_MGR.classLogger()
 class AAXWJumpinAppletManager(AAXWAppletManager):
     AAXW_CLASS_LOGGER:logging.Logger
 
@@ -2971,7 +2990,7 @@ class AAXWJumpinDefaultBuiltinPlugin(AAXWAbstractBasePlugin):
     # 过滤tab，为input左侧按钮按下。
     # 改为触发applet-manager切换为下一个applet
     # 
-    @AAXW_JUMPIN_LOG_MGR.classLogger(level=logging.DEBUG)
+    @AAXW_JUMPIN_LOG_MGR.classLogger()
     class EditEventFilter(QObject):
         AAXW_CLASS_LOGGER:logging.Logger
         """
@@ -3454,7 +3473,7 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
         for record in reversed(mems):
             # 定义右键菜单项
             menuItems = [
-                ("重命名", lambda _,r=record: self._renameMemoryAction(record=r)),
+                ("重命名", lambda _,r=record: self._renameMemoryShowDialogUI(record=r)),
                 ("删除", lambda _,r=record: self._deleteMemoryAction(record=r))
             ]
 
@@ -3496,58 +3515,73 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
             self.AAXW_CLASS_LOGGER.error(
                 f"删除记忆失败: {str(e)}\n{traceback.format_exc()}")
 
-    def _renameMemoryAction(self, record: str):
+    class RenameMemoryMessageBox(MessageBoxBase):
+        """ Custom message box """
+
+        def __init__(self, oldName:str=None, parent=None): #type:ignore
+            super().__init__(parent)
+            self.titleLabel = SubtitleLabel('修改互动名称：', self)
+            self.nameLineEdit = LineEdit(self)
+            
+            if oldName:
+                self.nameLineEdit.setText(oldName)
+            else:
+                self.nameLineEdit.setPlaceholderText('请输入新名称')
+            self.nameLineEdit.setClearButtonEnabled(True)
+
+            self.warningLabel = CaptionLabel("名称长度4-20个字符，只能包含字母、数字、下划线、中划线、点")
+            self.warningLabel.setTextColor(QColor(255, 28, 32))
+
+            # add widget to view layout
+            self.viewLayout.addWidget(self.titleLabel)
+            self.viewLayout.addWidget(self.nameLineEdit)
+            self.viewLayout.addWidget(self.warningLabel)
+            self.warningLabel.hide()
+
+            # change the text of button
+            self.yesButton.setText('修改')
+            self.cancelButton.setText('取消')
+
+            self.widget.setMinimumWidth(350)
+        
+        @override
+        def validate(self):
+            """ Rewrite the virtual method """
+            text = self.nameLineEdit.text()
+            # 修改正则表达式以支持中文字符
+            isValid = (4 <= len(text) <= 20) and bool(
+                re.match(r'^[\u4e00-\u9fa5a-zA-Z0-9_\-\.]+$', text)
+            )
+            self.warningLabel.setHidden(isValid)
+            return isValid
+
+        def getNewName(self) -> str:
+            """获取新名称"""
+            return self.nameLineEdit.text()
+
+    @Slot()
+    def _renameMemoryShowDialogUI(self, record: str):
+        dialog = self.RenameMemoryMessageBox(oldName=record, parent=self.mainWindow)
+        if dialog.exec():
+            newName = dialog.getNewName()
+            self.AAXW_CLASS_LOGGER.info(f"准备重命名记忆:{record} 新名称:{newName}")
+            self._renameMemoryAction(record, newName)
+        else:
+            self.AAXW_CLASS_LOGGER.info(f"取消重命名记忆:{record}")
+
+    @Slot()
+    def _renameMemoryAction(self, record: str,newName:str):
         """重命名记忆操作
         Args:
             record: 记忆ID
         """
         self.AAXW_CLASS_LOGGER.warning(f"重命名记忆操作:{record}")
-        # TODO: 弹出重命名对话框
-        # from qfluentwidgets import Dialog, LineEdit
-        # dialog = Dialog(title="重命名", content="请输入新名称:", parent=self.mainWindow)
-        # lineEdit = LineEdit(dialog)
-        # lineEdit.setText(record)
-        # # dialog.textLabel.setText("请输入新名称:")
-        # dialog.vBoxLayout.addWidget(lineEdit,0,Qt.AlignTop)
-        
-        # def onAccepted():
-        #     newName = lineEdit.text().strip()
-        #     if not newName or newName == record:
-        #         return
-                
-        #     try:
-        #         # 重命名文件
-        #         self.jumpinAIMemoryManager.renameMemory(record, newName)
-        #         # 更新导航项
-        #         navWidget = self.mainWindow.navigationInterface.widget(record)
-        #         if navWidget:
-        #             navWidget.setText(newName)
-        #             self.mainWindow.navigationInterface.removeWidget(record)
-        #             # 重新插入以更新routeKey
-        #             menuItems = [
-        #                 ("重命名", lambda: self._renameMemoryAction(newName)),
-        #                 ("删除", lambda: self._deleteMemoryAction(newName))
-        #             ]
-        #             self.mainWindow.navigationInterface.insertItemWithContextMenu(
-        #                 0,
-        #                 routeKey=newName,
-        #                 icon=FIF.CHAT,
-        #                 text=newName,
-        #                 onClick=lambda _, r=newName: self.loadMemoryAction(record=r),
-        #                 menuItems=menuItems,
-        #                 selectable=True,
-        #                 position=NavigationItemPosition.SCROLL,
-        #                 tooltip=newName
-        #             )
-        #             # 更新当前记忆引用
-        #             if (self.currentHistoriedMemory and 
-        #                 self.currentHistoriedMemory.chat_id == record):
-        #                 self.currentHistoriedMemory.chat_id = newName
-        #     except Exception as e:
-        #         self.AAXW_CLASS_LOGGER.error(f"重命名记忆失败: {e}")
+        #
+        self.jumpinAIMemoryManager.renameMemory(record, newName)
 
-        # dialog.accepted.connect(onAccepted)
-        # dialog.exec()
+        # 刷新列表
+        self.refreshMemoryListUIAction()
+
         ...
 
     @Slot()
@@ -4364,7 +4398,7 @@ class AAXWJumpinSettingPanel(ScrollArea):
             text='选择目录',
             icon=FIF.DOWNLOAD,
             title="工作目录",
-            content='D:/home/eclipse_workspace/hipython/',
+            content='D:/home/eclipse_workspace/projectlab/',
             parent=self.musicInThisPCGroup
         )
         self.downloadFolderCard.setEnabled(False)
@@ -5034,7 +5068,7 @@ class AAXWGlobalShortcut(QObject):  #继承了QObject可能就被纳入界面主
     def stop(self):
         self.hotkey.stop()
 
-@AAXW_JUMPIN_LOG_MGR.classLogger(level=logging.DEBUG)
+@AAXW_JUMPIN_LOG_MGR.classLogger()
 class AAXWJumpinTrayKit(QSystemTrayIcon):
     AAXW_CLASS_LOGGER:logging.Logger
     
