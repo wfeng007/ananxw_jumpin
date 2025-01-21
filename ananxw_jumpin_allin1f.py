@@ -72,6 +72,7 @@ import sys, os,time
 import re 
 import traceback
 from datetime import datetime
+
 # 包与模块命名处理：
 try:
     #如果所在包有 __init__.py 且设置了__package_name__ 就能导入。如果没有则用目录名。
@@ -120,6 +121,7 @@ _setup_app_env_()
 
 
 from typing import Callable, List, Dict, Type,Any,TypeVar,Union,cast, Tuple,Protocol
+from typing import cast
 from functools import wraps
 
 try:
@@ -1999,9 +2001,14 @@ class AAXWJumpinAppletManager(AAXWAppletManager):
     def addApplet(self, applet: AAXWAbstractApplet, index: int = -1) -> bool:
         #
         # 先注入资源给applet
-        setattr(applet, "dependencyContainer", self.dependencyContainer)
-        setattr(applet, "jumpinConfig", self.jumpinConfig) 
-        setattr(applet, "mainWindow", self.mainWindow)
+        setattr(applet, "appletManager", self) #TODO 该部分可抽象到父类。
+        #
+        if hasattr(applet, "dependencyContainer"):
+            setattr(applet, "dependencyContainer", self.dependencyContainer)
+        if hasattr(applet, "jumpinConfig"):
+            setattr(applet, "jumpinConfig", self.jumpinConfig) 
+        if hasattr(applet, "mainWindow"):
+            setattr(applet, "mainWindow", self.mainWindow)
 
         # 再加入管理器
         return super().addApplet(applet=applet, index=index)
@@ -3363,6 +3370,7 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
 
 
     def __init__(self):
+        self.appletManager:AAXWJumpinAppletManager=None #type:ignore
         self.dependencyContainer:AAXWDependencyContainer=None #type:ignore
         self.jumpinConfig:'AAXWJumpinConfig'= None #type:ignore
         self.mainWindow:'AAXWJumpinMainWindow'=None #type:ignore
@@ -3393,7 +3401,7 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
 
         #持续展示近期列表；只要applet还在mgr运行，就持续展示；
         #直接在applet初始化时初始化；
-        self._initAIMemoryUI()
+        self._initAIMemoryListUI()
 
         # 初始化“新互动”的功能
         self._initNewInteractionUI()
@@ -3432,6 +3440,7 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
 
         #按钮标志与基本按钮曹关联
         self.mainWindow.inputPanel.funcButtonLeft.setText(self.getTitle())
+
         pass
 
     @override
@@ -3456,7 +3465,7 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
 
     # ui-init    
     #初始化记忆/历史记录列表
-    def _initAIMemoryUI(self):
+    def _initAIMemoryListUI(self):
         """初始化界面上的记忆列表
         由于界面是从头部插入,而查询结果是新的在前,所以需要反转列表顺序再插入
         """
@@ -3490,6 +3499,38 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
                 position=NavigationItemPosition.SCROLL,
                 tooltip=f'{record}'
             )
+    
+    def _initBuddyAndAppletListUI(self):
+        """初始化伙伴与应用列表UI
+        Partner指AIAgent或其他可互动主体；
+        """
+        # 获取aiagent_applet项，并显式转换类型实际就是NavigationTreeWidget
+        aiagentItem = cast(NavigationTreeWidget, 
+            self.mainWindow.navigationInterface.widget('aiagent_applet'))
+        
+        if aiagentItem:
+            # 遍历并移除所有子项
+            for child in aiagentItem.treeChildren[:]:  # 使用切片创建副本进行遍历
+                aiagentItem.removeChild(child)
+        
+        # 获取所有applet的名称和标题列表
+        appletNamesAndTitles = self.appletManager.listAppletsNamesAndTitles()
+        
+        self.AAXW_CLASS_LOGGER.warning(f"伙伴或应用数量-{len(appletNamesAndTitles)}")
+        # 添加每个applet作为子项
+        for index, (name, title) in enumerate(appletNamesAndTitles):
+            self.mainWindow.navigationInterface.addItem(
+                routeKey=f'ba_{name}_{index}',  # 使用applet名称作为唯一标识
+                icon=FIF.ROBOT,  # 使用机器人图标表示applet
+                text=title,  # 显示applet的标题
+                onClick=lambda _,i=index: self.appletManager.activateApplet(index=i),  # 使用index激活对应applet
+                tooltip=f'切换到 {title}',
+                selectable=False,
+                parentRouteKey='aiagent_applet'  # 指定父级为aiagent_applet
+            )
+            self.AAXW_CLASS_LOGGER.warning(f"已添加伙伴或应用-{name}-'{title}")
+        
+
 
     @Slot()
     def _deleteMemoryAction(self, record: str):
@@ -3611,7 +3652,7 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
         
 
         #重新加载初始化Memory列表
-        self._initAIMemoryUI()
+        self._initAIMemoryListUI()
         
         # 刷新界面
         self.mainWindow.navigationInterface.panel.update()
@@ -4376,67 +4417,94 @@ class AAXWJumpinSettingPanel(ScrollArea):
     """ Setting interface """
     AAXW_CLASS_LOGGER:logging.Logger
 
-    def __init__(self, parent=None):
+    def __init__(self, jumpinConfig:AAXWJumpinConfig,parent=None):
         super().__init__(parent=parent)
+        self.jumpinConfig:AAXWJumpinConfig=jumpinConfig
         self.scrollWidget = QWidget()
         self.expandLayout = ExpandLayout(self.scrollWidget)
 
         # setting label
-        self.settingLabel = QLabel(self.tr("Settings"), self)
+        self.settingLabel = QLabel("设置", self)
 
         # music folders
-        self.musicInThisPCGroup = SettingCardGroup(
-            self.tr("Music on this PC"), self.scrollWidget)
-        # self.musicFolderCard = FolderListSettingCard(
-        #     cfg.musicFolders,
-        #     self.tr("Local music library"),
-        #     directory=QStandardPaths.writableLocation(
-        #         QStandardPaths.MusicLocation),
-        #     parent=self.musicInThisPCGroup
-        # )
-        self.downloadFolderCard = PushSettingCard(
-            text='选择目录',
-            icon=FIF.DOWNLOAD,
-            title="工作目录",
-            content='D:/home/eclipse_workspace/projectlab/',
-            parent=self.musicInThisPCGroup
+        self.basicSettingGroup = SettingCardGroup(
+            "基本设置信息", self.scrollWidget)
+
+        self.appNameCard = SettingCard(
+            icon=FIF.FOLDER,
+            title="应用名称",
+            content=str(self.jumpinConfig.appName),
+            parent=self.basicSettingGroup
         )
-        self.downloadFolderCard.setEnabled(False)
+        self.appNameCard.setEnabled(False)
+
+        self.appVersionCard = SettingCard(
+            icon=FIF.FOLDER,
+            title="应用版本",
+            content=str(self.jumpinConfig.appVersion),
+            parent=self.basicSettingGroup
+        )
+        self.appVersionCard.setEnabled(False)
+
+        self.appWorkDirCard = SettingCard(
+            icon=FIF.FOLDER,
+            title="工作目录",
+            content=str(self.jumpinConfig.appWorkDir),
+            parent=self.basicSettingGroup
+        )
+        self.appWorkDirCard.setEnabled(False)
+
+        self.appConfigFileNameCard = SettingCard(
+            icon=FIF.FIT_PAGE,
+            title="应用配置文件名（尝试读取）",
+            content=str(self.jumpinConfig.appConfigFilename),
+            parent=self.basicSettingGroup
+        )
+        self.appConfigFileNameCard.setEnabled(False)
+
+        self.debugCard = PushSettingCard(
+            text='set debug',
+            icon=FIF.CODE,
+            title="debug",
+            content=str(self.jumpinConfig.debug),
+            parent=self.basicSettingGroup
+        )
+        self.debugCard.setEnabled(False)
 
         # personalization
-        self.personalGroup = SettingCardGroup(
-            self.tr('Personalization'), self.scrollWidget)
-        self.micaCard = SettingCard(
+        self.othersGroup = SettingCardGroup(
+            self.tr('其他设置'), self.scrollWidget)
+        self.otherCard = SettingCard(
             icon=FIF.TRANSPARENT,
-            title='Mica effect',
-            content='Apply semi transparent to windows and surfaces',
-            parent=self.personalGroup
+            title='待添加其他设置...',
+            content='待添加...',
+            parent=self.othersGroup
         )
         
-        # material
-        self.materialGroup = SettingCardGroup(
-            self.tr('Material'), self.scrollWidget)
+        # # material
+        # self.materialGroup = SettingCardGroup(
+        #     self.tr('Material'), self.scrollWidget)
   
-        # update software
-        self.updateSoftwareGroup = SettingCardGroup(
-            self.tr("Software update"), self.scrollWidget)
+        # # update software
+        # self.updateSoftwareGroup = SettingCardGroup(
+        #     self.tr("Software update"), self.scrollWidget)
 
 
         # application
-        self.aboutGroup = SettingCardGroup(self.tr('About'), self.scrollWidget)
+        self.aboutGroup = SettingCardGroup('帮助与反馈', self.scrollWidget)
         self.helpCard = HyperlinkCard(
             "www.baidu.com",
             text='打开帮助页面',
             icon=FIF.HELP,
             title='Help',
-            content='Discover new features and learn useful tips about PyQt-Fluent-Widgets',
+            content='打开帮助页面：www.baidu.com。。。',
             parent=self.aboutGroup
         )
         self.feedbackCard = PrimaryPushSettingCard(
-            'Primary Push',
-            FIF.FEEDBACK,
-            'Primary Push',
-            'Help us improve PyQt-Fluent-Widgets by providing feedback',
+            text='反馈',
+            icon=FIF.FEEDBACK,
+            title='简单主按钮',
+            content='简单主按钮...',
             parent=self.aboutGroup
         )
 
@@ -4465,21 +4533,24 @@ class AAXWJumpinSettingPanel(ScrollArea):
         self.settingLabel.move(36, 30)
 
         # add cards to group
-        self.musicInThisPCGroup.addSettingCard(self.downloadFolderCard)
+        self.basicSettingGroup.addSettingCard(self.appWorkDirCard)
+        self.basicSettingGroup.addSettingCard(self.appNameCard)
+        self.basicSettingGroup.addSettingCard(self.appVersionCard)
+        self.basicSettingGroup.addSettingCard(self.appConfigFileNameCard)
+        self.basicSettingGroup.addSettingCard(self.debugCard)
 
-        self.personalGroup.addSettingCard(self.micaCard)
+        self.othersGroup.addSettingCard(self.otherCard)
    
-
         self.aboutGroup.addSettingCard(self.helpCard)
         self.aboutGroup.addSettingCard(self.feedbackCard)
 
         # add setting card group to layout
         self.expandLayout.setSpacing(28)
         self.expandLayout.setContentsMargins(36, 10, 36, 0)
-        self.expandLayout.addWidget(self.musicInThisPCGroup)
-        self.expandLayout.addWidget(self.personalGroup)
-        self.expandLayout.addWidget(self.materialGroup)
-        self.expandLayout.addWidget(self.updateSoftwareGroup)
+        self.expandLayout.addWidget(self.basicSettingGroup)
+        self.expandLayout.addWidget(self.othersGroup)
+        # self.expandLayout.addWidget(self.materialGroup)
+        # self.expandLayout.addWidget(self.updateSoftwareGroup)
         self.expandLayout.addWidget(self.aboutGroup)
 
     # def __showRestartTooltip(self):
@@ -4719,9 +4790,7 @@ class AAXWJumpinMainWindow(AAXWFramelessWindow):
         
 
 
-        # 设置面板加入展示堆 
-        self.settingPanel = AAXWJumpinSettingPanel(self)
-        self.mainStackedFrame.addWidget(self.settingPanel)
+
         
 
         # 默认显示消息展示面板
@@ -4819,17 +4888,18 @@ class AAXWJumpinMainWindow(AAXWFramelessWindow):
             position=NavigationItemPosition.SCROLL,
             tooltip='伙伴与应用',
         )
-        for i in range(1, 5):
-            self.navigationInterface.addItem(
-                routeKey=f'aiagent_applet_{i}',
-                selectable=False,
-                icon=FIF.FOLDER,
-                text=f'伙伴与应用 {i}',
-                onClick=lambda: self.AAXW_CLASS_LOGGER.warning(f'伙伴与应用 {i} clicked'),
-                tooltip=f'伙伴与应用 {i}',
-                # position=NavigationItemPosition.SCROLL
-                parentRouteKey='aiagent_applet',
-            )
+
+        # for i in range(1, 5):
+        #     self.navigationInterface.addItem(
+        #         routeKey=f'aiagent_applet_{i}',
+        #         selectable=False,
+        #         icon=FIF.FOLDER,
+        #         text=f'伙伴与应用 {i}',
+        #         onClick=lambda: self.AAXW_CLASS_LOGGER.warning(f'伙伴与应用 {i} clicked'),
+        #         tooltip=f'伙伴与应用 {i}',
+        #         # position=NavigationItemPosition.SCROLL
+        #         parentRouteKey='aiagent_applet',
+        #     )
 
 
         self.navigationInterface.addSeparator(NavigationItemPosition.BOTTOM)
@@ -4886,6 +4956,11 @@ class AAXWJumpinMainWindow(AAXWFramelessWindow):
 
 
     def initAppRes(self):
+
+        # 已有config
+        # 设置面板加入展示堆 
+        self.settingPanel = AAXWJumpinSettingPanel(self.jumpinConfig,self)
+        self.mainStackedFrame.addWidget(self.settingPanel)
         
         # 初始化
         pass
@@ -4904,18 +4979,18 @@ class AAXWJumpinMainWindow(AAXWFramelessWindow):
 
 
 
-    def showFirefMessageBox(self):
-        w = MessageBox(
-            title='ANAN欢迎您🥰',
-            content='ANAN Jumpin 欢迎您-超级个体🚀!',
-            parent=self
-        )
-        w.yesButton.setText('你也好')
-        w.cancelButton.setText('下次一定说“你也好”')
+    # def showFirefMessageBox(self):
+    #     w = MessageBox(
+    #         title='ANAN欢迎您🥰',
+    #         content='ANAN Jumpin 欢迎您-超级个体🚀!',
+    #         parent=self
+    #     )
+    #     w.yesButton.setText('你也好')
+    #     w.cancelButton.setText('下次一定说“你也好”')
 
-        if w.exec():
-            # QDesktopServices.openUrl(QUrl("https://xxxxx"))
-            self.AAXW_CLASS_LOGGER.info("messagebox:你也好")
+    #     if w.exec():
+    #         # QDesktopServices.openUrl(QUrl("https://xxxxx"))
+    #         self.AAXW_CLASS_LOGGER.info("messagebox:你也好")
 
     #本来让topToolsWindow来注册的，不过用了evetFilter了。暂时没用这里。
     def registerMovedCallbacks(self, callback):
@@ -5209,7 +5284,8 @@ if __name__ == "__main__":
             #增加默认applet
             appletManager=AAXWJumpinDICUtilz.getAANode(
                 "jumpinAppletManager")
-            appletManager.addApplet(AAXWJumpinDefaultCompoApplet())
+            defaultCompoApplet=AAXWJumpinDefaultCompoApplet()
+            appletManager.addApplet(defaultCompoApplet)
             appletManager.activateApplet(0) #激活默认applet
 
             #检测内置插件 
@@ -5220,6 +5296,8 @@ if __name__ == "__main__":
             #安装插件，时会实例化插件其中可能会需要各种主干资源。
             pluginManager.installAllDetectedPlugins() #安装初始化所有插件
         
+            # 插件以及applet加载完成后， 初始化“伙伴与应用”的列表
+            defaultCompoApplet._initBuddyAndAppletListUI()
 
             tray=AAXWJumpinTrayKit(mainWindow)
             agstool = AAXWGlobalShortcut(mainWindow)
