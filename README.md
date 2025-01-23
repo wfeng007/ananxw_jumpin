@@ -43,30 +43,36 @@ ANAN Jumpin 是一款面向**AI能效达人及超级个体**的PC端AI效率工�
 
 ## 🚀 快速开始
 
-### ⚙️ 快速运行all in 1 file版（非安装） 
-安装依赖
+### ⚙️ 快速运行all in 1 file 工程版（非安装） 
+
+1. 建立并进入conda环境，如：
+```bash
+conda create -n ananxw_jumpin python==3.9.11 pip
+conda activate ananxw_jumpin
+```
+
+2. 安装依赖
 
 ```bash
 pip install -r requirements.txt
 ```
 
-配置
-
-1. 创建 `.env` 文件并配置你的OpenAI API密钥（或兼容模型的秘钥）:
+3. 配置， 创建 `.env` 文件并配置你的OpenAI API密钥（或兼容模型的秘钥）:
 ```
 OPENAI_API_KEY=<your_api_key_here>
 OPENAI_BASE_URL=<baseurl,http://xxx/v1>
 ```
 **注意**：.env 内容也可直接设置环境变量，不适用.env文件配置。
 
-2. 运行“all in 1 file”的内置主程序:
+4. 运行“all in 1 file”的内置主程序:
 ```bash
 python ananxw_jumpin_allin1f.py
 ```
 
+
 ### ⚙️ 快速安装运行 
 
-先已得到dist的打包版，将ananxw_jumpin目录解压或安装到任意位置。  
+先得到dist的打包版，将ananxw_jumpin目录解压或安装到任意位置。(当前可以使用个pyinstaller对工程打包获取打包发布版。)  
 1. 在ananxw_jumpin工作目录，创建 `.env` 文件并配置你的OpenAI API密钥（或兼容模型的秘钥）:
 ```
 OPENAI_API_KEY=<your_api_key_here>
@@ -83,8 +89,8 @@ ananxw_jumpin.exe
 ```
 
 **打包版获取：**
-- 直接下载.zip，或安装包：（待建设... 需要找包存放点）
-- 下载工程后，使用pyinstaller 进行打包后，在dist目录下得到。参考后续章节：[`📦打包发布版应用包`](#打包发布版应用包)
+- 第一种：直接下载.zip，或安装包，建议选择最新版本。（待建设... 需要找包存放点）
+- 第二种：下载工程后，使用pyinstaller 进行打包后，在dist目录下得到。参考后续章节：[`📦打包发布版应用包`](#打包发布版应用包)
 
 
 
@@ -105,7 +111,12 @@ Applet切换：
 - 程序支持多个Applet，每个Applet可以提供不同的功能。使用界面左上角Applet切换（或默认快捷键 `Tab`,当前为内置插件实现。）在不同Applet间切换。
 
 如下图为本工具平台基本界面，左上“🐶OP”为切换applet时会有不同的title展示（小程序标题，applet-title）。
+![Base UI2](./readme_ref_res/base_ui2.png)
+0.8.0版本前的界面（无导航）：
 ![Base UI1](./readme_ref_res/base_ui1.png)
+
+导航基本功能：
+![nav_ui1](./readme_ref_res/nav_ui1.png)
 
 ## 🔧 开发者快速指南
 
@@ -120,6 +131,7 @@ Applet切换：
 简要说明：
 - python 3.9+
 - pyside6：界面主要为qt开发；
+- PySide6-Fluent-Widgets：fluent ui界面库；
 - pynput：全局快捷键；
 - openai-api：AI-LLM对接；
 - langchain：AI建设；(langchain版本变更较快，已使用尽量基本功能，如使用其他版本报错，请告知。) 
@@ -227,21 +239,27 @@ class MyPlugin(AAXWAbstractPlugin):
 **注意：当前版本[`builtin_plugins.py`](builtin_plugins.py) 文件样例：**
 
 4. 本地Ollama及其模型使用与基本管理样例，包含插件与applet实现：[`builtin_plugins.py 中 AAXWJumpinOllamaSimpleApplet` ](builtin_plugins.py)
-    - Applet-title:"OLAM"；
+    - Applet-title:"OLAM"；使用`Alt+1`切换出简易管理面板进行模型管理；
     - 界面如下图：![Ollama Ex UI1](./readme_ref_res/ollama_ex_ui1.png)
 
-5. 本地Memory与历史记录实现样例，包含插件与applet实现：[`builtin_plugins.py #L718 AAXWJumpinChatHistoryExpApplet` ](builtin_plugins.py#L718)
+5. 本地Memory与历史记录实现样例 **（已丢弃）**，代码已放入待丢弃文件中：[`retired_or_deprecated.py 中 AAXWJumpinChatHistoryExpApplet` ](retired_or_deprecated.py)
     - Applet-title:"CHIS"
     - 当前使用Langchian的本地文件持久化，在工作目录下，memories目录下保存；
-    - 界面如下图：![Chat history or memory UI1](./readme_ref_res/chathistory_memory_ex_ui1.png)
-
+    - **功能已合并到内置默认AAXWJumpinDefaultCompoApplet中，不再单独使用。**
+    - 但还可以作为插件样例用以参考。
 
 6. 本地知识库与Rag(chromadb)实现样例，包含插件与applet实现：（本功能在打包版本中可能不稳定，请注意使用。）[`builtin_plugins.py 中 AAXWJumpinKBSApplet` ](builtin_plugins.py)
-    - Applet-title:"KBS"
+    - Applet-title:"KBS"，使用`Alt+1`切换出简易管理面板进行上传；
     - chromadb实现vectordb能力，可上传小尺寸pdf，作为LLM反馈时的搜索查询来源。
     - 在工作目录下会生成 chroma_db,kbs_store来保存知识文档与索引数据。
+    - 界面如下图：
+    ![kbs_ui11](./readme_ref_res/kbs_ui1.png)
+    ![kbs_ui12](./readme_ref_res/kbs_ui2.png)
 
 ## 📝 版本历史与计划
+- v0.8:
+    - 已提供整体导航栏,增加历史列表、applet/agent列表功能以及互动记忆功能沉淀；
+    - 已提供基础线程框架，集中异步处理与界面异步处理；保证可用性与稳定性，防止QTread崩溃；
 - v0.7: 增加：
     - 已增加基本向量数据库（基于chroma 0.5.23实现），支持形成基本rag能力；并提供例子
     - 已完成 打包与发布版初步建设；且支持chroma 0.5.23版本；
@@ -257,11 +275,12 @@ class MyPlugin(AAXWAbstractPlugin):
 
 ### 🌈 计划与路线概要
 
-v0.8+ 计划  
-- 代码块需支持plaintext/unknown 以及其他结构，未知，平文为全白。
-- 提升一轮基本功能健壮性，误操作容错兼容。
-- 提供其他ai相关集成样例，如：chateveredit，xbrain等
+v0.9+ 计划
+- 实现初步的agent框架能力，提供1个agent样例如：动态改名；
+- mac运行支持与打包支持；
 - coze集成对接应用样例；
+- 代码块需支持plaintext/unknown 以及其他结构，未知，平文为全白。
+- 提供其他ai相关集成样例，如：chateveredit，xbrain等
 - dify集成对接样例；
 - 可集成密塔等搜索（可插件方式）
 - 支持可能轻量级，流程式agent/多agent

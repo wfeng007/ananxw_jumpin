@@ -41,21 +41,20 @@
 #       注释说明整体梳理，初步建设1抡项目说明与二开参考说明
 #       增加chat history（memory）与多轮对话功能，提示词模版功能；并提供例子；
 #
-# 0.7+：@Date: 2024-12-03 - 12-21日
+# 0.7+：@Date: 2024-12-03 - 12-21
 #       已增加基本向量数据库（基于chroma 0.5.23实现），支持形成基本rag能力；并提供例子
 #       已完成 打包与发布版初步建设；且支持chroma 0.5.23版本；
 
-# 0.8+  @Date: 2025-01-05 
+# 0.8+  @Date: 2025-01-05 - 01-22
 #       已提供整体导航栏；
 #       已提供基础线程框架，集中异步处理与界面异步处理；保证可用性与稳定性，防止QTread崩溃；
 #       已沉淀前期样例中的功能-历史记忆等到核心功能中；
-#       主导航中增加applet/agent列表与切换能力；
-#       沉淀前期样例中的其他功能-ollama模型管理等；
-#       基于线程框架甚至基础多进程框架，构建初步的agent能力；
-#       coze集成对接应用样例；
-#       MAC环境打包发布尝试；
+#       已在主导航中增加applet/agent列表与切换能力；
+
 # 
 # 0.9+
+#       实现初步的agent框架能力，提供1个agent样例如：动态改名；
+#       mac运行支持与打包支持；
 #       代码块需支持plaintext/unknown 以及其他结构，未知，平文为全白。
 #       提供其他ai相关样例，如：chateveredit等
 #       coze集成对接应用样例；
@@ -63,6 +62,7 @@
 #       可集成密塔等搜索；
 #       支持可能轻量级，流程式agent/多agent
 #       轻量级meta agent；
+#      
 #       
 # 
 #
@@ -220,7 +220,7 @@ print(f"Found evnpath: {__evnpath} , will load it.")
 _ = load_dotenv(__evnpath)  #
 
 # 版本
-__version__ = "0.7.0"
+__version__ = "0.8.0"
 
 
 # 日志器
@@ -5228,7 +5228,7 @@ if __name__ == "__main__":
 
     try:
         # 这里使用了相对导入，但builtin_plugins做为自己模块增加包名的操作。
-        # import ananxw_jumpin.builtin_plugins
+        import ananxw_jumpin.builtin_plugins
         pass
     except Exception as e: 
         AAXW_JUMPIN_MODULE_LOGGER.warning(
