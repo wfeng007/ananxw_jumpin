@@ -56,6 +56,10 @@ conda activate ananxw_jumpin
 ```bash
 pip install -r requirements.txt
 ```
+**注意**：pywin32 安装后需要在conda环境比 ananxw_jumpin 的 ~/env/Script目录下再执行安装来完成DLL安装。
+```bash
+python pywin32_postinstall.py -install
+```
 
 3. 配置， 创建 `.env` 文件并配置你的OpenAI API密钥（或兼容模型的秘钥）:
 ```
@@ -68,6 +72,7 @@ OPENAI_BASE_URL=<baseurl,http://xxx/v1>
 ```bash
 python ananxw_jumpin_allin1f.py
 ```
+**注意**：如果使用vscode或基于vscode的Cursor等，需要在工程中指定运行配置.vscode/launch.json，并为工程设置指定conda环境如: ananxw_jumpin（IDE右下角状态栏）。运行调试时指定launch.json为调试配置（执行时出现在IDE右下角状态栏）。
 
 
 ### ⚙️ 快速安装运行 
