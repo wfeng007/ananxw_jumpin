@@ -23,6 +23,7 @@ openai==1.42.0
 langchain==0.3.0
 langchain-openai==0.2.2
 langchain-community==0.3.0
+langgraph==0.2.25
 
 # for builtin plugins
 # Vectordb pdf-tools
