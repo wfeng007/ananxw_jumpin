@@ -39,11 +39,13 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 
+from regex import P
+
 # TODO 考虑增加1st-order-logic的实现；提供1st-order指令的schema
 class MemoHistoryAction(BaseModel):
     """备忘录历史操作的输出模型"""
-    action_name: str = Field(description="要执行的动作名称")
-    memo_name: str = Field(description="要操作的备忘录名称")
+    actionName: str = Field(description="要执行的动作名称")
+    memoName: str = Field(description="要操作的备忘录名称")
     content: str = Field(description="操作的内容")
     thought: str = Field(description="对操作过程的理解和计划")
 
@@ -51,28 +53,34 @@ class MemoActions:
     """备忘录操作集合"""
     
     @staticmethod
-    def renameMemo(old_name: str, new_name: str) -> str:
+    def renameMemo(oldName: str, newName: str) -> str:
         """重命名备忘录"""
-        print(f"[模拟] 将备忘录 {old_name} 重命名为 {new_name}")
-        return f"已将备忘录 {old_name} 重命名为 {new_name}"
+        print(f"[模拟] 将备忘录 {oldName} 重命名为 {newName}")
+        return f"已将备忘录 {oldName} 重命名为 {newName}"
 
     @staticmethod
-    def readMemo(memo_name: str, _: str = "") -> str:
+    def readMemo(memoName: str, _: str = "") -> str:
         """读取备忘录内容"""
-        print(f"[模拟] 读取备忘录 {memo_name} 的内容")
-        return f"这是 {memo_name} 的模拟内容"
+        print(f"[模拟] 读取备忘录 {memoName} 的内容：---你好，{memoName}是1个比较重要的事情，需要尽快完成---")
+        return f"---你好，{memoName}是1个比较重要的事情，需要尽快完成---"
+    
+    @staticmethod
+    def replyToUser(memoName: str = "",content: str = "") -> str:
+        """回复用户"""
+        print(f"[模拟] 回复用户: {content}")
+        return content
 
 class ActionActuator:
     """动作执行器"""
     
     def __init__(self):
         self.actions = []
-        self.action_dict = {}
+        self.actionDict = {}
         
     def setActions(self, actions: List[Tool]):
         """设置动作列表"""
         self.actions = actions
-        self.action_dict = {action.name: action for action in actions}
+        self.actionDict = {action.name: action for action in actions}
     
     def getActionDescriptions(self) -> str:
         """获取动作描述列表"""
@@ -80,7 +88,7 @@ class ActionActuator:
     
     def getAction(self, name: str) -> Tool:
         """获取指定名称的动作"""
-        return self.action_dict.get(name)
+        return self.actionDict.get(name)
 
 @dataclass
 class SensoryEvent:
@@ -110,6 +118,7 @@ class BaseAgent(ABC):
         self.name = name
         self.stemQueue = queue.Queue()  # 主干回路队列
         self.isRunning = True
+        self.actionActuator = ActionActuator()  # 添加动作执行器实例
 
     @abstractmethod
     def run(self):
@@ -143,6 +152,10 @@ class BaseAgent(ABC):
         self.isRunning = False
         self.senseEnvironmentEvent("stop")
 
+    def setActions(self, actions: List[Tool]):
+        """设置Agent可用的动作列表"""
+        self.actionActuator.setActions(actions)
+
 @dataclass
 class BehaviorStep:
     """行为步骤"""
@@ -151,7 +164,9 @@ class BehaviorStep:
     timestamp: datetime = field(default_factory=datetime.now)
     thought: Optional[str] = None            # 思考过程
     actionName: Optional[str] = None         # 关联的 Action 名称
+    actionParams: Dict[str, str] = field(default_factory=dict)  # 动作参数
 
+# TODO 需要为pattern提供解析与结果处理。模式的处理可以类似action也以底层tool的方式或者自己做的推导选择器；
 @dataclass
 class BehaviorPattern:
     """行为模式 - 表示一次完整的状态机微循环执行过程"""
@@ -200,7 +215,7 @@ class BehaviorPattern:
         self.endTime = datetime.now()
 
 @dataclass
-class AgentMemory:
+class ThingMemory:
     """Agent 记忆组件"""
     chatMemory: ConversationBufferMemory = field(
         default_factory=lambda: ConversationBufferMemory(memory_key="chat_history")
@@ -220,7 +235,8 @@ class AgentMemory:
             self.currentPattern = None
     
     def recordCurrentStep(self, thought: Optional[str] = None, 
-                         actionName: Optional[str] = None) -> None:
+                         actionName: Optional[str] = None,
+                         actionParams: Dict[str, str] = None) -> None:
         """记录当前步骤"""
         if self.currentPattern:
             current_instruction = self.currentPattern.getCurrentInstruction()
@@ -230,6 +246,8 @@ class AgentMemory:
                     thought=thought,
                     actionName=actionName
                 )
+                if actionParams:
+                    self.currentPattern.steps[-1].actionParams.update(actionParams)
     
     def setCurrentStepResult(self, result: Any) -> None:
         """设置当前步骤的结果"""
@@ -245,7 +263,7 @@ class AgentMemory:
 
 
 # 修改 AgentState 定义
-class AgentState(BaseModel):
+class AgentSPTAState(BaseModel):
     """Agent状态定义"""
     # 状态常量定义
     SENSING: ClassVar[str] = "SENSING"
@@ -254,230 +272,217 @@ class AgentState(BaseModel):
     ACTING: ClassVar[str] = "ACTING"
     END: ClassVar[str] = "END"
 
-    # 实例字段定义
-    messages: List[BaseMessage] = Field(default_factory=list, description="对话历史")
-    current_state: str = Field(default=SENSING, description="当前状态")
+    current_step: str = Field(default=START)  # Langgraph使用
+    currentState: str = Field(default=SENSING, description="当前状态")
     agent: BaseAgent = Field(description="当前Agent对象")
-    memory: AgentMemory = Field(description="Agent记忆组件")
+    currentActionNLRName: str = Field(default="", description="当前状态的action名称")
+    nextActionNLRName: str = Field(default="", description="下一个状态的action名称线索")
+    event: Optional[SensoryEvent] = Field(default=None, description="当前正在处理的事件")
+    thingMemory: ThingMemory = Field(description="事项记忆，表示一组需要完成的行为，其所需要的记忆。")
+    actionCallAndParams: Optional[MemoHistoryAction] = Field(default=None, description="当前工具调用信息")
 
     class Config:
-        arbitrary_types_allowed = True  # 允许任意类型，因为BaseAgent和AgentMemory可能不是pydantic模型
+        arbitrary_types_allowed = True
 
-# TODO 提示词与外层逻辑进行对应执行。当前存在问题；
-# TODO 需要为pattern提供解析与结果处理。模式的处理可以类似action也以底层tool的方式或者自己做的推导选择器；
+class PerceivingOutput(BaseModel):
+    """感知阶段的输出结构对象"""
+    actionName: str = Field(description="当前要执行的动作名称")
+    nextActionName: str = Field(default="", description="下一步建议的动作名称")
+    thought: str = Field(description="对当前情况的理解和计划")
+    actionCallAndParams: MemoHistoryAction = Field(description="具体工具调用信息")
+
 class SensingPerceivingThinkingActingProcess:
     """感知-认知-思考-行动处理器"""
     
     def __init__(self):
         self.llm = ChatOpenAI(temperature=0, model="gpt-3.5-turbo")
-        self.action_actuator = ActionActuator()
-        self.parser = PydanticOutputParser(pydantic_object=MemoHistoryAction)
-        self.prompt = self._createPrompt()
-        self.pattern_prompt = self._createPatternPrompt()
+        # self.llm = ChatOpenAI(temperature=0,model="deepseek-chat")
+        self.parser = PydanticOutputParser(pydantic_object=PerceivingOutput)
+        self.promptTemplate = self._createPrompt()
+
+
+    def process(self, state: AgentSPTAState) -> AgentSPTAState:
+        """处理状态步骤，按照感知->认知->思考->行动的顺序执行"""
+        try:
+            # print(f"process 当前状态: {state}")
+            # 使用类常量进行状态判断和赋值
+            if state.currentState == state.SENSING:
+                state = self.onSensing(state)
+                # print(f"SENSING 后 当前状态: {state}")
+            if state.currentState == state.PERCEIVING:
+                state = self.onPerceiving(state)
+                # print(f"PERCEIVING 执行后 当前状态: {state}")
+            # print(f"应该 PERCEIVING 后 当前状态: {state}")
+            if state.currentState == state.THINKING:
+                state = self.onThinking(state)
+                state.currentState = state.ACTING
+                # print(f"THINKING 后 当前状态: {state}")
+            if state.currentState == state.ACTING:
+                state = self.onActing(state)
+                # onActing 方法内部会根据情况设置下一个状态
+                # 可能是 SENSING（继续循环）或 END（结束循环）
+            # print(f"process 当前状态: {state}")
+        except Exception as e:
+            import traceback
+            print(f"process 异常: {e}")
+            print(traceback.format_exc())
+        finally:
+            state.current_step = state.END
+        return state
     
     def _createPrompt(self) -> PromptTemplate:
         """创建提示模板"""
-        template = """你是一个应用资源管理者。根据用户的请求，选择合适的动作来管理应用资源。
-请先用一句话描述你对请求的理解和计划，作为thought字段的内容，然后选择合适的动作执行。
+        template = """# 角色与环境
+你是一个应用资源管理者。根据用户的信息、事件输入、前次思考执行情况，选择合适的动作来管理应用资源并回复。
 
-可用的动作有：
+# 执行要求
+请先理解用户需求，然后规划动作执行计划。
+回复用户时，本次以及之前执行的结果一并思考反馈。
+每次输入都有当前动作，但并不是每次信息都是有下一步动作的。
+下一步动作是根据当前信息与本次动作来预判的。
+
+# 可用的动作有：
 {action_descriptions}
 
-用户输入: {input}
+# 约束-输出要求
+你需要规划以下内容：
+1. 当前动作：选择一个最适合当前情况的动作来执行；
+2. 下一步动作：预判下一步可能需要的动作，帮助连贯性处理；可以没有下一步动作，任务或Thing完成，无需发起新的INNER事件；
+3. 思考过程：解释你对当前情况的理解和处理计划；
+4. 具体调用：提供完整的工具调用信息，包括具体动作、操作对象和内容；
+5. 输出结构必须完整，字段必须有，内容可以根据字段情况为空字符串或None；
 
-{format_instructions}"""
+# 约束-输出格式
+{format_instructions}
 
+# 输出示例：
+{{
+    "actionName": "读取备忘",
+    "nextActionName": "回复用户",
+    "thought": "用户想查看工作计划的内容，我需要先读取备忘录，然后回复用户",
+    "actionCallAndParams": {{
+        "actionName": "读取备忘",
+        "memoName": "工作计划",
+        "content": "",
+        "thought": "需要读取工作计划备忘录的内容"
+    }}
+}}
+
+# 信息或事件输入:
+{input}
+"""
         return PromptTemplate(
             template=template,
             input_variables=["action_descriptions", "input"],
             partial_variables={"format_instructions": self.parser.get_format_instructions()}
         )
-    
-    def _createPatternPrompt(self) -> PromptTemplate:
-        """创建行为模式提示模板"""
-        template = """你是一个应用资源管理者，负责管理应用的各种资源，包括备忘录等。
-基于用户的输入，请规划一个行为模式来处理这个管理任务。
 
-用户输入: {input}
-
-请按以下格式输出：
-思考过程：[你对任务的理解和管理计划]
-第一个动作：[具体的action_name]
-行为步骤：
-1. [第一步指令]
-2. [第二步指令]
-...
-
-请确保第一个动作是一个具体的、可执行的action_name，与可用的动作列表对应。
-
-可用的动作有：
-{action_descriptions}
-"""
-        return PromptTemplate(
-            template=template,
-            input_variables=["input", "action_descriptions"]
-        )
-
-    def process(self, state: "AgentState") -> "AgentState":
-        """处理状态步骤，按照感知->认知->思考->行动的顺序执行"""
-        # print(f"process 当前状态: {state}")
-        # 使用类常量进行状态判断和赋值
-        if state.current_state == state.SENSING:
-            state = self.onSensing(state)
-            state.current_state = state.PERCEIVING
-        
-        if state.current_state == state.PERCEIVING:
-            state = self.onPerceiving(state)
-            state.current_state = state.THINKING
-        
-        if state.current_state == state.THINKING:
-            state = self.onThinking(state)
-            state.current_state = state.ACTING
-        
-        if state.current_state == state.ACTING:
-            state = self.onActing(state)
-            # onActing 方法内部会根据情况设置下一个状态
-            # 可能是 SENSING（继续循环）或 END（结束循环）
-        
-        return state
-    
-    def onSensing(self, state: AgentState) -> AgentState:
+    def onSensing(self, state: AgentSPTAState) -> AgentSPTAState:
         """感知状态处理"""
         try:
             event = state.agent.stemQueue.get_nowait()
-            # print(f"收到的事件: {event}")
+            print(f"onSensing 当前事件: {event}")
             
-            # 处理系统停止事件
             if event.getEventType() == SensoryEvent.ENV and event.message == "stop":
-                state.messages.append(AIMessage(content="正在停止..."))
-                state.current_state = AgentState.END
+                state.currentState = AgentSPTAState.END
                 return state
             
-            # 处理内部事件，继续执行现有pattern
-            if event.getEventType() == SensoryEvent.INNER:
-                # 如果内部事件携带了行为模式，则更新当前模式
-                pattern = event.getBehaviorPattern()
-                if pattern:
-                    state.memory.currentPattern = pattern
-                state.current_state = AgentState.PERCEIVING
-                return state
-            
-            # 处理环境事件或消息事件
-            if event.getEventType() in [SensoryEvent.ENV, SensoryEvent.MESSAGE]:
-                state.messages.append(HumanMessage(content=event.message))
-                state.current_state = AgentState.PERCEIVING
+            # 增加对 INNER、ENV、MESSAGE 事件的统一处理
+            if event.getEventType() in [SensoryEvent.INNER, SensoryEvent.ENV, SensoryEvent.MESSAGE]:
+                state.event = event  # 保存当前事件到状态
+                state.currentState = AgentSPTAState.PERCEIVING
                 return state
             
         except queue.Empty:
-            state.current_state = AgentState.END
+            state.currentState = AgentSPTAState.END
             return state
         
         return state
     
-    def onPerceiving(self, state: AgentState) -> AgentState:
-        """认知状态处理"""
-        current_pattern = state.memory.currentPattern
-        last_message = state.messages[-1].content if state.messages else ""
-        
-        # 生成pattern推导
-        pattern_prompt = self.pattern_prompt.format(
-            input=last_message,
-            action_descriptions=self.action_actuator.getActionDescriptions()
-        )
-        print(f"pattern_prompt: {pattern_prompt}")
-        pattern_response = self.llm.invoke(pattern_prompt)
-        print(f"pattern_response: {pattern_response}")
-        thought, first_action, steps = self._parsePatternResponse(pattern_response.content)
-        
-        if current_pattern and current_pattern.getCurrentStep():
-            # 如果已有pattern，记录推导结果但继续使用当前pattern
-            current_step = current_pattern.getCurrentStep()
-            state.memory.recordCurrentStep(
-                thought=thought,
-                actionName=current_step.actionName
-            )
-        else:
-            # 无pattern则创建新的pattern
-            state.memory.startNewPattern(
-                patternId=f"task_{int(time.time())}",
-                instructions=steps
-            )
-            # 记录第一个步骤
-            state.memory.recordCurrentStep(
-                thought=thought,
-                actionName=first_action
-            )
-        
-        state.current_state = AgentState.THINKING
-        return state
-    
-    def onThinking(self, state: AgentState) -> AgentState:
-        """思考状态处理"""
-        # 暂时简单处理，直接转到行动状态
-        state.current_state = AgentState.ACTING
-        return state
-    
-    def onActing(self, state: AgentState) -> AgentState:
-        """行动状态处理"""
-        current_step = state.memory.currentPattern.getCurrentStep()
-        if not current_step:
-            state.current_state = AgentState.END
+    def onPerceiving(self, state: AgentSPTAState) -> AgentSPTAState:
+        """知觉状态处理"""
+        if not state.event:
+            state.currentState = AgentSPTAState.END
             return state
-        
-        # 执行当前action
-        action = self.action_actuator.getAction(current_step.actionName)
-        if action:
-            result = action.func(parsed_output.memo_name, parsed_output.content)
-            state.memory.setCurrentStepResult(result)
             
-            response_message = AIMessage(content=f"{current_step.thought}\n执行结果: {result}")
-            state.messages.append(response_message)
-            print(f"[{state.agent.name}]: {response_message.content}")
+        # 使用事件消息作为输入
+        input_message = state.event.message
         
-        # 检查是否有下一步
-        next_step = state.memory.moveToNextStep()
-        if next_step:
-            # 生成内部事件，继续执行pattern
-            state.agent.stemQueue.put(SensoryEvent(
-                message="continue_pattern",
-                eventType=SensoryEvent.INNER,
-                source="system",
-                behaviorPattern=state.memory.currentPattern  # 传递当前行为模式
-            ))
-            state.current_state = AgentState.SENSING
-        else:
-            # 完成当前pattern
-            state.memory.completeCurrentPattern()
-            state.current_state = AgentState.END
+        # 生成提示并获取响应
+        prompt = self.promptTemplate.format(
+            input=input_message,
+            action_descriptions=state.agent.actionActuator.getActionDescriptions()
+        )
         
+        # print(f"onPerceiving 提示词内容: {prompt}")
+        try:
+            response = self.llm.invoke(prompt)
+            print(f"onPerceiving 直接输出: {response}")
+            parsed_output = self.parser.parse(response.content)
+            # print(f"onPerceiving 解析后输出: {parsed_output}")
+        except Exception as e:
+            print(f"onPerceiving 异常: {e}")
+            print(f"onPerceiving 提示词内容: {prompt}")
+            if response:
+                print(f"onPerceiving 直接输出: {response}")
+            raise e
+
+
+        # 更新状态
+        state.currentActionNLRName = parsed_output.actionName
+        state.nextActionNLRName = parsed_output.nextActionName
+        state.actionCallAndParams = parsed_output.actionCallAndParams
+        state.currentState = state.THINKING
         return state
     
-    def _parsePatternResponse(self, content: str) -> Tuple[str, str, List[str]]:
-        """解析模式响应
-        返回: (思考过程, 第一个动作名称, 步骤列表)
-        """
-        lines = content.split('\n')
-        thought = ""
-        first_action = ""
-        steps = []
+    def onThinking(self, state: AgentSPTAState) -> AgentSPTAState:
+        """思考状态处理"""
+        # 简单处理，直接转到行动状态
+        state.currentState = AgentSPTAState.ACTING
+        return state
+    
+    def onActing(self, state: AgentSPTAState) -> AgentSPTAState:
+        """行动状态处理"""
+        # 使用agent的actionActuator获取动作
+        # print(f"onActing 当前状态: {state}")
+        action = state.agent.actionActuator.getAction(state.actionCallAndParams.actionName)
+        if action and state.actionCallAndParams:
+            try:
+                # 从toolCall中获取参数执行动作
+                result = action.func(
+                    state.actionCallAndParams.memoName,
+                    state.actionCallAndParams.content
+                )
+                
+                # 添加响应消息，包含思考过程和执行结果
+                print(f"\n[{state.agent.name}] 思考: {state.actionCallAndParams.thought}")
+                print(f"[{state.agent.name}] 执行: {result}")
+                
+                # 如果有下一步动作信息，将当前执行结果和下一步动作信息一起写入事件
+                if state.nextActionNLRName:
+                    state.agent.stemQueue.put(SensoryEvent(
+                        message=f"前次执行结果: {result} | 需要进行：{state.nextActionNLRName}",
+                        eventType=SensoryEvent.INNER,
+                        source="self"
+                    ))
+                
+                state.currentState = AgentSPTAState.END
+            except Exception as e:
+                print(f"\n[{state.agent.name}] 执行出错: {str(e)}")
+                state.currentState = AgentSPTAState.END
+        else:
+            print(f"\n[{state.agent.name}] 无法执行动作: {state.currentActionNLRName}")
+            state.currentState = AgentSPTAState.END
         
-        for line in lines:
-            if line.startswith("思考过程："):
-                thought = line.replace("思考过程：", "").strip()
-            elif line.startswith("第一个动作："):
-                first_action = line.replace("第一个动作：", "").strip()
-            elif line.strip().startswith(('1.', '2.', '3.')):
-                step = line.split('.', 1)[1].strip()
-                steps.append(step)
-        
-        return thought, first_action, steps
+        # print(f"onActing 当前状态结束")
+        return state
 
 class StateMachineAgent(BaseAgent):
     """提供基本状态机实现的Agent"""
     PROCESS = "process"
     
     def __init__(self, name: str, 
-                 processFunc: Callable[[AgentState], AgentState],
+                 processFunc: Callable[[AgentSPTAState], AgentSPTAState],
                  runtimeIdleFunc: Optional[Callable[[], None]] = None):
         """
         初始化状态机Agent
@@ -493,11 +498,11 @@ class StateMachineAgent(BaseAgent):
         
     def _defaultRuntimeIdleFunc(self):
         """默认的运行时空闲处理函数"""
-        time.sleep(0.1)
+        time.sleep(0.5)
 
     def _createStateMachine(self)->CompiledStateGraph:
         """创建状态机"""
-        stateMachine = StateGraph(AgentState)
+        stateMachine = StateGraph(AgentSPTAState)
         stateMachine.add_node(self.PROCESS, self.processFunc)
         stateMachine.add_edge(START, self.PROCESS)
         stateMachine.add_edge(self.PROCESS, END)
@@ -511,17 +516,23 @@ class StateMachineAgent(BaseAgent):
     def run(self):
         """运行循环"""
         print(f"\n[系统] {self.name} 已启动，等待输入...")
+
         while not self.isReqStop:
-            
-            state = {
-                "messages": [],
-                "current_state": AgentState.SENSING,
-                "agent": self,
-                "memory": AgentMemory()
-            }
-            print(f"当前状态: {state}")
-            self.stateMachine.invoke(state, config=RunnableConfig(recursion_limit=10))
-            self.runtimeIdleFunc()
+            try:
+                state = AgentSPTAState(
+                    current_step=START,
+                    currentState=AgentSPTAState.SENSING,
+                    agent=self,
+                    thingMemory=ThingMemory(),
+                    currentActionNLRName="",
+                    nextActionNLRName="",
+                    event=None
+                )
+                # print(f"run 当前状态: {state}")
+                self.stateMachine.invoke(state, config=RunnableConfig(recursion_limit=10))
+                self.runtimeIdleFunc()
+            except Exception as e:
+                print(f"运行时发生异常: {e} 但继续mainloop")
         print(f"\n[系统] {self.name} 已停止.")
 
 class AgentRuntime(ABC):
@@ -615,14 +626,19 @@ class AgentEnvironment:
                 name="读取备忘",
                 func=MemoActions.readMemo,
                 description="读取指定名称备忘录的内容。输入备忘录名称。"
+            ),
+            Tool(
+                name="回复用户",
+                func=MemoActions.replyToUser,
+                description="直接回复用户消息。输入回复内容。"
             )
         ]
-        processor.action_actuator.setActions(actions)
-        
+
         agent = StateMachineAgent(
             name=name,
             processFunc=processor.process
         )
+        agent.actionActuator.setActions(actions)
         self.agentDict[name] = agent
         self.runtime.submitAgent(agent)
         return agent
@@ -647,14 +663,13 @@ if __name__ == "__main__":
         env = AgentEnvironment("thread_pool")
         try:
             agent = env.createAgent("资源管理助手")
+    
             time.sleep(1)
             
-            # 发送环境事件
-            agent.senseEnvironmentEvent(command="rename_memo", 
-                                memo_name="旧备忘录",
-                                new_name="新备忘录")
+            # 发送测试消息
+            agent.sendMessageToMe("请帮我读取名为'工作计划'的备忘录")
             
-            time.sleep(15)  # 等待处理完成
+            time.sleep(300)  # 等待处理完成
             
         except KeyboardInterrupt:
             print("\n[系统] 接收到中断信号，正在停止...")
@@ -665,3 +680,28 @@ if __name__ == "__main__":
         raise ValueError("请在.env文件中设置OPENAI_API_KEY")
     
     test_env_event()
+
+
+
+# 以下注释内容不要删除
+#     def _createPatternPrompt(self) -> PromptTemplate:
+#         """创建行为模式提示模板"""
+#         template = """你是一个应用资源管理者，负责管理应用的各种资源，包括备忘录等。
+# 基于用户的输入，请规划一个行为模式来处理这个管理任务。
+
+# 用户输入: {input}
+
+# 请按以下格式输出：
+# 思考过程：[你对任务的理解和管理计划]
+# 第一个动作：[具体的action_name]
+# 行为步骤：
+# 1. [第一步指令]
+# 2. [第二步指令]
+# ...
+
+# 请确保第一个动作是一个具体的、可执行的action_name，与可用的动作列表对应。
+
+# 可用的动作有：
+# {action_descriptions}
+# """
+# #
