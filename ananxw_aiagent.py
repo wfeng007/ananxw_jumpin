@@ -14,8 +14,14 @@
 # @Last Modified by:wfeng007
 #
 #
-#  llm驱动的ai agent实现；
-#  基于langchain,langgraph的实现；
+#  llm驱动的ai agent框架与实现类；基于langchain,langgraph的实现；
+#
+# 已实行驶入事件、推导循环（包含 感知、认知、思考、行动 ）整体过程。
+# 已实现 tools 的调用。
+# 已实现 基于lastEvent，lastResult的回路记忆模式。实现逐步推导处理的过程。
+# 提供了Pattern的定义，但未使用。
+# 
+
 
 from typing import Dict, TypedDict, Annotated, List, Optional, Callable, Any, Tuple, ClassVar
 from abc import ABC, abstractmethod
@@ -53,10 +59,10 @@ class MemoActions:
     """备忘录操作集合"""
     
     @staticmethod
-    def renameMemo(oldName: str, newName: str) -> str:
-        """重命名备忘录"""
-        print(f"[模拟] 将备忘录 {oldName} 重命名为 {newName}")
-        return f"已将备忘录 {oldName} 重命名为 {newName}"
+    def renameMemo(oldName: str, content: str) -> str:
+        """重命名备忘录；其中content直接代表新名称，而不是原意；"""
+        print(f"[模拟] 将备忘录 {oldName} 重命名为 {content}")
+        return f"已将备忘录 {oldName} 重命名为 {content}"
 
     @staticmethod
     def readMemo(memoName: str, _: str = "") -> str:
@@ -66,10 +72,11 @@ class MemoActions:
     
     @staticmethod
     def replyToUser(memoName: str = "",content: str = "") -> str:
-        """回复用户"""
+        """回复用户；content直接代表回复用户的内容。"""
         print(f"[模拟] 回复用户: {content}")
         return content
 
+# TODO 提供action的增加功能，且注意重名问题。
 class ActionActuator:
     """动作执行器"""
     
@@ -102,15 +109,47 @@ class SensoryEvent:
     eventType: str = MESSAGE            # 事件类型标识
     source: str = "user"                # 事件来源
     timestamp: datetime = field(default_factory=datetime.now)
-    behaviorPattern: Optional['BehaviorPattern'] = None  # 行为模式
+
+    lastEvent: Optional['SensoryEvent'] = field(default=None)  # 上一次事件
+    lastResult: Optional[str] = field(default=None)  # 上一次执行结果
+
     
     def getEventType(self) -> str:
         """获取事件类型"""
         return self.eventType
     
-    def getBehaviorPattern(self) -> Optional['BehaviorPattern']:
-        """获取行为模式"""
-        return self.behaviorPattern
+    #
+    def toMarkdownStr(self) -> str:
+        """返回markdown形式的字符串，使用 ## 作为标题"""
+        lines = [
+            "## 事件类型",
+            self.eventType,
+            "## 事件来源",
+            self.source,
+            "## 事件内容",
+            self.message,
+            "## 时间戳",
+            self.timestamp.isoformat(),
+            "## 上次执行结果",
+            str(self.lastResult if self.lastResult else 'None'),
+            "## 上次事件，作为Impression",
+            self.lastEvent.toImpressionStr() if self.lastEvent else 'None'
+        ]
+        return "\n".join(lines)
+
+    #印象形式(也兼容markdown)的字符串，用于回忆形式体现的上次事件
+    def toImpressionStr(self) -> str:
+        """返回属性序列化字符串，使用```包围，属性间换行"""
+        lines = [
+            f"eventType: {self.eventType}",
+            f"source: {self.source}",
+            f"message: {self.message}",
+            f"timestamp: {self.timestamp.isoformat()}",
+            f"lastResult: {self.lastResult if self.lastResult else 'None'}",
+            #不含对上次的印象
+            # f"lastEvent: {self.lastEvent.toImpressionStr() if self.lastEvent else 'None'}"
+        ]
+        return "```\n" + "\n".join(lines) + "\n```"
 
 class BaseAgent(ABC):
     """基础Agent接口"""
@@ -130,7 +169,7 @@ class BaseAgent(ABC):
         self.senseMessage(message)
 
     def senseMessage(self, message: str):
-        """发送消息到Agent"""
+        """感知（发送）消息到Agent"""
         print(f"\n[用户] -> {self.name}: {message}")
         self.stemQueue.put(SensoryEvent(
             message=message,
@@ -139,7 +178,7 @@ class BaseAgent(ABC):
         ))
 
     def senseEnvironmentEvent(self, command: str, **params):
-        """发送系统事件到Agent"""
+        """感知（发送）环境事件到Agent"""
         self.stemQueue.put(SensoryEvent(
             message=command,
             eventType=SensoryEvent.ENV,
@@ -272,7 +311,7 @@ class AgentSPTAState(BaseModel):
     ACTING: ClassVar[str] = "ACTING"
     END: ClassVar[str] = "END"
 
-    current_step: str = Field(default=START)  # Langgraph使用
+    current_step: str = Field(default=START)  # Langgraph使用的状态
     currentState: str = Field(default=SENSING, description="当前状态")
     agent: BaseAgent = Field(description="当前Agent对象")
     currentActionNLRName: str = Field(default="", description="当前状态的action名称")
@@ -295,7 +334,7 @@ class SensingPerceivingThinkingActingProcess:
     """感知-认知-思考-行动处理器"""
     
     def __init__(self):
-        self.llm = ChatOpenAI(temperature=0, model="gpt-3.5-turbo")
+        self.llm = ChatOpenAI(temperature=0, model="gpt-4o")
         # self.llm = ChatOpenAI(temperature=0,model="deepseek-chat")
         self.parser = PydanticOutputParser(pydantic_object=PerceivingOutput)
         self.promptTemplate = self._createPrompt()
@@ -308,15 +347,11 @@ class SensingPerceivingThinkingActingProcess:
             # 使用类常量进行状态判断和赋值
             if state.currentState == state.SENSING:
                 state = self.onSensing(state)
-                # print(f"SENSING 后 当前状态: {state}")
             if state.currentState == state.PERCEIVING:
                 state = self.onPerceiving(state)
                 # print(f"PERCEIVING 执行后 当前状态: {state}")
-            # print(f"应该 PERCEIVING 后 当前状态: {state}")
             if state.currentState == state.THINKING:
                 state = self.onThinking(state)
-                state.currentState = state.ACTING
-                # print(f"THINKING 后 当前状态: {state}")
             if state.currentState == state.ACTING:
                 state = self.onActing(state)
                 # onActing 方法内部会根据情况设置下一个状态
@@ -337,7 +372,8 @@ class SensingPerceivingThinkingActingProcess:
 
 # 执行要求
 请先理解用户需求，然后规划动作执行计划。
-回复用户时，本次以及之前执行的结果一并思考反馈。
+回复用户动作时，如有上次运行结果与内容，请将其作为复述内容的形式放入本次回复中。
+回复用户动作时且被要求提供对动作结果做分析或计划时，请将上次运行结果与内容进行理解分析，并将结论放入。没有，则忽略本规则。
 每次输入都有当前动作，但并不是每次信息都是有下一步动作的。
 下一步动作是根据当前信息与本次动作来预判的。
 
@@ -368,12 +404,13 @@ class SensingPerceivingThinkingActingProcess:
     }}
 }}
 
-# 信息或事件输入:
-{input}
+# 信息或事件输入，其中message为输入主干内容:
+{input_event}
+
 """
         return PromptTemplate(
             template=template,
-            input_variables=["action_descriptions", "input"],
+            input_variables=["action_descriptions", "input_event"],
             partial_variables={"format_instructions": self.parser.get_format_instructions()}
         )
 
@@ -405,13 +442,10 @@ class SensingPerceivingThinkingActingProcess:
             state.currentState = AgentSPTAState.END
             return state
             
-        # 使用事件消息作为输入
-        input_message = state.event.message
-        
         # 生成提示并获取响应
         prompt = self.promptTemplate.format(
-            input=input_message,
-            action_descriptions=state.agent.actionActuator.getActionDescriptions()
+            action_descriptions=state.agent.actionActuator.getActionDescriptions(),
+            input_event=state.event.toMarkdownStr()
         )
         
         # print(f"onPerceiving 提示词内容: {prompt}")
@@ -426,7 +460,6 @@ class SensingPerceivingThinkingActingProcess:
             if response:
                 print(f"onPerceiving 直接输出: {response}")
             raise e
-
 
         # 更新状态
         state.currentActionNLRName = parsed_output.actionName
@@ -461,9 +494,11 @@ class SensingPerceivingThinkingActingProcess:
                 # 如果有下一步动作信息，将当前执行结果和下一步动作信息一起写入事件
                 if state.nextActionNLRName:
                     state.agent.stemQueue.put(SensoryEvent(
-                        message=f"前次执行结果: {result} | 需要进行：{state.nextActionNLRName}",
+                        message=f" 需要进行：{state.nextActionNLRName}",
                         eventType=SensoryEvent.INNER,
-                        source="self"
+                        source="self",
+                        lastEvent=state.event,  # 保存当前事件作为下一个事件的上一个事件
+                        lastResult=result  # 保存当前执行结果
                     ))
                 
                 state.currentState = AgentSPTAState.END
@@ -615,7 +650,8 @@ class AgentEnvironment:
         """创建并启动一个Agent"""
         processor = SensingPerceivingThinkingActingProcess()
         
-        # 初始化并注入动作
+        # 初始化并注入动作 
+        # 这里只应该加入原生的动作；
         actions = [
             Tool(
                 name="重命名备忘",
@@ -667,7 +703,8 @@ if __name__ == "__main__":
             time.sleep(1)
             
             # 发送测试消息
-            agent.sendMessageToMe("请帮我读取名为'工作计划'的备忘录")
+            # agent.sendMessageToMe("请帮我读取名为'工作计划'的备忘录")
+            agent.sendMessageToMe("请帮我将'工作计划'的备忘录改名，改名使用对备忘读取内容的小结。备忘录名字不能超过15个字符。改完请回复我一下。")
             
             time.sleep(300)  # 等待处理完成
             

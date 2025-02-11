@@ -3884,9 +3884,10 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
                     #TODO 如果服务卡顿一直不返回，有时候需要提供强制终端的手段；
                     self.llmagent.requestAndCallback(prompted, self.onResponse)
                 except Exception as e:
-                    self.AAXW_CLASS_LOGGER.error(f"An exception occurred: {str(e)}")
+                    import traceback
+                    self.AAXW_CLASS_LOGGER.error(f"An exception occurred: {str(e)}", exc_info=True)
+                    self.AAXW_CLASS_LOGGER.error(traceback.format_exc())
                     exec_e=e
-                    # raise e
                 finally:
                     #onfinish
                     if exec_e is None and self.wholeResponse: #没有异常才写入库
