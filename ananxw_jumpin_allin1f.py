@@ -209,6 +209,9 @@ import urllib.parse
 import urllib.request
 import json
 
+#本包导入
+# from ananxw_jumpin.ananxw_aiagent import BaseAction,AgentEnvironment
+
 ##
 # 导入结束
 ##

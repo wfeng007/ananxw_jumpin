@@ -23,11 +23,12 @@
 # 
 
 
-from typing import Dict, TypedDict, Annotated, List, Optional, Callable, Any, Tuple, ClassVar
+from typing import Dict,Type, TypedDict, Annotated, List, Optional, Callable, Any, Tuple, ClassVar
 from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 from langchain_core.runnables.config import RunnableConfig
+from langchain_core.tools import BaseTool
 from langchain_openai import ChatOpenAI
 from langchain_core.tools import Tool
 from langchain_core.prompts import PromptTemplate
@@ -39,63 +40,22 @@ from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 import queue
 import time
-import os
+import os,sys,logging
 import math
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 
-from regex import P
+# from regex import P
 
-# TODO 考虑增加1st-order-logic的实现；提供1st-order指令的schema
-class MemoHistoryAction(BaseModel):
-    """备忘录历史操作的输出模型"""
-    actionName: str = Field(description="要执行的动作名称")
-    memoName: str = Field(description="要操作的备忘录名称")
-    content: str = Field(description="操作的内容")
-    thought: str = Field(description="对操作过程的理解和计划")
+if __name__ == "__main__":
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)  # 插入到路径最前面
 
-class MemoActions:
-    """备忘录操作集合"""
-    
-    @staticmethod
-    def renameMemo(oldName: str, content: str) -> str:
-        """重命名备忘录；其中content直接代表新名称，而不是原意；"""
-        print(f"[模拟] 将备忘录 {oldName} 重命名为 {content}")
-        return f"已将备忘录 {oldName} 重命名为 {content}"
-
-    @staticmethod
-    def readMemo(memoName: str, _: str = "") -> str:
-        """读取备忘录内容"""
-        print(f"[模拟] 读取备忘录 {memoName} 的内容：---你好，{memoName}是1个比较重要的事情，需要尽快完成---")
-        return f"---你好，{memoName}是1个比较重要的事情，需要尽快完成---"
-    
-    @staticmethod
-    def replyToUser(memoName: str = "",content: str = "") -> str:
-        """回复用户；content直接代表回复用户的内容。"""
-        print(f"[模拟] 回复用户: {content}")
-        return content
-
-# TODO 提供action的增加功能，且注意重名问题。
-class ActionActuator:
-    """动作执行器"""
-    
-    def __init__(self):
-        self.actions = []
-        self.actionDict = {}
-        
-    def setActions(self, actions: List[Tool]):
-        """设置动作列表"""
-        self.actions = actions
-        self.actionDict = {action.name: action for action in actions}
-    
-    def getActionDescriptions(self) -> str:
-        """获取动作描述列表"""
-        return "\n".join([f"- {action.name}: {action.description}" for action in self.actions])
-    
-    def getAction(self, name: str) -> Tool:
-        """获取指定名称的动作"""
-        return self.actionDict.get(name)
+from ananxw_jumpin.ananxw_jumpin_allin1f import AAXW_JUMPIN_LOG_MGR
+AAXW_JUMPIN_MODULE_LOGGER:logging.Logger=AAXW_JUMPIN_LOG_MGR.getModuleLogger(
+    sys.modules[__name__])
 
 @dataclass
 class SensoryEvent:
@@ -151,6 +111,146 @@ class SensoryEvent:
         ]
         return "```\n" + "\n".join(lines) + "\n```"
 
+# TODO 考虑增加1st-order-logic的实现；提供1st-order指令的schema
+class PerceivingOutput(BaseModel):
+    """基础动作输出模型"""
+    actionName: str = Field(description="执行的动作名称")
+    nextActionName: str = Field(default="", description="下一步建议的动作名称")
+    thought: str = Field(description="对当前情况的理解和计划")
+    args: Dict[str, Any] = Field(default_factory=dict, description="动作调用的参数")
+
+    # 使用类变量存储解析器实例
+    _parser: ClassVar[PydanticOutputParser] = None
+
+    @classmethod
+    def getParser(cls) -> PydanticOutputParser:
+        """获取输出解析器（延迟初始化）"""
+        if cls._parser is None:
+            cls._parser = PydanticOutputParser(pydantic_object=cls)
+        return cls._parser
+
+    @classmethod
+    def getFormatInstructions(cls) -> str:
+        """获取输出格式说明"""
+        return cls.getParser().get_format_instructions()
+
+    @classmethod
+    def parseOutput(cls, output: str) -> 'PerceivingOutput':
+        """解析LLM的输出"""
+        return cls.getParser().parse(output)
+
+class BaseAction(BaseTool):
+    """基础动作类"""
+    name: str
+    description: str
+    # output_schema: ClassVar[Type[BaseModel]] = None  # 子类用于定义输出模型
+
+    def getSchemaDescription(self) -> str:
+        """获取动作的参数描述"""
+        desc_list = []
+        desc_list.append(f"## {self.name}")
+        desc_list.append(f"描述: {self.description}")
+        
+        if self.args_schema:  # 直接使用 BaseTool 的 args_schema
+            desc_list.append("参数:")
+            for field_name, field in self.args_schema.model_fields.items():
+                desc = field.description or "无描述"
+                required = "必填" if field.is_required else "可选"
+                # 获取参数类型
+                field_type = field.annotation.__name__ if hasattr(field.annotation, '__name__') else str(field.annotation)
+                desc_list.append(f"- {field_name}: {desc} (类型: {field_type}, {required})")
+        desc_list.append("")
+        return "\n".join(desc_list)
+
+# TODO 提供action的增加功能，且注意重名问题。
+class ActionActuator:
+    """动作执行器"""
+    
+    def __init__(self):
+        self.actions: List[BaseAction] = []
+        self.actionDict: Dict[str, BaseAction] = {}
+    
+    def addAction(self, action: BaseAction) -> bool:
+        """添加单个动作
+        
+        Args:
+            action: 要添加的动作
+            
+        Returns:
+            bool: 添加是否成功，如果动作名称已存在则返回False
+        """
+        if action.name in self.actionDict:
+            return False
+        self.actions.append(action)
+        self.actionDict[action.name] = action
+        return True
+    
+    def addActions(self, actions: List[BaseAction]) -> List[str]:
+        """添加多个动作
+        
+        Args:
+            actions: 要添加的动作列表
+            
+        Returns:
+            List[str]: 添加失败的动作名称列表（由于名称重复）
+        """
+        failed_names = []
+        for action in actions:
+            if not self.addAction(action):
+                failed_names.append(action.name)
+        return failed_names
+    
+    def removeAction(self, actionName: str) -> bool:
+        """移除单个动作
+        
+        Args:
+            actionName: 要移除的动作名称
+            
+        Returns:
+            bool: 移除是否成功，如果动作不存在则返回False
+        """
+        if actionName not in self.actionDict:
+            return False
+        action = self.actionDict[actionName]
+        self.actions.remove(action)
+        del self.actionDict[actionName]
+        return True
+    
+    def removeActions(self, actionNames: List[str]) -> List[str]:
+        """移除多个动作
+        
+        Args:
+            actionNames: 要移除的动作名称列表
+            
+        Returns:
+            List[str]: 移除失败的动作名称列表（由于动作不存在）
+        """
+        failed_names = []
+        for name in actionNames:
+            if not self.removeAction(name):
+                failed_names.append(name)
+        return failed_names
+    
+    def setActions(self, actions: List[BaseAction]):
+        """设置动作列表（清空现有动作）"""
+        self.actions = []
+        self.actionDict = {}
+        self.addActions(actions)
+    
+    def getActionDescriptions(self) -> str:
+        """获取动作描述列表，包含参数信息"""
+        descriptions = []
+        for action in self.actions:
+            # 使用 BaseAction 中已实现的 getSchemaDescription 方法
+            descriptions.append(action.getSchemaDescription())
+        return "\n".join(descriptions)
+    
+    def getAction(self, name: str) -> Optional[BaseAction]:
+        """获取指定名称的动作"""
+        return self.actionDict.get(name)
+
+
+
 class BaseAgent(ABC):
     """基础Agent接口"""
     def __init__(self, name: str):
@@ -191,7 +291,23 @@ class BaseAgent(ABC):
         self.isRunning = False
         self.senseEnvironmentEvent("stop")
 
-    def setActions(self, actions: List[Tool]):
+    def addAction(self, action: BaseAction) -> bool:
+        """添加单个动作"""
+        return self.actionActuator.addAction(action)
+
+    def addActions(self, actions: List[BaseAction]) -> List[str]:
+        """添加多个动作"""
+        return self.actionActuator.addActions(actions)
+
+    def removeAction(self, actionName: str) -> bool:
+        """移除单个动作"""
+        return self.actionActuator.removeAction(actionName)
+
+    def removeActions(self, actionNames: List[str]) -> List[str]:
+        """移除多个动作"""
+        return self.actionActuator.removeActions(actionNames)
+
+    def setActions(self, actions: List[BaseAction]):
         """设置Agent可用的动作列表"""
         self.actionActuator.setActions(actions)
 
@@ -318,25 +434,49 @@ class AgentSPTAState(BaseModel):
     nextActionNLRName: str = Field(default="", description="下一个状态的action名称线索")
     event: Optional[SensoryEvent] = Field(default=None, description="当前正在处理的事件")
     thingMemory: ThingMemory = Field(description="事项记忆，表示一组需要完成的行为，其所需要的记忆。")
-    actionCallAndParams: Optional[MemoHistoryAction] = Field(default=None, description="当前工具调用信息")
+    perceivingOutput: Optional[PerceivingOutput] = Field(default=None, description="感知阶段的输出结果")
 
     class Config:
         arbitrary_types_allowed = True
 
-class PerceivingOutput(BaseModel):
-    """感知阶段的输出结构对象"""
-    actionName: str = Field(description="当前要执行的动作名称")
-    nextActionName: str = Field(default="", description="下一步建议的动作名称")
-    thought: str = Field(description="对当前情况的理解和计划")
-    actionCallAndParams: MemoHistoryAction = Field(description="具体工具调用信息")
+# class PerceivingOutputOutput(BaseModel):
+#     """感知阶段的输出结构对象"""
+#     actionName: str = Field(description="当前要执行的动作名称")
+#     nextActionName: str = Field(default="", description="下一步建议的动作名称")
+#     thought: str = Field(description="对当前情况的理解和计划")
+#     actionCallAndParams: MemoHistoryAction = Field(description="具体工具调用信息")
 
+
+
+class ReplyUserAction(BaseAction):
+    """回复用户动作"""
+    name: str = "回复用户"
+    description: str = "直接回复用户消息，可以关联备忘录"
+
+    class ArgumentSchema(BaseModel):
+        """回复用户的参数模型"""
+        content: str = Field(..., description="回复的内容")
+        memoName: Optional[str] = Field(default="", description="可选的关联备忘录名称")
+
+    args_schema: Type[BaseModel] = ArgumentSchema
+
+    def _run(self, content: str, memoName: str = "") -> str:
+        if memoName:
+            print(f"[模拟] 回复用户(关联备忘录 {memoName}): {content}")
+            return f"已回复用户(关联备忘录 {memoName}): {content}"
+        else:
+            print(f"[模拟] 回复用户: {content}")
+            return f"已回复用户: {content}"
+
+@AAXW_JUMPIN_LOG_MGR.classLogger()
 class SensingPerceivingThinkingActingProcess:
     """感知-认知-思考-行动处理器"""
+    AAXW_CLASS_LOGGER:logging.Logger
     
     def __init__(self):
-        self.llm = ChatOpenAI(temperature=0, model="gpt-4o")
+        self.llm = ChatOpenAI(temperature=0, model="gpt-4o-mini")
         # self.llm = ChatOpenAI(temperature=0,model="deepseek-chat")
-        self.parser = PydanticOutputParser(pydantic_object=PerceivingOutput)
+        # 使用 PerceivingOutput 的类方法
         self.promptTemplate = self._createPrompt()
 
 
@@ -377,8 +517,10 @@ class SensingPerceivingThinkingActingProcess:
 每次输入都有当前动作，但并不是每次信息都是有下一步动作的。
 下一步动作是根据当前信息与本次动作来预判的。
 
-# 可用的动作有：
+# 可用的动作及其参数：
 {action_descriptions}
+
+
 
 # 约束-输出要求
 你需要规划以下内容：
@@ -391,18 +533,8 @@ class SensingPerceivingThinkingActingProcess:
 # 约束-输出格式
 {format_instructions}
 
-# 输出示例：
-{{
-    "actionName": "读取备忘",
-    "nextActionName": "回复用户",
-    "thought": "用户想查看工作计划的内容，我需要先读取备忘录，然后回复用户",
-    "actionCallAndParams": {{
-        "actionName": "读取备忘",
-        "memoName": "工作计划",
-        "content": "",
-        "thought": "需要读取工作计划备忘录的内容"
-    }}
-}}
+# 补充示例：
+
 
 # 信息或事件输入，其中message为输入主干内容:
 {input_event}
@@ -411,14 +543,16 @@ class SensingPerceivingThinkingActingProcess:
         return PromptTemplate(
             template=template,
             input_variables=["action_descriptions", "input_event"],
-            partial_variables={"format_instructions": self.parser.get_format_instructions()}
+            # 使用 PerceivingOutput 的类方法获取格式说明
+            partial_variables={"format_instructions": PerceivingOutput.getFormatInstructions()}
         )
 
     def onSensing(self, state: AgentSPTAState) -> AgentSPTAState:
         """感知状态处理"""
         try:
             event = state.agent.stemQueue.get_nowait()
-            print(f"onSensing 当前事件: {event}")
+            # print(f"onSensing 当前事件: {event}")
+            self.AAXW_CLASS_LOGGER.info(f"onSensing 当前事件: {event}")
             
             if event.getEventType() == SensoryEvent.ENV and event.message == "stop":
                 state.currentState = AgentSPTAState.END
@@ -448,23 +582,24 @@ class SensingPerceivingThinkingActingProcess:
             input_event=state.event.toMarkdownStr()
         )
         
-        # print(f"onPerceiving 提示词内容: {prompt}")
+        # print(f"onPerceiving 最终提示词内容: {prompt}")
         try:
             response = self.llm.invoke(prompt)
             print(f"onPerceiving 直接输出: {response}")
-            parsed_output = self.parser.parse(response.content)
-            # print(f"onPerceiving 解析后输出: {parsed_output}")
+            # 使用 PerceivingOutput 的类方法解析输出
+            state.perceivingOutput = PerceivingOutput.parseOutput(response.content)
+            
+            # 更新状态
+            state.currentActionNLRName = state.perceivingOutput.actionName
+            state.nextActionNLRName = state.perceivingOutput.nextActionName
+            
         except Exception as e:
-            print(f"onPerceiving 异常: {e}")
-            print(f"onPerceiving 提示词内容: {prompt}")
+            self.AAXW_CLASS_LOGGER.error(f"onPerceiving 异常: {e}", exc_info=True)
+            self.AAXW_CLASS_LOGGER.error(f"onPerceiving 提示词内容: {prompt}")
             if response:
-                print(f"onPerceiving 直接输出: {response}")
+                self.AAXW_CLASS_LOGGER.error(f"onPerceiving 直接输出: {response}")
             raise e
-
-        # 更新状态
-        state.currentActionNLRName = parsed_output.actionName
-        state.nextActionNLRName = parsed_output.nextActionName
-        state.actionCallAndParams = parsed_output.actionCallAndParams
+        
         state.currentState = state.THINKING
         return state
     
@@ -478,17 +613,14 @@ class SensingPerceivingThinkingActingProcess:
         """行动状态处理"""
         # 使用agent的actionActuator获取动作
         # print(f"onActing 当前状态: {state}")
-        action = state.agent.actionActuator.getAction(state.actionCallAndParams.actionName)
-        if action and state.actionCallAndParams:
+        action = state.agent.actionActuator.getAction(state.currentActionNLRName)
+        if action and state.perceivingOutput:
             try:
-                # 从toolCall中获取参数执行动作
-                result = action.func(
-                    state.actionCallAndParams.memoName,
-                    state.actionCallAndParams.content
-                )
+                # 使用perceivingOutput中的参数执行动作
+                result = action.invoke(state.perceivingOutput.args)
                 
                 # 添加响应消息，包含思考过程和执行结果
-                print(f"\n[{state.agent.name}] 思考: {state.actionCallAndParams.thought}")
+                print(f"\n[{state.agent.name}] 思考: {state.perceivingOutput.thought}")
                 print(f"[{state.agent.name}] 执行: {result}")
                 
                 # 如果有下一步动作信息，将当前执行结果和下一步动作信息一起写入事件
@@ -512,8 +644,11 @@ class SensingPerceivingThinkingActingProcess:
         # print(f"onActing 当前状态结束")
         return state
 
+@AAXW_JUMPIN_LOG_MGR.classLogger()
 class StateMachineAgent(BaseAgent):
     """提供基本状态机实现的Agent"""
+    AAXW_CLASS_LOGGER:logging.Logger
+
     PROCESS = "process"
     
     def __init__(self, name: str, 
@@ -550,7 +685,7 @@ class StateMachineAgent(BaseAgent):
 
     def run(self):
         """运行循环"""
-        print(f"\n[系统] {self.name} 已启动，等待输入...")
+        self.AAXW_CLASS_LOGGER.info(f"{self.name} 已启动，等待输入...")
 
         while not self.isReqStop:
             try:
@@ -567,8 +702,8 @@ class StateMachineAgent(BaseAgent):
                 self.stateMachine.invoke(state, config=RunnableConfig(recursion_limit=10))
                 self.runtimeIdleFunc()
             except Exception as e:
-                print(f"运行时发生异常: {e} 但继续mainloop")
-        print(f"\n[系统] {self.name} 已停止.")
+                self.AAXW_CLASS_LOGGER.error(f"运行时发生异常: {e} 但继续mainloop", exc_info=True)
+        self.AAXW_CLASS_LOGGER.info(f"{self.name} 已停止.")
 
 class AgentRuntime(ABC):
     """Agent运行时抽象基类"""
@@ -650,24 +785,9 @@ class AgentEnvironment:
         """创建并启动一个Agent"""
         processor = SensingPerceivingThinkingActingProcess()
         
-        # 初始化并注入动作 
-        # 这里只应该加入原生的动作；
+        # 初始化并注入动作
         actions = [
-            Tool(
-                name="重命名备忘",
-                func=MemoActions.renameMemo,
-                description="将指定名称的备忘录重命名为新名称。需要输入旧的备忘录名称和新的备忘录名称。"
-            ),
-            Tool(
-                name="读取备忘",
-                func=MemoActions.readMemo,
-                description="读取指定名称备忘录的内容。输入备忘录名称。"
-            ),
-            Tool(
-                name="回复用户",
-                func=MemoActions.replyToUser,
-                description="直接回复用户消息。输入回复内容。"
-            )
+            ReplyUserAction()
         ]
 
         agent = StateMachineAgent(
@@ -692,13 +812,52 @@ class AgentEnvironment:
 
 
 if __name__ == "__main__":
+    
     load_dotenv()
+    class MemoReadAction(BaseAction):
+        """读取备忘录动作"""
+        name: str = "读取备忘"
+        description: str = "读取指定名称备忘录的内容"
+
+        # 这是用来获取参数的Schema信息，用来生成prompt或来解析。
+        class ArgumentSchema(BaseModel):
+            """读取备忘录的参数模型"""
+            memoName: str = Field(..., description="备忘录名称")
+            content: str = Field(default="", description="可选参数")
+
+        args_schema: Type[BaseModel] = ArgumentSchema
+
+        def _run(self, memoName: str, content: str = "") -> str:
+            print(f"[模拟] 读取备忘录 {memoName} 的内容：---你好，{memoName}是1个比较重要的事情，需要尽快完成---")
+            return f"---你好，{memoName}是1个比较重要的事情，需要尽快完成---"
+
+    class MemoRenameAction(BaseAction):
+        """重命名备忘录动作"""
+        name: str = "重命名备忘"
+        description: str = "将指定名称的备忘录重命名为新名称"
+
+        class ArgumentSchema(BaseModel):
+            """重命名备忘录的参数模型"""
+            memoName: str = Field(..., description="原备忘录名称")
+            newName: str = Field(..., description="新的备忘录名称")
+
+        args_schema: Type[BaseModel] = ArgumentSchema
+
+        def _run(self, memoName: str, newName: str) -> str:
+            print(f"[模拟] 将备忘录 {memoName} 重命名为 {newName}")
+            return f"已将备忘录 {memoName} 重命名为 {newName}"
+
     
     def test_env_event():
         """测试环境事件触发的Agent"""
         env = AgentEnvironment("thread_pool")
         try:
             agent = env.createAgent("资源管理助手")
+            # 增加备忘录的action
+            agent.addActions([
+                MemoReadAction(),
+                MemoRenameAction(),
+            ])
     
             time.sleep(1)
             
@@ -706,14 +865,15 @@ if __name__ == "__main__":
             # agent.sendMessageToMe("请帮我读取名为'工作计划'的备忘录")
             agent.sendMessageToMe("请帮我将'工作计划'的备忘录改名，改名使用对备忘读取内容的小结。备忘录名字不能超过15个字符。改完请回复我一下。")
             
-            time.sleep(300)  # 等待处理完成
+            time.sleep(60)  # 等待处理完成
             
         except KeyboardInterrupt:
-            print("\n[系统] 接收到中断信号，正在停止...")
+            AAXW_JUMPIN_MODULE_LOGGER.info("接收到中断信号，正在停止...")
         finally:
             env.stopAll()
     
     if not os.getenv("OPENAI_API_KEY"):
+        AAXW_JUMPIN_MODULE_LOGGER.error("请在.env文件中设置OPENAI_API_KEY")
         raise ValueError("请在.env文件中设置OPENAI_API_KEY")
     
     test_env_event()
