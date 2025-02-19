@@ -20,6 +20,8 @@
 # 已实现 tools 的调用。
 # 已实现 基于lastEvent，lastResult的回路记忆模式。实现逐步推导处理的过程。
 # 提供了Pattern的定义，但未使用。
+#
+# TODO 日志打印调整；
 # 
 
 
@@ -53,8 +55,10 @@ if __name__ == "__main__":
     if project_root not in sys.path:
         sys.path.insert(0, project_root)  # 插入到路径最前面
 
-from ananxw_jumpin.ananxw_jumpin_allin1f import AAXW_JUMPIN_LOG_MGR
-AAXW_JUMPIN_MODULE_LOGGER:logging.Logger=AAXW_JUMPIN_LOG_MGR.getModuleLogger(
+from ananxw_jumpin.ananxw_framework import AAXWLoggerManager
+AAXW_AIAGENT_LOG_MGR = AAXWLoggerManager() 
+
+AAXW_AIAGENT_MODULE_LOGGER:logging.Logger=AAXW_AIAGENT_LOG_MGR.getModuleLogger(
     sys.modules[__name__])
 
 @dataclass
@@ -451,7 +455,7 @@ class AgentSPTAState(BaseModel):
 class ReplyUserAction(BaseAction):
     """回复用户动作"""
     name: str = "回复用户"
-    description: str = "直接回复用户消息，可以关联备忘录"
+    description: str = "直接回复用户消息"
 
     class ArgumentSchema(BaseModel):
         """回复用户的参数模型"""
@@ -468,7 +472,7 @@ class ReplyUserAction(BaseAction):
             print(f"[模拟] 回复用户: {content}")
             return f"已回复用户: {content}"
 
-@AAXW_JUMPIN_LOG_MGR.classLogger()
+@AAXW_AIAGENT_LOG_MGR.classLogger()
 class SensingPerceivingThinkingActingProcess:
     """感知-认知-思考-行动处理器"""
     AAXW_CLASS_LOGGER:logging.Logger
@@ -644,7 +648,7 @@ class SensingPerceivingThinkingActingProcess:
         # print(f"onActing 当前状态结束")
         return state
 
-@AAXW_JUMPIN_LOG_MGR.classLogger()
+@AAXW_AIAGENT_LOG_MGR.classLogger()
 class StateMachineAgent(BaseAgent):
     """提供基本状态机实现的Agent"""
     AAXW_CLASS_LOGGER:logging.Logger
@@ -868,12 +872,12 @@ if __name__ == "__main__":
             time.sleep(60)  # 等待处理完成
             
         except KeyboardInterrupt:
-            AAXW_JUMPIN_MODULE_LOGGER.info("接收到中断信号，正在停止...")
+            AAXW_AIAGENT_MODULE_LOGGER.info("接收到中断信号，正在停止...")
         finally:
             env.stopAll()
     
     if not os.getenv("OPENAI_API_KEY"):
-        AAXW_JUMPIN_MODULE_LOGGER.error("请在.env文件中设置OPENAI_API_KEY")
+        AAXW_AIAGENT_MODULE_LOGGER.error("请在.env文件中设置OPENAI_API_KEY")
         raise ValueError("请在.env文件中设置OPENAI_API_KEY")
     
     test_env_event()

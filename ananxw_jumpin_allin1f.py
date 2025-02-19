@@ -120,8 +120,9 @@ def _setup_app_env_():
 _setup_app_env_()
 
 
-from typing import Callable, List, Dict, Type,Any,TypeVar,Union,cast, Tuple,Protocol
+from typing import Callable, List, Dict, Type,Any,TypeVar,Union,cast, Tuple,Protocol,Optional
 from typing import cast
+from pydantic import BaseModel, Field # pydantic对象模型支持
 from functools import wraps
 
 try:
@@ -153,7 +154,7 @@ from PySide6.QtWidgets import (
     QApplication, QSystemTrayIcon, QFrame, QWidget, QScrollArea,
     QHBoxLayout, QVBoxLayout, QSizePolicy, QLineEdit, QPushButton,
     QTextBrowser, QStyleOption, QMenu, QPlainTextEdit, QLabel,QToolBar,
-    QStackedWidget,
+    QStackedWidget,QButtonGroup,
 )
 from PySide6.QtGui import (
     QKeySequence, QShortcut, QTextDocument, QTextCursor, QMouseEvent,
@@ -169,7 +170,7 @@ from qfluentwidgets import (
     NavigationPushButton,MessageBoxBase,SubtitleLabel,LineEdit,CaptionLabel,
     NavigationWidget, MessageBox, SettingCardGroup, SwitchSettingCard, FolderListSettingCard,
     OptionsSettingCard, PushSettingCard, HyperlinkCard, PrimaryPushSettingCard, ScrollArea,
-    ComboBoxSettingCard, ExpandLayout, Theme, CustomColorSettingCard,
+    ComboBoxSettingCard, ExpandLayout, Theme, CustomColorSettingCard,RadioButton,
     setTheme, setThemeColor, RangeSettingCard, isDarkTheme, ConfigItem, SettingCard, qrouter
 )
 from qfluentwidgets import FluentIcon as FIF
@@ -209,8 +210,13 @@ import urllib.parse
 import urllib.request
 import json
 
-#本包导入
-# from ananxw_jumpin.ananxw_aiagent import BaseAction,AgentEnvironment
+
+
+#本包 导入
+from ananxw_jumpin.ananxw_framework import AAXWDependencyContainer
+from ananxw_jumpin.ananxw_jumpin_comm import AAXW_JUMPIN_LOG_MGR,AAXWJumpinDICUtilz
+#
+from ananxw_jumpin.ananxw_aiagent import BaseAction,AgentEnvironment, BaseAgent
 
 ##
 # 导入结束
@@ -223,249 +229,11 @@ print(f"Found evnpath: {__evnpath} , will load it.")
 _ = load_dotenv(__evnpath)  #
 
 # 版本
-__version__ = "0.8.0"
+__version__ = "0.9.0"
 
-
-# 日志器
-class AAXWLoggerManager:
-    _instance = None
-    _initialized = False
-    APP_LOGGER_NAME = "AAXW"
-    
-    APP_DEFAULT_LEVEL = logging.INFO
-
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super(AAXWLoggerManager, cls).__new__(cls)
-        return cls._instance
-
-    def __init__(self):
-        if not self._initialized:
-            self.loggers = {}
-            self.logDir = None
-            self.fileHandler:logging.Handler = None #type:ignore
-            self.consoleHandler:logging.Handler = None #type:ignore
-            self.setupBasicLogger()
-            self._initialized = True
-
-    def setupBasicLogger(self):
-        """设置基本的控制台处理器"""
-        self.consoleHandler = logging.StreamHandler()
-        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-        self.consoleHandler.setFormatter(formatter)
-
-        # 设置应用级别日志器
-        self.appLogger = logging.getLogger(self.APP_LOGGER_NAME)
-        self.appLogger.propagate = False #不传播
-        self.appLogger.setLevel(self.APP_DEFAULT_LEVEL)
-        self.appLogger.addHandler(self.consoleHandler)
-
-    #这里后续扩展出注册不同日志文件，可以关联不同范围或级别的日志。
-    def setLogDirAndFile(self, logDir,filename="app.log"):
-        """设置工作目录并创建文件处理器"""
-        self.logDir = logDir
-        log_file = os.path.join(logDir, filename)
-        os.makedirs(os.path.dirname(log_file), exist_ok=True)
-        self.fileHandler = TimedRotatingFileHandler(
-            log_file,
-            when="midnight",
-            interval=1,
-            backupCount=3,
-            encoding='utf-8'
-        )
-        formatter = logging.Formatter(
-            '%(asctime)s - %(name)s - %(levelname)s - %(module)s.%(funcName)s [%(filename)s:%(lineno)d] - %(message)s'
-        )
-        self.fileHandler.setFormatter(formatter)
-
-        # 更新所有现有的日志器
-        for logger in self.loggers.values():
-            if self.fileHandler not in logger.handlers:
-                logger.addHandler(self.fileHandler)
-
-        # 为应用级别日志器添加文件处理器
-        self.appLogger.addHandler(self.fileHandler)
-
-    def getLogger(self, name, level=None,isPropagate=False):
-        """
-        获取或创建一个日志器
-        :param name: 日志器名称
-        :param level: 日志级别，如果为None则不设置
-        :param isPropagate: 是否传播日志消息到父日志器
-        """
-        full_name = f"{self.APP_LOGGER_NAME}.{name}" if name else self.APP_LOGGER_NAME
-        if full_name not in self.loggers:
-            logger = logging.getLogger(full_name)
-
-            logger.propagate=isPropagate
-
-            if level is not None:
-                logger.setLevel(level)
-            else:
-                # 如果没有指定级别，则不设置，让它继承父级别
-                logger.setLevel(logging.NOTSET)
-            
-            # 只有在这个日志器还没有处理器时才添加
-            if not logger.handlers:
-                logger.addHandler(self.consoleHandler)
-                if self.fileHandler:
-                    logger.addHandler(self.fileHandler)
-            
-            self.loggers[full_name] = logger
-        return self.loggers[full_name]
-
-    def getModuleLogger(self, module, level=None, isPropagate=False):
-        """获取模块级别的日志器"""
-        return self.getLogger(module.__name__, level, isPropagate)
-    
-    def getClassLogger(self, cls, level=None, isPropagate=False):
-        """获取类级别的日志器"""
-        return self.getLogger(f"{cls.__module__}.{cls.__name__}", level, isPropagate)
-    
-    def getClassLoggerByName(self, moduleName:str,className:str, level=None, isPropagate=False):
-        """获取类级别的日志器"""
-        return self.getLogger(f"{moduleName}.{className}", level, isPropagate)
-
-    def classLogger(self, level=None, isPropagate=False):
-        """为类添加日志器的装饰器  设置了类属性:AAXW_CLASS_LOGGER"""
-        T = TypeVar('T')
-        def decorator(cls:T)->T:
-            # cls.AAXW_CLASS_LOGGER = self.getClassLogger(cls, level, isPropagate) #type:ignore
-            setattr(cls, 'AAXW_CLASS_LOGGER', self.getClassLogger(cls, level, isPropagate))
-            return cls
-        return decorator
-
-    def getRootLogger(self):
-        """获取根日志器"""
-        return logging.getLogger()
-
-    def getAppLogger(self):
-        """获取应用级别日志器"""
-        return self.appLogger
-
-    def setLoggerLevel(self, name, level):
-        """设置指定日志器的级别"""
-        full_name = f"{self.APP_LOGGER_NAME}.{name}" if name else self.APP_LOGGER_NAME
-        if full_name in self.loggers:
-            self.loggers[full_name].setLevel(level)
-
-    def setLoggerFormatter(self, name, formatter):
-        """设置指定日志器的格式器"""
-        full_name = f"{self.APP_LOGGER_NAME}.{name}" if name else self.APP_LOGGER_NAME
-        if full_name in self.loggers:
-            for handler in self.loggers[full_name].handlers:
-                handler.setFormatter(formatter)
-
-# 创建日志管理器实例 模块globe层次；
-AAXW_JUMPIN_LOG_MGR = AAXWLoggerManager() 
-# 本模块日志器
+#本模块，模块日志器
 AAXW_JUMPIN_MODULE_LOGGER:logging.Logger=AAXW_JUMPIN_LOG_MGR.getModuleLogger(
     sys.modules[__name__])
-
-
-
-# Di框架与插件框架
-# framework-di , framework-plugin
-class AAXWDependencyContainer:
-    """
-    简易的依赖组织容器
-    注册依赖关系：
-    @dependencyContainer.register('key', isSingleton=True, isLazy=False)
-    class...
-    isLazy 暂时未实现，均为False；
-
-    创建/获取已有，资源对象，如其依赖未创建则会创建对应依赖：
-    dependencyContainer.getAANode(key)
-    
-    """
-    def __init__(self):
-        self._factories: Dict[str, Callable] = {}
-        self._dependencies: Dict[str, Dict[str, str]] = {}
-        self._isSingletonFlags: Dict[str, bool] = {}
-        self._isLazyFlags: Dict[str, bool] = {}
-        self._instances: Dict[str, Any] = {}
-        #放入自己作为aware 自发现使用
-        self.setAANode(key='_nativeDependencyContainer',node=self)
-
-    def register(self, key: str, isSingleton: bool = True, isLazy: bool = False, **dependencies):
-        T = TypeVar('T', bound=Callable[..., Any])
-        def decorator(f: T)-> T:
-            self._factories[key] = f
-            self._dependencies[key] = dependencies
-            self._isSingletonFlags[key] = isSingleton
-            self._isLazyFlags[key] = isLazy
-            return f
-        return decorator
-
-    def getAANode(self, key: str) -> Any:
-        if key not in self._factories:
-            raise KeyError(f"没有注册名为 {key} 的依赖")
-        
-        isSingleton = self._isSingletonFlags[key]
-        if isSingleton and key in self._instances:
-            return self._instances[key]
-        
-        instance = self._createInstance(key)
-        
-        if isSingleton:
-            self._instances[key] = instance
-        
-        return instance
-
-    def setAANode(self, key: str, node: Any, isSingleton: bool = True, **dependencies):
-        if isSingleton:
-            self._instances[key] = node
-        
-        # 注册工厂函数
-        self._factories[key] = lambda: node
-        
-        # 注册依赖关系
-        self._dependencies[key] = dependencies
-        
-        # 设置单例和懒加载标志
-        self._isSingletonFlags[key] = isSingleton
-        self._isLazyFlags[key] = False  # setAANode 默认不使用懒加载
-        
-        # 注入依赖
-        self._injectDependencies(node, dependencies)
-        
-        return node
-
-    def _injectDependencies(self, instance: Any, dependencies: Dict[str, str]):
-        for attr, dep_key in dependencies.items():
-            if dep_key in self._instances:
-                setattr(instance, attr, self._instances[dep_key])
-            elif dep_key in self._factories:
-                setattr(instance, attr, self.getAANode(dep_key))
-            else:
-                raise KeyError(f"依赖 {dep_key} 未注册")
-
-    def _createInstance(self, key: str) -> Any:
-        factory = self._factories[key]
-        instance = factory()
-        
-        dependencies = self._dependencies[key]
-        self._injectDependencies(instance, dependencies)
-        
-        return instance
-
-    def _lazyProperty(self, dep_key):
-        #返回改写属性为特定方法；
-        #当第一次访问该属性时设置并返回
-        def getter(obj):
-            attr_name = f'_{dep_key}'
-            if not hasattr(obj, attr_name) or getattr(obj, attr_name) is None:
-                setattr(obj, attr_name, self.getAANode(dep_key)) #这里get是非线程安全的
-            return getattr(obj, attr_name)
-        return property(getter)
-
-    def clear(self):
-        self._instances.clear()
-        self._factories.clear()
-        self._dependencies.clear()
-        self._isSingletonFlags.clear()
-        self._isLazyFlags.clear()
-
 
 
 ##
@@ -1134,39 +902,7 @@ class AAXWAppletManager:
 # 应用级别框架扩展
 ##
 #
-class AAXWJumpinDICUtilz: #单例化
-    """AAXWDependencyContainer的单例化工具类"""
-    __instance = None
-    _insLock = threading.Lock()
-    # _opLock = threading.Lock()
 
-    @classmethod
-    def getInstance(cls):
-        if cls.__instance is None:
-            with cls._insLock:
-                if cls.__instance is None:
-                    cls.__instance = AAXWDependencyContainer()
-        return cls.__instance
-
-    @classmethod
-    def register(cls, key: str, isSingleton: bool = True, isLazy: bool = False, **dependencies):
-        return cls.getInstance().register(key, isSingleton, isLazy, **dependencies)
-
-    @classmethod
-    def getAANode(cls, key: str) -> Any:
-        # with cls._opLock:
-            return cls.getInstance().getAANode(key)
-
-    @classmethod
-    def setAANode(cls, key: str, node: Any, isSingleton: bool = True, **dependencies):
-        return cls.getInstance().setAANode(key, node, isSingleton, **dependencies)
-
-    @classmethod
-    def clear(cls):
-        with cls._insLock:
-            if cls.__instance:
-                cls.__instance.clear()
-            cls.__instance = None
             
 
 
@@ -3365,7 +3101,7 @@ class AIConnectRunnable(QRunnable,QObject):
         self.updateUI.emit(str(newContent), str(self.uiId)) 
 
 
-# applet-example
+# 默认功能的applet
 @AAXW_JUMPIN_LOG_MGR.classLogger()
 class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
     "默认带有复合功能的Applet实现"
@@ -3382,12 +3118,17 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
         self.title="🐶OP"
 
         self.backupContentBlockStrategy:AAXWContentBlockStrategy=None #type:ignore
+
+        self.agentEnvironment:AgentEnvironment=None #type:ignore
+        self.aaAgent:BaseAgent=None #type:ignore
         pass
 
     @override
     def getName(self) -> str:return  self.name
     @override
     def getTitle(self) -> str:return  self.title
+
+    
     @override
     def onAdd(self):
         #
@@ -3402,25 +3143,131 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
 
         self.currentHistoriedMemory:AAXWJumpinHistoriedMemory=None #type:ignore
 
+
+
+        #
+        # 默认agent
+        self.agentEnvironment=AgentEnvironment(runtimeType="pyside6")
+        self.aaAgent=self.agentEnvironment.createAgent("ANAN")
+        # 创建并配置Agent Action
+        renameAgentAction = self.ChatHisRenameAgentAction(compoApplet=self)
+        # 连接重命名信号到槽函数
+        renameAgentAction.signalEmitter.renameSignal.connect(
+            slot=self._renameMemoryAction,
+            type=Qt.ConnectionType.QueuedConnection  # 使用队列连接确保线程安全
+        )
+        # 增加action
+        self.aaAgent.addActions([
+            self.ChatHisReadAgentAction(aiMemoryManager=self.jumpinAIMemoryManager),
+            renameAgentAction
+        ]
+        )
+        #aaAgent 创建后就启动状态。 
+        
         #持续展示近期列表；只要applet还在mgr运行，就持续展示；
         #直接在applet初始化时初始化；
         self._initAIMemoryListUI()
 
         # 初始化“新互动”的功能
         self._initNewInteractionUI()
-        
+
         pass
-
-
 
     @override
     def onRemove(self):
         self.AAXW_CLASS_LOGGER.warning(
             f"这是个默认Applet{self.__class__.__name__}只有关闭整体时才应该被移除释放。")
+
+        self.aaAgent.stop()
+
+        # self.aaAgent=None #type:ignore
+        self.agentEnvironment.stopAll()
+        
         
         pass
 
+
+    class ChatHisReadAgentAction(BaseAction):
+        """对话历史读取动作"""
+        #Action管理器使用
+        name: str = "对话历史读取"
+        description: str = "读取指定名的“对话历史”的内容"
+        # 
+        aiMemoryManager: Optional[
+            AAXWJumpinFileAIMemoryManager] = Field(default=None, description="AI记忆管理器")
+
+        # 这是用来获取参数的Schema信息，用来生成prompt或来解析。
+        class ArgumentSchema(BaseModel):
+            """读取对话历史的参数模型"""
+            chatHisName: str = Field(..., description="对话历史名称")
+            content: str = Field(default="", description="指定范围内容,可选参数")
+
+        args_schema: Type[BaseModel] = ArgumentSchema
+
+        def _run(self, chatHisName: str, content: str = "") -> str:
+            # if self.aiMemoryManager is not None:
+            #     print("aiMemoryManager: "+str(self.aiMemoryManager))
+            # print(f"[模拟] 读取备忘录 {chatHisName} 的内容：---你好，{chatHisName}是1个比较重要的事情，需要尽快完成。通过content 海选。---")
+            # return f"---你好，{chatHisName}是1个比较重要的事情，需要尽快完成---"
+            if self.aiMemoryManager is None:
+                    return f"[错误] 未注入 aiMemoryManager,无法读取对话历史 {chatHisName},无法完成Action"
+                
+            try:
+                memory = self.aiMemoryManager.loadOrCreateMemory(chatHisName)
+                msgLs:List[BaseMessage]=memory.message_history.messages
+                
+                # 获取最后10条消息
+                last_messages = msgLs[-10:] if len(msgLs) > 10 else msgLs
+                
+                # 格式化消息内容
+                formatted_messages = []
+                for msg in last_messages:
+                    role = "Human" if isinstance(msg, HumanMessage) else "Assistant"
+                    formatted_messages.append(f"{role}: {msg.content}")
+                
+                history_content = "\n\n".join(formatted_messages)
+                return f"## 对话历史 {chatHisName} 的内容:\n\n{history_content}"
+            except Exception as e:
+                return f"[错误] 读取对话历史 {chatHisName} 失败: {str(e)}"
+
+    class ChatHisRenameAgentAction(BaseAction):
+        """重命名对话历史动作"""
+        name: str = "对话历史重命名"
+        description: str = "将指定名称的对话历史重命名为新名称"
+        
+        # 继承QObject以支持信号机制
+        class RenameSignalEmitter(QObject):
+            renameSignal = Signal(str, str)  # 重命名信号(oldName, newName)
     
+        # 将signalEmitter定义为Field
+        signalEmitter: RenameSignalEmitter = Field(
+            default_factory=RenameSignalEmitter,
+            description="信号发射器"
+        )
+    
+        compoApplet: Optional[
+            'AAXWJumpinDefaultCompoApplet'] = Field(default=None, description="复合功能Applet")
+
+        class ArgumentSchema(BaseModel):
+            """重命名对话历史的参数模型"""
+            chatHisName: str = Field(..., description="原对话历史名称")
+            newName: str = Field(..., description="新的对话历史名称")
+
+        args_schema: Type[BaseModel] = ArgumentSchema
+
+        def _run(self, chatHisName: str, newName: str) -> str:
+            if self.compoApplet is None:
+                return f"[错误] 未注入 compoApplet,无法重命名对话历史 {chatHisName}"
+            
+            try:
+                # 通过信号触发重命名操作
+                self.signalEmitter.renameSignal.emit(chatHisName, newName)
+                return f"[成功] 已发送重命名请求: {chatHisName} -> {newName}"
+                
+            except Exception as e:
+                return f"[错误] 重命名失败: {str(e)}"
+
+
 
     @override
     def onActivate(self): 
@@ -3567,6 +3414,20 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
             self.titleLabel = SubtitleLabel('修改互动名称：', self)
             self.nameLineEdit = LineEdit(self)
             
+            # 添加单选按钮组
+            self.radioGroup = QButtonGroup(self) 
+            self.userRadio = RadioButton('用户指定', self)
+            self.agentRadio = RadioButton('Agent自动', self)
+            self.radioGroup.addButton(self.userRadio)
+            self.radioGroup.addButton(self.agentRadio)
+            self.userRadio.setChecked(True)  # 默认选中用户指定
+            
+            # 创建水平布局放置单选按钮
+            radioLayout = QHBoxLayout()
+            radioLayout.addWidget(self.userRadio)
+            radioLayout.addWidget(self.agentRadio)
+            radioLayout.addStretch()
+            
             if oldName:
                 self.nameLineEdit.setText(oldName)
             else:
@@ -3578,6 +3439,7 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
 
             # add widget to view layout
             self.viewLayout.addWidget(self.titleLabel)
+            self.viewLayout.addLayout(radioLayout)  # 添加单选按钮组布局
             self.viewLayout.addWidget(self.nameLineEdit)
             self.viewLayout.addWidget(self.warningLabel)
             self.warningLabel.hide()
@@ -3587,10 +3449,24 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
             self.cancelButton.setText('取消')
 
             self.widget.setMinimumWidth(350)
+            
+            # 连接单选按钮状态改变信号
+            self.radioGroup.buttonClicked.connect(self._onRadioChanged)
+            
+        def _onRadioChanged(self):
+            """单选按钮状态改变时的处理"""
+            isUserMode = self.userRadio.isChecked()
+            self.nameLineEdit.setEnabled(isUserMode)
+            self.warningLabel.setVisible(isUserMode and not self.validate())
         
         @override
         def validate(self):
             """ Rewrite the virtual method """
+            # 如果是Agent自动模式，直接返回True
+            if self.agentRadio.isChecked():
+                return True
+                
+            # 用户指定模式下进行验证
             text = self.nameLineEdit.text()
             # 修改正则表达式以支持中文字符
             isValid = (4 <= len(text) <= 20) and bool(
@@ -3602,14 +3478,26 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
         def getNewName(self) -> str:
             """获取新名称"""
             return self.nameLineEdit.text()
+            
+        def isAgentMode(self) -> bool:
+            """获取是否为Agent自动模式"""
+            return self.agentRadio.isChecked()
 
     @Slot()
     def _renameMemoryShowDialogUI(self, record: str):
         dialog = self.RenameMemoryMessageBox(oldName=record, parent=self.mainWindow)
         if dialog.exec():
-            newName = dialog.getNewName()
-            self.AAXW_CLASS_LOGGER.info(f"准备重命名记忆:{record} 新名称:{newName}")
-            self._renameMemoryAction(record, newName)
+            if dialog.isAgentMode() :
+                self.aaAgent.sendMessageToMe(
+                    "请帮我将'"+
+                    record+
+                    "'的对话历史改名，先读取对话历史内容并小结出新名字，然后将其改名。"+
+                    "对话历史名字不能超过15个字符且保留原后缀。改完请回复我一下。"
+                )
+            else:
+                newName = dialog.getNewName()
+                self.AAXW_CLASS_LOGGER.info(f"准备重命名记忆:{record} 新名称:{newName}")
+                self._renameMemoryAction(record, newName)
         else:
             self.AAXW_CLASS_LOGGER.info(f"取消重命名记忆:{record}")
 
@@ -4979,9 +4867,6 @@ class AAXWJumpinMainWindow(AAXWFramelessWindow):
     def showMsgShowingPanel(self):
         # 显示消息展示面板
         self.mainStackedFrame.setCurrentWidget(self.msgShowingPanel)
-    
-
-
 
     # def showFirefMessageBox(self):
     #     w = MessageBox(
