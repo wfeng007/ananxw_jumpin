@@ -27,8 +27,50 @@ from typing import Callable, List, Dict, Type,Any,TypeVar,Union,cast, Tuple,Prot
 
 import logging
 from logging.handlers import TimedRotatingFileHandler
+import colorlog
+import json
 
 
+# 
+class AAXWLoggerJsonFormatFilter(logging.Filter):
+    """JSON 格式化过滤器类
+    使用，原生logger时：
+    logger.info(log_message_with_json, 
+        extra={AAXWLoggerJsonFormatFilter.HAS_POTENTIAL_JSON_KEY: True}
+    )
+    """
+
+    HAS_POTENTIAL_JSON_KEY='has_potential_json_key'
+    def filter(self, record):
+        if hasattr(record, self.HAS_POTENTIAL_JSON_KEY) and record.__dict__[self.HAS_POTENTIAL_JSON_KEY]: #type:ignore
+            json_pattern = r'(\{.*?\}|\[.*?\])'
+            matches = re.findall(json_pattern, record.msg)
+            for match in matches:
+                try:
+                    data = json.loads(match)
+                    formatted_json = json.dumps(data, indent=4)
+                    replacement = self._addNewlines(match, formatted_json, record.msg)
+                    record.msg = record.msg.replace(match, replacement)
+                except (ValueError, TypeError):
+                    pass
+        return True
+
+    def _addNewlines(self, original_match, formatted_json, full_message):
+        """根据上下文决定是否添加换行符"""
+        start_pos = full_message.find(original_match)
+        end_pos = start_pos + len(original_match)
+        
+        needs_prefix_newline = start_pos > 0 and full_message[start_pos-1] != '\n'
+        needs_suffix_newline = end_pos < len(full_message) and full_message[end_pos] != '\n'
+        
+        result = formatted_json
+        if needs_prefix_newline:
+            result = '\n' + result
+        if needs_suffix_newline:
+            result = result + '\n'
+            
+        return result
+    
 # 日志器
 class AAXWLoggerManager:
     _instance = None
@@ -54,8 +96,28 @@ class AAXWLoggerManager:
     def setupBasicLogger(self):
         """设置基本的控制台处理器"""
         self.consoleHandler = logging.StreamHandler()
-        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-        self.consoleHandler.setFormatter(formatter)
+        
+        # 定义彩色格式化器
+        color_formatter = colorlog.ColoredFormatter(
+            "%(log_color)s%(asctime)s%(reset)s - %(log_color)s%(name)s%(reset)s "
+            "- %(log_color)s%(levelname)s%(reset)s "
+            "- %(log_color)s%(module)s.%(funcName)s%(reset)s "
+            "- %(log_color)s[%(filename)s:%(lineno)d]%(reset)s \n"
+            "- %(log_color)s%(message)s%(reset)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+            log_colors={
+                'DEBUG': 'cyan',
+                'INFO': 'green',
+                'WARNING': 'yellow',
+                'ERROR': 'red',
+                'CRITICAL': 'red,bg_white',
+            }
+        )
+        # 添加色彩格式
+        self.consoleHandler.setFormatter(color_formatter)
+
+        # 添加 JSON 格式化过滤器
+        self.consoleHandler.addFilter(AAXWLoggerJsonFormatFilter())
 
         # 设置应用级别日志器
         self.appLogger = logging.getLogger(self.APP_LOGGER_NAME)
@@ -160,10 +222,6 @@ class AAXWLoggerManager:
                 handler.setFormatter(formatter)
 
 
-
-
-
-
 # Di框架与插件框架
 # framework-di , framework-plugin
 class AAXWDependencyContainer:
@@ -265,4 +323,7 @@ class AAXWDependencyContainer:
         self._dependencies.clear()
         self._isSingletonFlags.clear()
         self._isLazyFlags.clear()
+
+
+
 

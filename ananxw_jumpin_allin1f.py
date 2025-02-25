@@ -53,8 +53,10 @@
 
 # 
 # 0.9+
-#       实现初步的agent框架能力，提供1个agent样例如：动态改名；
+#       已实现初步的agent框架能力，提供1个agent样例如：自主动态改名；
+#       已实现专门的记忆/历史列表面板、单项记忆/历史card化展示及其操作功能；
 #       mac运行支持与打包支持；
+#
 #       代码块需支持plaintext/unknown 以及其他结构，未知，平文为全白。
 #       提供其他ai相关样例，如：chateveredit等
 #       coze集成对接应用样例；
@@ -167,10 +169,11 @@ from PySide6.QtGui import (
 # qfluentwidgets(PySide6-Fluent-Widgets) pyside6上的界面扩展
 from qfluentwidgets import (
     NavigationInterface, NavigationItemPosition, NavigationAvatarWidget,NavigationTreeWidget,
-    NavigationPushButton,MessageBoxBase,SubtitleLabel,LineEdit,CaptionLabel,
+    NavigationPushButton,MessageBoxBase,SubtitleLabel,LineEdit,CaptionLabel,PushButton,
+    BodyLabel,TextWrap,CardWidget,StrongBodyLabel,PlainTextEdit,TextEdit,TextBrowser,
     NavigationWidget, MessageBox, SettingCardGroup, SwitchSettingCard, FolderListSettingCard,
     OptionsSettingCard, PushSettingCard, HyperlinkCard, PrimaryPushSettingCard, ScrollArea,
-    ComboBoxSettingCard, ExpandLayout, Theme, CustomColorSettingCard,RadioButton,
+    ComboBoxSettingCard, ExpandLayout, Theme, CustomColorSettingCard,RadioButton,IconWidget,
     setTheme, setThemeColor, RangeSettingCard, isDarkTheme, ConfigItem, SettingCard, qrouter
 )
 from qfluentwidgets import FluentIcon as FIF
@@ -216,7 +219,7 @@ import json
 from ananxw_jumpin.ananxw_framework import AAXWDependencyContainer
 from ananxw_jumpin.ananxw_jumpin_comm import AAXW_JUMPIN_LOG_MGR,AAXWJumpinDICUtilz
 #
-from ananxw_jumpin.ananxw_aiagent import BaseAction,AgentEnvironment, BaseAgent
+from ananxw_jumpin.ananxw_aiagent import BaseAgentAction,AgentEnvironment, BaseAgent
 
 ##
 # 导入结束
@@ -3143,8 +3146,6 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
 
         self.currentHistoriedMemory:AAXWJumpinHistoriedMemory=None #type:ignore
 
-
-
         #
         # 默认agent
         self.agentEnvironment=AgentEnvironment(runtimeType="pyside6")
@@ -3163,13 +3164,19 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
         ]
         )
         #aaAgent 创建后就启动状态。 
+
+        #列表展示面板
+        self.memoriesListPanel: AAXWJumpinDefaultCompoApplet.MemoriesListPanel =None #type:ignore
         
         #持续展示近期列表；只要applet还在mgr运行，就持续展示；
         #直接在applet初始化时初始化；
         self._initAIMemoryListUI()
 
-        # 初始化“新互动”的功能
+        # 初始化“新互动”表菜单项
         self._initNewInteractionUI()
+
+        # 初始化所有记忆/历史列表菜单项
+        self._initAllAIMemeoryListUI()
 
         pass
 
@@ -3177,17 +3184,12 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
     def onRemove(self):
         self.AAXW_CLASS_LOGGER.warning(
             f"这是个默认Applet{self.__class__.__name__}只有关闭整体时才应该被移除释放。")
-
         self.aaAgent.stop()
-
-        # self.aaAgent=None #type:ignore
         self.agentEnvironment.stopAll()
-        
-        
         pass
 
 
-    class ChatHisReadAgentAction(BaseAction):
+    class ChatHisReadAgentAction(BaseAgentAction):
         """对话历史读取动作"""
         #Action管理器使用
         name: str = "对话历史读取"
@@ -3205,10 +3207,6 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
         args_schema: Type[BaseModel] = ArgumentSchema
 
         def _run(self, chatHisName: str, content: str = "") -> str:
-            # if self.aiMemoryManager is not None:
-            #     print("aiMemoryManager: "+str(self.aiMemoryManager))
-            # print(f"[模拟] 读取备忘录 {chatHisName} 的内容：---你好，{chatHisName}是1个比较重要的事情，需要尽快完成。通过content 海选。---")
-            # return f"---你好，{chatHisName}是1个比较重要的事情，需要尽快完成---"
             if self.aiMemoryManager is None:
                     return f"[错误] 未注入 aiMemoryManager,无法读取对话历史 {chatHisName},无法完成Action"
                 
@@ -3230,7 +3228,7 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
             except Exception as e:
                 return f"[错误] 读取对话历史 {chatHisName} 失败: {str(e)}"
 
-    class ChatHisRenameAgentAction(BaseAction):
+    class ChatHisRenameAgentAction(BaseAgentAction):
         """重命名对话历史动作"""
         name: str = "对话历史重命名"
         description: str = "将指定名称的对话历史重命名为新名称"
@@ -3332,8 +3330,8 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
         for record in reversed(mems):
             # 定义右键菜单项
             menuItems = [
-                ("重命名", lambda _,r=record: self._renameMemoryShowDialogUI(record=r)),
-                ("删除", lambda _,r=record: self._deleteMemoryAction(record=r))
+                ("重命名", lambda _,r=record: self.showRenameMemoryDialogUI(name=r)),
+                ("删除", lambda _,r=record: self.deleteMemoryAction(name=r))
             ]
 
             self.mainWindow.navigationInterface.insertItemWithContextMenu(
@@ -3349,7 +3347,197 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
                 position=NavigationItemPosition.SCROLL,
                 tooltip=f'{record}'
             )
+
+    def _initAllAIMemeoryListUI(self):
+        """初始化 列出所有memory/history的菜单项以及列表展示面板"""
+
+        #初始化列表展示面板
+        if self.memoriesListPanel is None:
+            self.memoriesListPanel = self.MemoriesListPanel(
+                applet=self,
+                title="记忆与对话历史列表",
+                parent=self.mainWindow.mainStackedFrame)
+            self.mainWindow.mainStackedFrame.addWidget(self.memoriesListPanel)
+
+        #初始化列出功能菜单项
+        allmemoryItem = cast(NavigationTreeWidget, 
+            self.mainWindow.navigationInterface.widget('all_history'))
+        allmemoryItem.clicked.connect(self.listAllMemoriesAction)
+
+        pass
+
+
+    #
+    # 
+    def listAllMemoriesAction(self):
+        """展示memories列表面板"""
+        
+        # 获取记忆列表(默认按修改时间降序,新的在前)
+        mems = self.jumpinAIMemoryManager.listMemoryNames(
+            offset=0,
+            limit=200,  # 默认只展示最近100
+            sortByModified=True,
+            ascending=False
+        )
+
+        # 构建记忆数据格式
+        memories = [{
+            "name":mems[i],
+            "title": f"{mems[i]}", 
+            "description": "...概要描述..."} 
+            for i in range(len(mems))
+        ]
+
+        self.memoriesListPanel.renderMemoryList(memories)
+        #前台展示
+        self.mainWindow.mainStackedFrame.setCurrentWidget(self.memoriesListPanel)
+        # self.memoriesListPanel.show()
+
+    class MemoOrHisCardWidget(CardWidget):
+        def __init__(self, name,title, description, index, applet,parent=None):
+            super().__init__(parent)
+            self.memoOrHisName=name
+            self.index = index
+            # self.routekey = routeKey
+            self.applet:AAXWJumpinDefaultCompoApplet=applet #type:ignore
+            
+            # 设置卡片属性
+            self.setBorderRadius(8)
+            self.setObjectName('memoOrHisCardWidget')
+            self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)  # 添加此行
+            # self.setFixedHeight(120)  # 添加此行，设置固定高度
+            
+            # 主布局
+            self.hBoxLayout = QHBoxLayout(self)
+            
+            # 左侧图标
+            self.iconWidget = IconWidget(FIF.HISTORY, self)
+            self.iconWidget.setFixedSize(16, 16)
+            
+            # 中间内容布局
+            self.contentLayout = QVBoxLayout()
+            self.contentLayout.setSpacing(1)
+            self.contentLayout.setContentsMargins(0, 0, 0, 0)
+            self.contentLayout.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+            
+            # 标题和描述
+            stitle = title[:10] + '...'if len(title) > 12 else title
+            # self.titleLabel = SubtitleLabel(stitle, self)
+            self.titleLabel = StrongBodyLabel(stitle, self)
+            # self.descriptionLabel = BodyLabel(TextWrap.wrap(description, 45, False)[0], self)
+            # 使用 PlainTextEdit 来展示描述
+            # self.descriptionLabel = TextEdit(self)
+            self.descriptionLabel = TextBrowser(self)
+            self.descriptionLabel.setPlainText(description)
+            self.descriptionLabel.setReadOnly(True)  # 设置为只读
+            self.descriptionLabel.setFixedHeight(80)
+            # 设置样式为无边框且颜色与外部组件一致
+            self.descriptionLabel.setStyleSheet("""
+                QTextBrowser {
+                    border: none;  /* 无边框 */
+                    background-color: transparent;  /* 背景透明 */
+                }
+            """)
+            
+            # 右侧按钮布局
+            self.buttonLayout = QVBoxLayout()
+            self.buttonLayout.setSpacing(4)
+            self.buttonLayout.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom)
+            
+            # 按钮
+            self.detailButton = PushButton('详情', self, icon=FIF.INFO)
+            self.deleteButton = PushButton('删除', self, icon=FIF.DELETE)
+            self.renameButton = PushButton('重命名', self, icon=FIF.EDIT)
+            
+            for btn in (self.detailButton, self.deleteButton, self.renameButton):
+                btn.setFixedWidth(100)
+                
+            # 组装布局
+            # self.contentLayout.addStretch(1)
+            self.contentLayout.addWidget(self.titleLabel)
+            self.contentLayout.addWidget(self.descriptionLabel)
+            # self.contentLayout.addStretch(1)
+            
+            
+            self.buttonLayout.addWidget(self.detailButton)
+            self.buttonLayout.addWidget(self.renameButton)
+            self.buttonLayout.addWidget(self.deleteButton)
+            
+            self.hBoxLayout.addWidget(
+                self.iconWidget, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+            self.hBoxLayout.addLayout(self.contentLayout, 1)
+            self.hBoxLayout.addLayout(self.buttonLayout, 0)
+            
+            # 设置布局属性
+            self.hBoxLayout.setContentsMargins(20, 16, 16, 16)
+            self.hBoxLayout.setSpacing(28)
+            
+            # 设置卡片属性
+            self.setBorderRadius(8)
+            self.setObjectName('customCard')
+            
+            # 信号连接
+            self.detailButton.clicked.connect(self.on_detail_click)
+            self.deleteButton.clicked.connect(self.on_delete_click)
+            self.renameButton.clicked.connect(self.on_rename_click)
+        
+        def mouseReleaseEvent(self, e):
+            super().mouseReleaseEvent(e)
+            # signalBus.switchToCard.emit(self.routekey, self.index)
+        
+        def on_detail_click(self): 
+            #  self.applet.
+            self.applet.loadMemoryAction(record=self.memoOrHisName)
+            pass
+        def on_delete_click(self): 
+            print(f"Delete memo or his name:{self.memoOrHisName}")
+            self.applet.deleteMemoryAction(self.memoOrHisName)
+        def on_rename_click(self): 
+            print(f"Rename memo or his name:{self.memoOrHisName}")
+            self.applet.showRenameMemoryDialogUI(self.memoOrHisName)
     
+    #
+    class MemoriesListPanel(QWidget):
+        def __init__(self,applet,title="",parent=None):
+            super().__init__(parent)
+            self.applet:AAXWJumpinDefaultCompoApplet=applet
+            self.titleLabel = QLabel(title, self)
+            self.vBoxLayout = QVBoxLayout(self)
+            # self.setGeometry(100, 100, 400, 300)
+            self.vBoxLayout.addWidget(self.titleLabel)
+            self.scrollArea = ScrollArea(self)
+            self.scrollArea.setWidgetResizable(True)
+            self.container = QWidget()
+            self.flowLayout = QVBoxLayout(self.container)
+            self.scrollArea.setWidget(self.container)
+            self.vBoxLayout.addWidget(self.scrollArea)
+            self.vBoxLayout.setContentsMargins(10, 10, 10, 10)
+            self.vBoxLayout.setSpacing(10)
+
+        def renderMemoryList(self, memories):
+            """刷新记忆列表:
+            memories[{
+                title:'xxx'
+                description:'xxx'
+            },...]
+            """
+            # 清空当前内容
+            self.clearMemoryList()
+            # 添加新的记忆项
+            for index, memory in enumerate(memories):
+                card = AAXWJumpinDefaultCompoApplet.MemoOrHisCardWidget(
+                    name=memory['name'],title=memory['title'],
+                    description=memory['description'],index=index,applet=self.applet,parent=self)
+                self.flowLayout.addWidget(card)
+
+        def clearMemoryList(self):
+            """清空记忆列表展示"""
+            for i in reversed(range(self.flowLayout.count())):
+                widget = self.flowLayout.itemAt(i).widget()
+                if widget is not None:
+                    widget.deleteLater()
+
+
     def _initBuddyAndAppletListUI(self):
         """初始化伙伴与应用列表UI
         Partner指AIAgent或其他可互动主体；
@@ -3383,21 +3571,21 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
 
 
     @Slot()
-    def _deleteMemoryAction(self, record: str):
+    def deleteMemoryAction(self, name: str):
         """删除记忆操作
         Args:
             record: 记忆ID
         """
         # TODO: 可以添加确认对话框
-        self.AAXW_CLASS_LOGGER.info(f"删除记忆操作:{record}")
+        self.AAXW_CLASS_LOGGER.info(f"删除记忆操作:{name}")
         try:
             # 从文件系统删除
-            self.jumpinAIMemoryManager.deleteMemory(record)
+            self.jumpinAIMemoryManager.deleteMemory(name)
             # 从导航栏移除
-            self.mainWindow.navigationInterface.removeWidget(record)
+            self.mainWindow.navigationInterface.removeWidget(name)
             # 如果当前加载的就是这条记忆,清空显示
             if (self.currentHistoriedMemory and 
-                self.currentHistoriedMemory.chat_id == record):
+                self.currentHistoriedMemory.chat_id == name):
                 self.currentHistoriedMemory = None
                 self.clearContentAction()
             # 刷新列表
@@ -3484,22 +3672,28 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
             return self.agentRadio.isChecked()
 
     @Slot()
-    def _renameMemoryShowDialogUI(self, record: str):
-        dialog = self.RenameMemoryMessageBox(oldName=record, parent=self.mainWindow)
+    def showRenameMemoryDialogUI(self, name: str):
+        dialog = self.RenameMemoryMessageBox(oldName=name, parent=self.mainWindow)
         if dialog.exec():
             if dialog.isAgentMode() :
-                self.aaAgent.sendMessageToMe(
-                    "请帮我将'"+
-                    record+
+                # self.aaAgent.sendMessageToMe(
+                #     "请帮我将'"+
+                #     name+
+                #     "'的对话历史改名，先读取对话历史内容并小结出新名字，然后将其改名。"+
+                #     "对话历史名字不能超过15个字符。改完请回复我一下。"
+                # )
+                self.aaAgent.senseEnvironmentEvent(
+                    command="请帮忙将'"+
+                    name+
                     "'的对话历史改名，先读取对话历史内容并小结出新名字，然后将其改名。"+
-                    "对话历史名字不能超过15个字符且保留原后缀。改完请回复我一下。"
+                    "对话历史名字不能超过15个字符且保留原后缀。改完或失败就结束无需回复。"
                 )
             else:
                 newName = dialog.getNewName()
-                self.AAXW_CLASS_LOGGER.info(f"准备重命名记忆:{record} 新名称:{newName}")
-                self._renameMemoryAction(record, newName)
+                self.AAXW_CLASS_LOGGER.info(f"准备重命名记忆:{name} 新名称:{newName}")
+                self._renameMemoryAction(name, newName)
         else:
-            self.AAXW_CLASS_LOGGER.info(f"取消重命名记忆:{record}")
+            self.AAXW_CLASS_LOGGER.info(f"取消重命名记忆:{name}")
 
     @Slot()
     def _renameMemoryAction(self, record: str,newName:str):
@@ -3547,6 +3741,11 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
         
         # 刷新界面
         self.mainWindow.navigationInterface.panel.update()
+
+        # 增加 刷新指定位置（比如 新加的列表面板）
+        if self.mainWindow.mainStackedFrame.currentWidget() is self.memoriesListPanel:
+            #刷新列表
+            self.listAllMemoriesAction()
     
 
     
@@ -3642,7 +3841,8 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
         # 创建并启动AI处理线程
         aiThread = self.MemorisedAIConnectUpdateShowingPanelRunnable(
             text=text, uiCellId=str(rrid), llmagent=self.simpleAIConnOrAgent, 
-            hMemo=self.currentHistoriedMemory,mainWindow=self.mainWindow)
+            hMemo=self.currentHistoriedMemory,mainWindow=self.mainWindow,
+            aaAgent=self.aaAgent)
         aiThread.updateUI.connect(self.mainWindow.msgShowingPanel.appendContentByRowId)
         
         # 使用mainWindow的线程池来管理线程
@@ -3654,7 +3854,6 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
     def _logInput(self):
         # 打印输入框中的内容
         self.AAXW_CLASS_LOGGER.debug(f"Input: {self.mainWindow.inputPanel.promptInputEdit.text()}")
-
 
 
     
@@ -3716,7 +3915,7 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
                                 # self.msleep(100)
                         QThread.msleep(50)  # 模拟延迟
 
-    @AAXW_JUMPIN_LOG_MGR.classLogger()#level=logging.INFO
+    @AAXW_JUMPIN_LOG_MGR.classLogger()
     class MemorisedAIConnectUpdateShowingPanelRunnable(AIConnectRunnable,QObject):
         AAXW_CLASS_LOGGER: logging.Logger
 
@@ -3729,7 +3928,8 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
         # updateUI = Signal(str,str)  
 
         def __init__(self,text:str,uiCellId:str,llmagent:AAXWAbstractAIConnOrAgent,
-                hMemo:AAXWJumpinHistoriedMemory,mainWindow:'AAXWJumpinMainWindow'):
+                hMemo:AAXWJumpinHistoriedMemory,mainWindow:'AAXWJumpinMainWindow',
+                aaAgent:Optional[BaseAgent]=None):
             QObject.__init__(self)
             AIConnectRunnable.__init__(self,text=text,uiCellId=uiCellId,llmagent=llmagent)
             self.hMemo = hMemo
@@ -3739,6 +3939,7 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
                 resourceId="Thread_"+str(self.mainWindow.msgShowingPanel.THREAD_SAFE_RESOURCE_ID))
             self.wholeResponse = ""
             self.setAutoDelete(True)  # 设置自动删除
+            self.aaAgent:Optional[BaseAgent]=aaAgent
             
         def run(self):
             # 等待之前user快更新完成
@@ -3784,8 +3985,32 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
                     if exec_e is None and self.wholeResponse: #没有异常才写入库
                         ai_message = AIMessage(content=self.wholeResponse)
                         self.hMemo.save(ai_message)
+                        self.asyncMemoryRenameByAgent(self.hMemo.chat_id)
                     pass
-
+        
+        def asyncMemoryRenameByAgent(self,name:str):
+            """异步改名"""
+            if name is None:
+                return
+            try:
+                if  self.aaAgent is None:
+                    self.AAXW_CLASS_LOGGER.warning(f"aaAgent为None,无法用agent改名。")
+                    return 
+                if not name.startswith('interact'):
+                    self.AAXW_CLASS_LOGGER.debug(f"对话历史（记忆）'{name}'无需改名")
+                    return 
+                
+                self.AAXW_CLASS_LOGGER.info(f"异步发起对话历史（记忆）' {name}'重命名,向Agent提供环境事件。")
+                self.aaAgent.senseEnvironmentEvent(
+                    command="请帮忙将'"+
+                    name+
+                    "'的对话历史改名，先读取对话历史内容并小结出新名字，然后将其改名。"+
+                    "对话历史名字不能超过15个字符且保留原后缀。改完或失败就结束无需回复。"
+                )
+            except Exception as e:
+                self.AAXW_CLASS_LOGGER.error(f"异步发起重命名对话历史'{name}'时发生错误: {str(e)}", exc_info=True)
+                self.AAXW_CLASS_LOGGER.error(traceback.format_exc())
+        
         def onResponse(self,str):
             self.wholeResponse += str
             self.callUpdateUI(str)
@@ -4708,10 +4933,8 @@ class AAXWJumpinMainWindow(AAXWFramelessWindow):
             mainWindow=self,
             parent=self
         )
-
         
         self.inputPanel.promptInputEdit.setFocus()
-
 
         self.installAppHotKey()
 

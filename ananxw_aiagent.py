@@ -20,6 +20,7 @@
 # 已实现 tools 的调用。
 # 已实现 基于lastEvent，lastResult的回路记忆模式。实现逐步推导处理的过程。
 # 提供了Pattern的定义，但未使用。
+
 #
 # TODO 日志打印调整；
 # 
@@ -55,14 +56,14 @@ if __name__ == "__main__":
     if project_root not in sys.path:
         sys.path.insert(0, project_root)  # 插入到路径最前面
 
-from ananxw_jumpin.ananxw_framework import AAXWLoggerManager
+from ananxw_jumpin.ananxw_framework import AAXWLoggerManager,AAXWLoggerJsonFormatFilter
 AAXW_AIAGENT_LOG_MGR = AAXWLoggerManager() 
 
 AAXW_AIAGENT_MODULE_LOGGER:logging.Logger=AAXW_AIAGENT_LOG_MGR.getModuleLogger(
     sys.modules[__name__])
 
 @dataclass
-class SensoryEvent:
+class AgentSensoryEvent:
     """感知事件基类"""
     # 事件类型常量定义
     INNER: ClassVar[str] = "INNER"      # 内部事件，如状态转换、内部处理等
@@ -74,7 +75,7 @@ class SensoryEvent:
     source: str = "user"                # 事件来源
     timestamp: datetime = field(default_factory=datetime.now)
 
-    lastEvent: Optional['SensoryEvent'] = field(default=None)  # 上一次事件
+    lastEvent: Optional['AgentSensoryEvent'] = field(default=None)  # 上一次事件
     lastResult: Optional[str] = field(default=None)  # 上一次执行结果
 
     
@@ -143,7 +144,7 @@ class PerceivingOutput(BaseModel):
         """解析LLM的输出"""
         return cls.getParser().parse(output)
 
-class BaseAction(BaseTool):
+class BaseAgentAction(BaseTool):
     """基础动作类"""
     name: str
     description: str
@@ -167,14 +168,14 @@ class BaseAction(BaseTool):
         return "\n".join(desc_list)
 
 # TODO 提供action的增加功能，且注意重名问题。
-class ActionActuator:
+class AgentActuator:
     """动作执行器"""
     
     def __init__(self):
-        self.actions: List[BaseAction] = []
-        self.actionDict: Dict[str, BaseAction] = {}
+        self.actions: List[BaseAgentAction] = []
+        self.actionDict: Dict[str, BaseAgentAction] = {}
     
-    def addAction(self, action: BaseAction) -> bool:
+    def addAction(self, action: BaseAgentAction) -> bool:
         """添加单个动作
         
         Args:
@@ -189,7 +190,7 @@ class ActionActuator:
         self.actionDict[action.name] = action
         return True
     
-    def addActions(self, actions: List[BaseAction]) -> List[str]:
+    def addActions(self, actions: List[BaseAgentAction]) -> List[str]:
         """添加多个动作
         
         Args:
@@ -235,7 +236,7 @@ class ActionActuator:
                 failed_names.append(name)
         return failed_names
     
-    def setActions(self, actions: List[BaseAction]):
+    def setActions(self, actions: List[BaseAgentAction]):
         """设置动作列表（清空现有动作）"""
         self.actions = []
         self.actionDict = {}
@@ -249,7 +250,7 @@ class ActionActuator:
             descriptions.append(action.getSchemaDescription())
         return "\n".join(descriptions)
     
-    def getAction(self, name: str) -> Optional[BaseAction]:
+    def getAction(self, name: str) -> Optional[BaseAgentAction]:
         """获取指定名称的动作"""
         return self.actionDict.get(name)
 
@@ -261,7 +262,7 @@ class BaseAgent(ABC):
         self.name = name
         self.stemQueue = queue.Queue()  # 主干回路队列
         self.isRunning = True
-        self.actionActuator = ActionActuator()  # 添加动作执行器实例
+        self.actionActuator = AgentActuator()  # 添加动作执行器实例
 
     @abstractmethod
     def run(self):
@@ -275,17 +276,17 @@ class BaseAgent(ABC):
     def senseMessage(self, message: str):
         """感知（发送）消息到Agent"""
         print(f"\n[用户] -> {self.name}: {message}")
-        self.stemQueue.put(SensoryEvent(
+        self.stemQueue.put(AgentSensoryEvent(
             message=message,
-            eventType=SensoryEvent.MESSAGE,
+            eventType=AgentSensoryEvent.MESSAGE,
             source="user"
         ))
 
     def senseEnvironmentEvent(self, command: str, **params):
         """感知（发送）环境事件到Agent"""
-        self.stemQueue.put(SensoryEvent(
+        self.stemQueue.put(AgentSensoryEvent(
             message=command,
-            eventType=SensoryEvent.ENV,
+            eventType=AgentSensoryEvent.ENV,
             source="system",
         ))
 
@@ -295,11 +296,11 @@ class BaseAgent(ABC):
         self.isRunning = False
         self.senseEnvironmentEvent("stop")
 
-    def addAction(self, action: BaseAction) -> bool:
+    def addAction(self, action: BaseAgentAction) -> bool:
         """添加单个动作"""
         return self.actionActuator.addAction(action)
 
-    def addActions(self, actions: List[BaseAction]) -> List[str]:
+    def addActions(self, actions: List[BaseAgentAction]) -> List[str]:
         """添加多个动作"""
         return self.actionActuator.addActions(actions)
 
@@ -311,7 +312,7 @@ class BaseAgent(ABC):
         """移除多个动作"""
         return self.actionActuator.removeActions(actionNames)
 
-    def setActions(self, actions: List[BaseAction]):
+    def setActions(self, actions: List[BaseAgentAction]):
         """设置Agent可用的动作列表"""
         self.actionActuator.setActions(actions)
 
@@ -436,7 +437,7 @@ class AgentSPTAState(BaseModel):
     agent: BaseAgent = Field(description="当前Agent对象")
     currentActionNLRName: str = Field(default="", description="当前状态的action名称")
     nextActionNLRName: str = Field(default="", description="下一个状态的action名称线索")
-    event: Optional[SensoryEvent] = Field(default=None, description="当前正在处理的事件")
+    event: Optional[AgentSensoryEvent] = Field(default=None, description="当前正在处理的事件")
     thingMemory: ThingMemory = Field(description="事项记忆，表示一组需要完成的行为，其所需要的记忆。")
     perceivingOutput: Optional[PerceivingOutput] = Field(default=None, description="感知阶段的输出结果")
 
@@ -452,7 +453,7 @@ class AgentSPTAState(BaseModel):
 
 
 
-class ReplyUserAction(BaseAction):
+class ReplyUserAction(BaseAgentAction):
     """回复用户动作"""
     name: str = "回复用户"
     description: str = "直接回复用户消息"
@@ -472,7 +473,7 @@ class ReplyUserAction(BaseAction):
             print(f"[模拟] 回复用户: {content}")
             return f"已回复用户: {content}"
 
-@AAXW_AIAGENT_LOG_MGR.classLogger()
+@AAXW_AIAGENT_LOG_MGR.classLogger(level=logging.DEBUG)
 class SensingPerceivingThinkingActingProcess:
     """感知-认知-思考-行动处理器"""
     AAXW_CLASS_LOGGER:logging.Logger
@@ -524,8 +525,6 @@ class SensingPerceivingThinkingActingProcess:
 # 可用的动作及其参数：
 {action_descriptions}
 
-
-
 # 约束-输出要求
 你需要规划以下内容：
 1. 当前动作：选择一个最适合当前情况的动作来执行；
@@ -558,12 +557,12 @@ class SensingPerceivingThinkingActingProcess:
             # print(f"onSensing 当前事件: {event}")
             self.AAXW_CLASS_LOGGER.info(f"onSensing 当前事件: {event}")
             
-            if event.getEventType() == SensoryEvent.ENV and event.message == "stop":
+            if event.getEventType() == AgentSensoryEvent.ENV and event.message == "stop":
                 state.currentState = AgentSPTAState.END
                 return state
             
             # 增加对 INNER、ENV、MESSAGE 事件的统一处理
-            if event.getEventType() in [SensoryEvent.INNER, SensoryEvent.ENV, SensoryEvent.MESSAGE]:
+            if event.getEventType() in [AgentSensoryEvent.INNER, AgentSensoryEvent.ENV, AgentSensoryEvent.MESSAGE]:
                 state.event = event  # 保存当前事件到状态
                 state.currentState = AgentSPTAState.PERCEIVING
                 return state
@@ -589,7 +588,10 @@ class SensingPerceivingThinkingActingProcess:
         # print(f"onPerceiving 最终提示词内容: {prompt}")
         try:
             response = self.llm.invoke(prompt)
-            print(f"onPerceiving 直接输出: {response}")
+            # print(f"onPerceiving 直接输出: {response}")
+            self.AAXW_CLASS_LOGGER.debug(
+                f"onPerceiving 直接输出: {response.content}",
+                extra={AAXWLoggerJsonFormatFilter.HAS_POTENTIAL_JSON_KEY: True})
             # 使用 PerceivingOutput 的类方法解析输出
             state.perceivingOutput = PerceivingOutput.parseOutput(response.content)
             
@@ -629,9 +631,9 @@ class SensingPerceivingThinkingActingProcess:
                 
                 # 如果有下一步动作信息，将当前执行结果和下一步动作信息一起写入事件
                 if state.nextActionNLRName:
-                    state.agent.stemQueue.put(SensoryEvent(
+                    state.agent.stemQueue.put(AgentSensoryEvent(
                         message=f" 需要进行：{state.nextActionNLRName}",
-                        eventType=SensoryEvent.INNER,
+                        eventType=AgentSensoryEvent.INNER,
                         source="self",
                         lastEvent=state.event,  # 保存当前事件作为下一个事件的上一个事件
                         lastResult=result  # 保存当前执行结果
@@ -818,7 +820,7 @@ class AgentEnvironment:
 if __name__ == "__main__":
     
     load_dotenv()
-    class MemoReadAction(BaseAction):
+    class MemoReadAction(BaseAgentAction):
         """读取备忘录动作"""
         name: str = "读取备忘"
         description: str = "读取指定名称备忘录的内容"
@@ -835,7 +837,7 @@ if __name__ == "__main__":
             print(f"[模拟] 读取备忘录 {memoName} 的内容：---你好，{memoName}是1个比较重要的事情，需要尽快完成---")
             return f"---你好，{memoName}是1个比较重要的事情，需要尽快完成---"
 
-    class MemoRenameAction(BaseAction):
+    class MemoRenameAction(BaseAgentAction):
         """重命名备忘录动作"""
         name: str = "重命名备忘"
         description: str = "将指定名称的备忘录重命名为新名称"
