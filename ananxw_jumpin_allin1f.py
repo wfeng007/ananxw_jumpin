@@ -81,7 +81,7 @@ try:
     from __init__ import __package_name__  #type:ignore
     print(f'导入了包__init__.py 中的 __package_name__:{__package_name__}')
 except ImportError:
-    #   pyinstaller 后os.path.abspath(__file__)“本文件”来确定路径会变成 _interal目录（默认资源目录）
+    #   pyinstaller 后os.path.abspath(__file__)"本文件"来确定路径会变成 _interal目录（默认资源目录）
     __package_name__= "ananxw_jumpin"
     print(f'导入本代码文件:{__file__} 中的 __package_name__:{__package_name__}')
 
@@ -171,6 +171,8 @@ from qfluentwidgets import (
     NavigationInterface, NavigationItemPosition, NavigationAvatarWidget,NavigationTreeWidget,
     NavigationPushButton,MessageBoxBase,SubtitleLabel,LineEdit,CaptionLabel,PushButton,
     BodyLabel,TextWrap,CardWidget,StrongBodyLabel,PlainTextEdit,TextEdit,TextBrowser,
+    SegmentedWidget,ComboBox,CheckBox,FlowLayout,InfoBar,InfoBarPosition,EditableComboBox,
+    PillPushButton,PrimaryPushButton,
     NavigationWidget, MessageBox, SettingCardGroup, SwitchSettingCard, FolderListSettingCard,
     OptionsSettingCard, PushSettingCard, HyperlinkCard, PrimaryPushSettingCard, ScrollArea,
     ComboBoxSettingCard, ExpandLayout, Theme, CustomColorSettingCard,RadioButton,IconWidget,
@@ -947,22 +949,37 @@ class AAXWJumpinPluginManager(AAXWFileSourcePluginManager):
 # 
 ##
 
+# 基本config信息，与默认配置；
+# 添加LLM提供商配置的DTO类
+class OpenAIProviderConfig(BaseModel):
+    """OpenAI提供商配置DTO"""
+    apiKey: str = ""
+    baseUrl: str = ""
+    modelName: str = "gpt-4o-mini"
+    
+class OllamaProviderConfig(BaseModel):
+    """Ollama提供商配置DTO"""
+    serviceUrl: str = "http://localhost:11434"
+    modelName: str = "llama3"
 
 # 基本config信息，与默认配置；
 @AAXWJumpinDICUtilz.register(key="jumpinConfig") 
-@AAXW_JUMPIN_LOG_MGR.classLogger()
+@AAXW_JUMPIN_LOG_MGR.classLogger(level=logging.DEBUG)
 class AAXWJumpinConfig:
     AAXW_CLASS_LOGGER:logging.Logger
 
     # 默认配置
-    FAMILY_NAME="AAXW" #之后可用来拆分抽象；
+    FAMILY_NAME = "AAXW"  # 之后可用来拆分抽象
     APP_NAME_DEFAULT = "AAXW_Jumpin"
     APP_VERSION_DEFAULT = __version__
-    DEBUG_DEFAULT = False #暂时没用到
+    DEBUG_DEFAULT = False  # 暂时没用到
     LOG_LEVEL_DEFAULT = "INFO"
     APP_WORK_DIR_DEFAULT = "./"
     APP_CONFIG_FILENAME_DEFAULT = "aaxw_jumpin_config.yaml"
 
+    # LLM配置默认值
+    DEFAULT_LLM_PROVIDER = "openai"  # 默认LLM提供商
+    
     # 原有的 QSS 配置保持不变
     MSGSHOWINGPANEL_QSS = """
     QFrame {
@@ -1021,7 +1038,7 @@ class AAXWJumpinConfig:
     """
 
     def __init__(self):
-        # 初始化实例属性
+        # 初始化基本属性
         self.appName = self.APP_NAME_DEFAULT
         self.appVersion = self.APP_VERSION_DEFAULT
         
@@ -1029,8 +1046,15 @@ class AAXWJumpinConfig:
         self.logLevel = self.LOG_LEVEL_DEFAULT
         self.appWorkDir = self.APP_WORK_DIR_DEFAULT
         self.appConfigFilename = self.APP_CONFIG_FILENAME_DEFAULT
+        
+        # 初始化LLM配置属性
+        self.defaultLLMProvider = self.DEFAULT_LLM_PROVIDER
+        
+        # 使用DTO类初始化配置
+        self.openaiConfig = OpenAIProviderConfig()
+        self.ollamaConfig = OllamaProviderConfig()
 
-        #默认顺序初始化；
+        # 默认顺序初始化
         self.loadEnv()
         self.loadArgs()
         self.loadYaml()
@@ -1039,23 +1063,39 @@ class AAXWJumpinConfig:
                     f"logLevel={self.logLevel}, "
                     f"appConfigFilename={self.appConfigFilename}, "
                     f"debug={self.debug}")
-        #暂时初始化时调用
+        # 记录LLM配置
+        self.logLLMConfig()
+        
+        # 暂时初始化时调用
         self.initAANode()
 
-
-
     def loadEnv(self):
+        """从环境变量加载配置"""
         self.appWorkDir = os.environ.get('AAXW_APPWORKDIR', self.appWorkDir)
         self.logLevel = os.environ.get('AAXW_LOG_LEVEL', self.logLevel)
         self.appConfigFilename = os.environ.get('AAXW_CONFIG_FILE_NAME', self.appConfigFilename)
         self.debug = os.environ.get('AAXW_DEBUG', self.debug)
+        
+        # 加载LLM相关环境变量
+        self.defaultLLMProvider = os.environ.get('AAXW_DEFAULT_LLM_PROVIDER', self.defaultLLMProvider)
+        
+        # OpenAI配置
+        self.openaiConfig.apiKey = os.environ.get('OPENAI_API_KEY', self.openaiConfig.apiKey)
+        self.openaiConfig.baseUrl = os.environ.get('OPENAI_BASE_URL', self.openaiConfig.baseUrl)
+        self.openaiConfig.modelName = os.environ.get('OPENAI_MODEL_NAME', self.openaiConfig.modelName)
+        
+        # Ollama配置
+        self.ollamaConfig.serviceUrl = os.environ.get('OLLAMA_SERVICE_URL', self.ollamaConfig.serviceUrl)
+        self.ollamaConfig.modelName = os.environ.get('OLLAMA_MODEL_NAME', self.ollamaConfig.modelName)
 
     def loadArgs(self):
+        """从命令行参数加载配置"""
         parser = argparse.ArgumentParser()
         parser.add_argument('--appworkdir', help='Application work directory')
         parser.add_argument('--log-level', help='Logging level')
         parser.add_argument('--config-file', help='Configuration file name')
         parser.add_argument('--debug', action='store_true', help='Enable debug mode')
+        parser.add_argument('--llm-provider', help='Default LLM provider (openai/ollama)')
         
         args, unknown = parser.parse_known_args()
         if args.appworkdir:
@@ -1066,42 +1106,132 @@ class AAXWJumpinConfig:
             self.appConfigFilename = args.config_file
         if args.debug is not None:
             self.debug = args.debug
+        if args.llm_provider:
+            self.defaultLLMProvider = args.llm_provider
 
-
-    #yaml config
-    def loadYaml(self,yamlPath=None):
-        yaml_path = os.path.join(self.appWorkDir, self.appConfigFilename)
+    def loadYaml(self, yamlPath=None):
+        """从YAML配置文件加载配置"""
+        yaml_path = yamlPath or os.path.join(self.appWorkDir, self.appConfigFilename)
         if os.path.exists(yaml_path):
             with open(yaml_path, 'r', encoding='utf-8') as file:
                 try:
                     yaml_config = yaml.safe_load(file)
-                    self.__dict__.update(yaml_config)
-                    self.AAXW_CLASS_LOGGER.info(f"Yaml config file loaded: new base-config"
-                            f"appWorkDir={self.appWorkDir}, "
-                            f"logLevel={self.logLevel}, "
-                            f"appConfigFilename={self.appConfigFilename}, "
-                            f"debug={self.debug}")
+                    if yaml_config:
+                        # 更新基础配置
+                        for key, value in yaml_config.items():
+                            if key != 'openaiConfig' and key != 'ollamaConfig':
+                                if hasattr(self, key):
+                                    setattr(self, key, value)
+                        
+                        # 更新Provider配置
+                        if 'openaiConfig' in yaml_config and isinstance(yaml_config['openaiConfig'], dict):
+                            for key, value in yaml_config['openaiConfig'].items():
+                                if hasattr(self.openaiConfig, key):
+                                    setattr(self.openaiConfig, key, value)
+                        
+                        if 'ollamaConfig' in yaml_config and isinstance(yaml_config['ollamaConfig'], dict):
+                            for key, value in yaml_config['ollamaConfig'].items():
+                                if hasattr(self.ollamaConfig, key):
+                                    setattr(self.ollamaConfig, key, value)
+                    
+                    self.AAXW_CLASS_LOGGER.info(f"Yaml config file loaded: {yaml_path}")
                 except yaml.YAMLError as e:
                     self.AAXW_CLASS_LOGGER.warning(f"Error reading YAML file: {e}")
+        else:
+            self.AAXW_CLASS_LOGGER.warning(f"YAML config file not found: {yaml_path}")
+
+    def saveConfigToYaml(self, yamlPath=None):
+        """保存配置到YAML文件"""
+        yaml_path = yamlPath or os.path.join(self.appWorkDir, self.appConfigFilename)
+        
+        # 构建配置字典
+        config_dict = {}
+        
+        # 添加基础属性
+        for key, value in self.__dict__.items():
+            if not key.startswith('_') and key != 'AAXW_CLASS_LOGGER' and key not in ['openaiConfig', 'ollamaConfig']:
+                config_dict[key] = value
+        
+        # 添加Provider配置
+        config_dict['openaiConfig'] = self.openaiConfig.dict()
+        config_dict['ollamaConfig'] = self.ollamaConfig.dict()
+        
+        try:
+            # 确保目录存在
+            os.makedirs(os.path.dirname(os.path.abspath(yaml_path)), exist_ok=True)
+            
+            # 写入YAML文件
+            with open(yaml_path, 'w', encoding='utf-8') as file:
+                yaml.safe_dump(config_dict, file, default_flow_style=False, allow_unicode=True)
+            
+            self.AAXW_CLASS_LOGGER.info(f"配置已保存到: {yaml_path}")
+            return True
+        except Exception as e:
+            self.AAXW_CLASS_LOGGER.error(f"保存配置失败: {str(e)}")
+            return False
 
     def setWorkCfgAndloadYaml(self, workdir=None, configName=None):
+        """设置工作目录和配置文件名，并加载配置"""
         if workdir: self.appWorkDir = workdir
         if configName: self.appConfigFilename = configName
         self.loadYaml()
 
-    def initAANode(self): #init after di；当前秀先在自己内部执行；
+    def logLLMConfig(self):
+        """记录当前LLM配置"""
+        self.AAXW_CLASS_LOGGER.debug(f"当前LLM配置: 默认提供商={self.defaultLLMProvider}")
+        
+        # 记录OpenAI配置
+        self.AAXW_CLASS_LOGGER.debug(f"OpenAI配置: 模型={self.openaiConfig.modelName}, API基础URL={self.openaiConfig.baseUrl}")
+        
+        # 记录Ollama配置
+        self.AAXW_CLASS_LOGGER.debug(f"Ollama配置: 模型={self.ollamaConfig.modelName}, 服务URL={self.ollamaConfig.serviceUrl}")
+
+    def updateLLMConfig(self, defaultProvider=None, openaiConfig=None, ollamaConfig=None):
+        """更新LLM配置并保存到YAML"""
+        changed = False
+        
+        if defaultProvider and defaultProvider in ['openai', 'ollama']:
+            self.defaultLLMProvider = defaultProvider
+            changed = True
+            
+        if openaiConfig:
+            for key, value in openaiConfig.items():
+                if hasattr(self.openaiConfig, key):
+                    setattr(self.openaiConfig, key, value)
+                    changed = True
+                
+        if ollamaConfig:
+            for key, value in ollamaConfig.items():
+                if hasattr(self.ollamaConfig, key):
+                    setattr(self.ollamaConfig, key, value)
+                    changed = True
+        
+        if changed:
+            self.saveConfigToYaml()
+            self.logLLMConfig()
+        
+        return changed
+
+    def reloadConfig(self):
+        """重新加载配置"""
+        self.loadYaml()
+        self.logLLMConfig()
+
+    def initAANode(self): #init after di；当前先在自己内部执行；
         #这里日志器进程全局的，所以其实__init__初始化时就能调用；
         AAXW_JUMPIN_LOG_MGR.setLogDirAndFile(logDir=self.appWorkDir,filename="aaxw_app.log")
 
         #其他di胡执行的工作；
         pass
 
-    # @classmethod
-    # def create_with_current_dir(cls):
-    #     config = cls()
-    #     script_dir = os.path.dirname(os.path.abspath(__file__))
-    #     config.set_work_dir(script_dir)
-    #     return config
+    def getActiveProviderConfig(self):
+        """获取当前激活的提供商配置"""
+        if self.defaultLLMProvider == "openai":
+            return self.openaiConfig
+        elif self.defaultLLMProvider == "ollama":
+            return self.ollamaConfig
+        else:
+            return None
 
 #
 # AI相关
@@ -3172,7 +3302,7 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
         #直接在applet初始化时初始化；
         self._initAIMemoryListUI()
 
-        # 初始化“新互动”表菜单项
+        # 初始化"新互动"表菜单项
         self._initNewInteractionUI()
 
         # 初始化所有记忆/历史列表菜单项
@@ -3193,7 +3323,7 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
         """对话历史读取动作"""
         #Action管理器使用
         name: str = "对话历史读取"
-        description: str = "读取指定名的“对话历史”的内容"
+        description: str = "读取指定名的'对话历史'的内容"
         # 
         aiMemoryManager: Optional[
             AAXWJumpinFileAIMemoryManager] = Field(default=None, description="AI记忆管理器")
@@ -3306,7 +3436,7 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
     
     # ui-init
     def _initNewInteractionUI(self):
-        # 初始化“新互动”的功能
+        # 初始化"新互动"的功能
         niWg:NavigationWidget=self.mainWindow.navigationInterface.widget('new_interaction')
         niWg.clicked.connect(self.doNewInteractionAction)
         pass
@@ -4529,6 +4659,218 @@ class AAXWJumpinThreadSafeMsgShowingPanel(AAXWScrollPanel):
         return super().clearContent()
 
 
+# 
+class LLMProviderForm(QWidget):
+    """LLM模型提供商配置表单"""
+    
+    def __init__(self, jumpinConfig):
+        super().__init__()
+        self.jumpinConfig = jumpinConfig
+        
+        # 创建主布局
+        self.layout = QVBoxLayout(self)
+        self.layout.setContentsMargins(0, 0, 0, 0)
+        
+        # 添加组标题
+        self.titleLabel = SubtitleLabel("LLM模型配置")
+        self.layout.addWidget(self.titleLabel)
+        
+        # 创建分段控件和堆叠窗口
+        self.segmentedWidget = SegmentedWidget(self)
+        self.stackedWidget = QStackedWidget(self)
+        
+        # 创建标签页
+        self.openaiTab = self.createOpenAITab()
+        self.ollamaTab = self.createOllamaTab()
+        
+        # 添加标签页到堆叠窗口
+        self.stackedWidget.addWidget(self.openaiTab)
+        self.stackedWidget.addWidget(self.ollamaTab)
+        
+        # 添加选项到分段控件
+        self.segmentedWidget.addItem(text="OpenAI", routeKey="openai")
+        self.segmentedWidget.addItem(text="Ollama", routeKey="ollama")
+        
+        # 连接信号 - 使用currentItemChanged信号和自定义处理函数
+        self.segmentedWidget.currentItemChanged.connect(self.onProviderChanged)
+        
+        # 添加到布局
+        self.layout.addWidget(self.segmentedWidget)
+        self.layout.addWidget(self.stackedWidget)
+        
+        # 默认选择第一个选项
+        self.segmentedWidget.setCurrentItem("openai")
+        self.stackedWidget.setCurrentWidget(self.openaiTab)
+    
+    def onProviderChanged(self, routeKey):
+        """处理提供商切换的方法"""
+        # 根据routeKey设置stackedWidget的当前索引
+        print(f"onProviderChanged: {routeKey}")
+        if routeKey == "openai":
+            self.stackedWidget.setCurrentWidget(self.openaiTab)
+        elif routeKey == "ollama":
+            self.stackedWidget.setCurrentWidget(self.ollamaTab)
+    
+    def createOpenAITab(self):
+        """创建OpenAI配置选项卡"""
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        
+        # API密钥
+        apiKeyLabel = BodyLabel("API密钥:")
+        self.apiKeyEdit = LineEdit()
+        self.apiKeyEdit.setPlaceholderText("输入您的OpenAI API Key")
+        self.apiKeyEdit.setText(self.jumpinConfig.openaiConfig.apiKey)
+        self.apiKeyEdit.setClearButtonEnabled(True)
+        self.apiKeyEdit.setEchoMode(QLineEdit.EchoMode.Password)
+        
+        # 基础URL
+        baseUrlLabel = BodyLabel("基础URL:")
+        self.baseUrlEdit = LineEdit()
+        self.baseUrlEdit.setPlaceholderText("输入API基础URL（可选）")
+        self.baseUrlEdit.setText(self.jumpinConfig.openaiConfig.baseUrl)
+        self.baseUrlEdit.setClearButtonEnabled(True)
+        
+        # 模型选择
+        modelLabel = BodyLabel("模型:")
+        self.modelComboBox = ComboBox()
+        models = ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"]
+        self.modelComboBox.addItems(models)
+        
+        # 设置默认模型
+        defaultModel = self.jumpinConfig.openaiConfig.modelName
+        index = self.modelComboBox.findText(defaultModel)
+        if index >= 0:
+            self.modelComboBox.setCurrentIndex(index)
+        
+        # 保存按钮
+        self.saveOpenAIButton = PrimaryPushButton("保存设置")
+        self.saveOpenAIButton.clicked.connect(self.saveOpenAISettings)
+        
+        # 添加组件到布局
+        layout.addWidget(apiKeyLabel)
+        layout.addWidget(self.apiKeyEdit)
+        layout.addWidget(baseUrlLabel)
+        layout.addWidget(self.baseUrlEdit)
+        layout.addWidget(modelLabel)
+        layout.addWidget(self.modelComboBox)
+        layout.addWidget(self.saveOpenAIButton)
+        layout.addStretch(1)
+        
+        return container
+    
+    def createOllamaTab(self):
+        """创建Ollama配置选项卡"""
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        
+        # 服务地址
+        serviceUrlLabel = BodyLabel("服务地址:")
+        self.serviceUrlEdit = LineEdit()
+        self.serviceUrlEdit.setPlaceholderText("例如: http://localhost:11434")
+        self.serviceUrlEdit.setText(self.jumpinConfig.ollamaConfig.serviceUrl)
+        self.serviceUrlEdit.setClearButtonEnabled(True)
+        
+        # 模型选择
+        modelLabel = BodyLabel("模型:")
+        self.ollamaModelComboBox = ComboBox()
+        ollamaModels = ["llama3.1", "llama3", "llama2", "qwen2", "qwen2.5", "deepseek"]
+        self.ollamaModelComboBox.addItems(ollamaModels)
+        
+        # 设置默认模型
+        defaultOllamaModel = self.jumpinConfig.ollamaConfig.modelName
+        index = self.ollamaModelComboBox.findText(defaultOllamaModel)
+        if index >= 0:
+            self.ollamaModelComboBox.setCurrentIndex(index)
+        
+        # 保存按钮
+        self.saveOllamaButton = PrimaryPushButton("保存设置")
+        self.saveOllamaButton.clicked.connect(self.saveOllamaSettings)
+        
+        # 添加组件到布局
+        layout.addWidget(serviceUrlLabel)
+        layout.addWidget(self.serviceUrlEdit)
+        layout.addWidget(modelLabel)
+        layout.addWidget(self.ollamaModelComboBox)
+        layout.addWidget(self.saveOllamaButton)
+        layout.addStretch(1)
+        
+        return container
+    
+    def saveOpenAISettings(self):
+        """保存OpenAI设置"""
+        # 获取输入值
+        apiKey = self.apiKeyEdit.text().strip()
+        baseUrl = self.baseUrlEdit.text().strip()
+        modelName = self.modelComboBox.currentText()
+        
+        # 更新配置并保存
+        # 设置默认提供商为OpenAI
+        openaiConfig = {
+            "apiKey": apiKey,
+            "baseUrl": baseUrl,
+            "modelName": modelName
+        }
+        
+        # 调用更新方法，更新LLM配置
+        self.jumpinConfig.updateLLMConfig(
+            defaultProvider="openai", 
+            openaiConfig=openaiConfig
+        )
+        
+        # 重新加载配置以确保一致性
+        self.jumpinConfig.reloadConfig()
+        
+        # 输出当前LLM配置到日志
+        self.jumpinConfig.logLLMConfig()
+        
+        # 显示成功消息
+        InfoBar.success(
+            title='成功',
+            content="OpenAI设置已保存",
+            orient=Qt.Orientation.Horizontal,
+            isClosable=True,
+            position=InfoBarPosition.TOP,
+            duration=2000,
+            parent=self
+        )
+
+    def saveOllamaSettings(self):
+        """保存Ollama设置"""
+        # 获取输入值
+        serviceUrl = self.serviceUrlEdit.text().strip()
+        modelName = self.ollamaModelComboBox.currentText()
+        
+        # 更新配置并保存
+        # 设置默认提供商为Ollama
+        ollamaConfig = {
+            "serviceUrl": serviceUrl,
+            "modelName": modelName
+        }
+        
+        # 调用更新方法，更新LLM配置
+        self.jumpinConfig.updateLLMConfig(
+            defaultProvider="ollama", 
+            ollamaConfig=ollamaConfig
+        )
+        
+        # 重新加载配置以确保一致性
+        self.jumpinConfig.reloadConfig()
+        
+        # 输出当前LLM配置到日志
+        self.jumpinConfig.logLLMConfig()
+        
+        # 显示成功消息
+        InfoBar.success(
+            title='成功',
+            content="Ollama设置已保存",
+            orient=Qt.Orientation.Horizontal,
+            isClosable=True,
+            position=InfoBarPosition.TOP,
+            duration=2000,
+            parent=self
+        )
+
 @AAXW_JUMPIN_LOG_MGR.classLogger()
 class AAXWJumpinSettingPanel(ScrollArea):
     """ Setting interface """
@@ -4543,169 +4885,97 @@ class AAXWJumpinSettingPanel(ScrollArea):
         # setting label
         self.settingLabel = QLabel("设置", self)
 
-        # music folders
+        # 基本设置组
         self.basicSettingGroup = SettingCardGroup(
             "基本设置信息", self.scrollWidget)
 
         self.appNameCard = SettingCard(
             icon=FIF.FOLDER,
             title="应用名称",
-            content=str(self.jumpinConfig.appName),
-            parent=self.basicSettingGroup
+            content=self.jumpinConfig.appName,
+            # 上面 设定为 Field-Value对显示
         )
-        self.appNameCard.setEnabled(False)
 
-        self.appVersionCard = SettingCard(
-            icon=FIF.FOLDER,
-            title="应用版本",
-            content=str(self.jumpinConfig.appVersion),
-            parent=self.basicSettingGroup
+        self.versionCard = SettingCard(
+            icon=FIF.CODE,
+            title="版本信息",
+            content=self.jumpinConfig.appVersion,
         )
-        self.appVersionCard.setEnabled(False)
 
-        self.appWorkDirCard = SettingCard(
+        self.workDirCard = SettingCard(
             icon=FIF.FOLDER,
             title="工作目录",
-            content=str(self.jumpinConfig.appWorkDir),
-            parent=self.basicSettingGroup
+            content=self.jumpinConfig.appWorkDir,
         )
-        self.appWorkDirCard.setEnabled(False)
 
-        self.appConfigFileNameCard = SettingCard(
-            icon=FIF.FIT_PAGE,
-            title="应用配置文件名（尝试读取）",
-            content=str(self.jumpinConfig.appConfigFilename),
-            parent=self.basicSettingGroup
-        )
-        self.appConfigFileNameCard.setEnabled(False)
-
-        self.debugCard = PushSettingCard(
-            text='set debug',
-            icon=FIF.CODE,
-            title="debug",
-            content=str(self.jumpinConfig.debug),
-            parent=self.basicSettingGroup
-        )
-        self.debugCard.setEnabled(False)
-
-        # personalization
-        self.othersGroup = SettingCardGroup(
-            self.tr('其他设置'), self.scrollWidget)
-        self.otherCard = SettingCard(
-            icon=FIF.TRANSPARENT,
-            title='待添加其他设置...',
-            content='待添加...',
-            parent=self.othersGroup
-        )
+        # 添加到基本设置组
+        self.basicSettingGroup.addSettingCard(self.appNameCard)
+        self.basicSettingGroup.addSettingCard(self.versionCard)
+        self.basicSettingGroup.addSettingCard(self.workDirCard)
         
-        # # material
-        # self.materialGroup = SettingCardGroup(
-        #     self.tr('Material'), self.scrollWidget)
-  
-        # # update software
-        # self.updateSoftwareGroup = SettingCardGroup(
-        #     self.tr("Software update"), self.scrollWidget)
+        # 创建LLM模型配置表单
+        self.llmProviderForm = LLMProviderForm(self.jumpinConfig)
+        
+        # 创建LLM模型设置组
+        self.modelSettingGroup = SettingCardGroup(
+            "LLM模型设置", self.scrollWidget)
+        
+        # 直接添加LLMProviderForm到模型设置组
+        self.modelSettingGroup.addSettingCard(self.llmProviderForm)
+        
+        # 其他设置组
+        self.otherSettingGroup = SettingCardGroup(
+            "其他设置", self.scrollWidget)
 
+        self.downloadFolderCard = PrimaryPushSettingCard(
+            icon=FIF.DOWNLOAD,
+            title='关于',
+            content="",
+            text='前往GitHub'
+        )
+        self.downloadFolderCard.clicked.connect(self.__onDownloadFolderCardClicked)
 
-        # application
-        self.aboutGroup = SettingCardGroup('帮助与反馈', self.scrollWidget)
-        self.helpCard = HyperlinkCard(
-            "www.baidu.com",
-            text='打开帮助页面',
-            icon=FIF.HELP,
-            title='Help',
-            content='打开帮助页面：www.baidu.com。。。',
-            parent=self.aboutGroup
-        )
-        self.feedbackCard = PrimaryPushSettingCard(
-            text='反馈',
-            icon=FIF.FEEDBACK,
-            title='简单主按钮',
-            content='简单主按钮...',
-            parent=self.aboutGroup
-        )
+        # 添加到其他设置组
+        self.otherSettingGroup.addSettingCard(self.downloadFolderCard)
 
         self.__initWidget()
+        self.__initLayout()
+        self.__connectSignalToSlot()
+
+    def __onDownloadFolderCardClicked(self):
+        """ download folder card clicked slot """
+        # 打开GitHub页面或其他相关操作
+        pass
 
     def __initWidget(self):
+        """初始化控件属性"""
         self.resize(1000, 800)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.setViewportMargins(0, 80, 0, 20)
         self.setWidget(self.scrollWidget)
         self.setWidgetResizable(True)
         self.setObjectName('settingInterface')
-
-        # initialize style sheet
+        
+        # 初始化样式表
         self.scrollWidget.setObjectName('scrollWidget')
         self.settingLabel.setObjectName('settingLabel')
-        # StyleSheet.SETTING_INTERFACE.apply(self)
-
-
-        # initialize layout
-        self.__initLayout()
-        self.__connectSignalToSlot()
+        # self.modelSettingLabel.setContentsMargins(36, 10, 0, 0)
 
     def __initLayout(self):
+        """初始化布局"""
         self.settingLabel.move(36, 30)
 
-        # add cards to group
-        self.basicSettingGroup.addSettingCard(self.appWorkDirCard)
-        self.basicSettingGroup.addSettingCard(self.appNameCard)
-        self.basicSettingGroup.addSettingCard(self.appVersionCard)
-        self.basicSettingGroup.addSettingCard(self.appConfigFileNameCard)
-        self.basicSettingGroup.addSettingCard(self.debugCard)
-
-        self.othersGroup.addSettingCard(self.otherCard)
-   
-        self.aboutGroup.addSettingCard(self.helpCard)
-        self.aboutGroup.addSettingCard(self.feedbackCard)
-
-        # add setting card group to layout
+        # 将设置组添加到布局中
         self.expandLayout.setSpacing(28)
         self.expandLayout.setContentsMargins(36, 10, 36, 0)
         self.expandLayout.addWidget(self.basicSettingGroup)
-        self.expandLayout.addWidget(self.othersGroup)
-        # self.expandLayout.addWidget(self.materialGroup)
-        # self.expandLayout.addWidget(self.updateSoftwareGroup)
-        self.expandLayout.addWidget(self.aboutGroup)
-
-    # def __showRestartTooltip(self):
-    #     """ show restart tooltip """
-    #     InfoBar.success(
-    #         self.tr('Updated successfully'),
-    #         self.tr('Configuration takes effect after restart'),
-    #         duration=1500,
-    #         parent=self
-    #     )
-
-    def __onDownloadFolderCardClicked(self):
-        """ download folder card clicked slot """
-        # folder = QFileDialog.getExistingDirectory(
-        #     self, self.tr("Choose folder"), "./")
-        # if not folder or cfg.get(cfg.downloadFolder) == folder:
-        #     return
-
-        # cfg.set(cfg.downloadFolder, folder)
-        # self.downloadFolderCard.setContent(folder)
-        pass
+        self.expandLayout.addWidget(self.modelSettingGroup)  # 添加LLM模型设置组
+        self.expandLayout.addWidget(self.otherSettingGroup)
 
     def __connectSignalToSlot(self):
-        """ connect signal to slot """
-        # cfg.appRestartSig.connect(self.__showRestartTooltip)
-
-        # # music in the pc
-        # self.downloadFolderCard.clicked.connect(
-        #     self.__onDownloadFolderCardClicked)
-
-        # # personalization
-        # cfg.themeChanged.connect(setTheme)
-        # self.themeColorCard.colorChanged.connect(lambda c: setThemeColor(c))
-        # self.micaCard.checkedChanged.connect(signalBus.micaEnableChanged)
-
-        # # about
-        # self.feedbackCard.clicked.connect(
-        #     lambda: QDesktopServices.openUrl(QUrl(FEEDBACK_URL)))
+        """连接信号和槽"""
+        # 在此处添加需要的信号连接
         pass
 
 class JumpinNavigationWidget(NavigationPushButton):
@@ -4907,9 +5177,6 @@ class AAXWJumpinMainWindow(AAXWFramelessWindow):
         
 
 
-
-        
-
         # 默认显示消息展示面板
         self.mainStackedFrame.setCurrentWidget(self.msgShowingPanel)
         # initialize content layout
@@ -5098,7 +5365,7 @@ class AAXWJumpinMainWindow(AAXWFramelessWindow):
     #         parent=self
     #     )
     #     w.yesButton.setText('你也好')
-    #     w.cancelButton.setText('下次一定说“你也好”')
+    #     w.cancelButton.setText('下次一定说"你也好"')
 
     #     if w.exec():
     #         # QDesktopServices.openUrl(QUrl("https://xxxxx"))
@@ -5408,7 +5675,7 @@ if __name__ == "__main__":
             #安装插件，时会实例化插件其中可能会需要各种主干资源。
             pluginManager.installAllDetectedPlugins() #安装初始化所有插件
         
-            # 插件以及applet加载完成后， 初始化“伙伴与应用”的列表
+            # 插件以及applet加载完成后， 初始化"伙伴与应用"的列表
             defaultCompoApplet._initBuddyAndAppletListUI()
 
             tray=AAXWJumpinTrayKit(mainWindow)
