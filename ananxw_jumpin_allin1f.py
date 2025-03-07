@@ -951,16 +951,31 @@ class AAXWJumpinPluginManager(AAXWFileSourcePluginManager):
 
 # 基本config信息，与默认配置；
 # 添加LLM提供商配置的DTO类
-class OpenAIProviderConfig(BaseModel):
+class OpenAIProvider(BaseModel):
     """OpenAI提供商配置DTO"""
     apiKey: str = ""
     baseUrl: str = ""
-    modelName: str = "gpt-4o-mini"
+    # modelName: str = "gpt-4o-mini"
+    defaultModelName:str="gpt-4o-mini"
+
+    def candidateModels(self):
+        return [
+            "gpt-4o-mini",
+            "gpt-4o",
+            "gpt-3.5-turbo",
+        ]
     
-class OllamaProviderConfig(BaseModel):
+class OllamaProvider(BaseModel):
     """Ollama提供商配置DTO"""
     serviceUrl: str = "http://localhost:11434"
-    modelName: str = "llama3"
+    # modelName: str = "llama3"
+    defaultModelName:str=""
+    def candidateModels(self):
+        return [
+            "llama3.2",
+            "llama3.1",
+            "llama3.1:8b",
+        ]
 
 # 基本config信息，与默认配置；
 @AAXWJumpinDICUtilz.register(key="jumpinConfig") 
@@ -979,6 +994,7 @@ class AAXWJumpinConfig:
 
     # LLM配置默认值
     DEFAULT_LLM_PROVIDER = "openai"  # 默认LLM提供商
+    DEFAULT_LLM_MODEL = "gpt-4o-mini"  # 默认LLM模型
     
     # 原有的 QSS 配置保持不变
     MSGSHOWINGPANEL_QSS = """
@@ -1047,12 +1063,13 @@ class AAXWJumpinConfig:
         self.appWorkDir = self.APP_WORK_DIR_DEFAULT
         self.appConfigFilename = self.APP_CONFIG_FILENAME_DEFAULT
         
-        # 初始化LLM配置属性
-        self.defaultLLMProvider = self.DEFAULT_LLM_PROVIDER
+        # 初始化LLM配置属性 - 修改属性名
+        self.llmProvider = self.DEFAULT_LLM_PROVIDER
+        self.llmModel = self.DEFAULT_LLM_MODEL
         
         # 使用DTO类初始化配置
-        self.openaiConfig = OpenAIProviderConfig()
-        self.ollamaConfig = OllamaProviderConfig()
+        self.openaiProvider = OpenAIProvider()
+        self.ollamaProvider = OllamaProvider()
 
         # 默认顺序初始化
         self.loadEnv()
@@ -1075,18 +1092,6 @@ class AAXWJumpinConfig:
         self.logLevel = os.environ.get('AAXW_LOG_LEVEL', self.logLevel)
         self.appConfigFilename = os.environ.get('AAXW_CONFIG_FILE_NAME', self.appConfigFilename)
         self.debug = os.environ.get('AAXW_DEBUG', self.debug)
-        
-        # 加载LLM相关环境变量
-        self.defaultLLMProvider = os.environ.get('AAXW_DEFAULT_LLM_PROVIDER', self.defaultLLMProvider)
-        
-        # OpenAI配置
-        self.openaiConfig.apiKey = os.environ.get('OPENAI_API_KEY', self.openaiConfig.apiKey)
-        self.openaiConfig.baseUrl = os.environ.get('OPENAI_BASE_URL', self.openaiConfig.baseUrl)
-        self.openaiConfig.modelName = os.environ.get('OPENAI_MODEL_NAME', self.openaiConfig.modelName)
-        
-        # Ollama配置
-        self.ollamaConfig.serviceUrl = os.environ.get('OLLAMA_SERVICE_URL', self.ollamaConfig.serviceUrl)
-        self.ollamaConfig.modelName = os.environ.get('OLLAMA_MODEL_NAME', self.ollamaConfig.modelName)
 
     def loadArgs(self):
         """从命令行参数加载配置"""
@@ -1095,7 +1100,6 @@ class AAXWJumpinConfig:
         parser.add_argument('--log-level', help='Logging level')
         parser.add_argument('--config-file', help='Configuration file name')
         parser.add_argument('--debug', action='store_true', help='Enable debug mode')
-        parser.add_argument('--llm-provider', help='Default LLM provider (openai/ollama)')
         
         args, unknown = parser.parse_known_args()
         if args.appworkdir:
@@ -1106,8 +1110,6 @@ class AAXWJumpinConfig:
             self.appConfigFilename = args.config_file
         if args.debug is not None:
             self.debug = args.debug
-        if args.llm_provider:
-            self.defaultLLMProvider = args.llm_provider
 
     def loadYaml(self, yamlPath=None):
         """从YAML配置文件加载配置"""
@@ -1119,20 +1121,20 @@ class AAXWJumpinConfig:
                     if yaml_config:
                         # 更新基础配置
                         for key, value in yaml_config.items():
-                            if key != 'openaiConfig' and key != 'ollamaConfig':
+                            if key != 'openaiProvider' and key != 'ollamaProvider':
                                 if hasattr(self, key):
                                     setattr(self, key, value)
                         
-                        # 更新Provider配置
-                        if 'openaiConfig' in yaml_config and isinstance(yaml_config['openaiConfig'], dict):
-                            for key, value in yaml_config['openaiConfig'].items():
-                                if hasattr(self.openaiConfig, key):
-                                    setattr(self.openaiConfig, key, value)
+                        # 更新Provider配置，移除兼容旧版本的代码
+                        if 'openaiProvider' in yaml_config and isinstance(yaml_config['openaiProvider'], dict):
+                            for key, value in yaml_config['openaiProvider'].items():
+                                if hasattr(self.openaiProvider, key):
+                                    setattr(self.openaiProvider, key, value)
                         
-                        if 'ollamaConfig' in yaml_config and isinstance(yaml_config['ollamaConfig'], dict):
-                            for key, value in yaml_config['ollamaConfig'].items():
-                                if hasattr(self.ollamaConfig, key):
-                                    setattr(self.ollamaConfig, key, value)
+                        if 'ollamaProvider' in yaml_config and isinstance(yaml_config['ollamaProvider'], dict):
+                            for key, value in yaml_config['ollamaProvider'].items():
+                                if hasattr(self.ollamaProvider, key):
+                                    setattr(self.ollamaProvider, key, value)
                     
                     self.AAXW_CLASS_LOGGER.info(f"Yaml config file loaded: {yaml_path}")
                 except yaml.YAMLError as e:
@@ -1149,12 +1151,12 @@ class AAXWJumpinConfig:
         
         # 添加基础属性
         for key, value in self.__dict__.items():
-            if not key.startswith('_') and key != 'AAXW_CLASS_LOGGER' and key not in ['openaiConfig', 'ollamaConfig']:
+            if not key.startswith('_') and key != 'AAXW_CLASS_LOGGER' and key not in ['openaiProvider', 'ollamaProvider']:
                 config_dict[key] = value
         
         # 添加Provider配置
-        config_dict['openaiConfig'] = self.openaiConfig.dict()
-        config_dict['ollamaConfig'] = self.ollamaConfig.dict()
+        config_dict['openaiProvider'] = self.openaiProvider.model_dump()
+        config_dict['ollamaProvider'] = self.ollamaProvider.model_dump()
         
         try:
             # 确保目录存在
@@ -1178,32 +1180,36 @@ class AAXWJumpinConfig:
 
     def logLLMConfig(self):
         """记录当前LLM配置"""
-        self.AAXW_CLASS_LOGGER.debug(f"当前LLM配置: 默认提供商={self.defaultLLMProvider}")
+        self.AAXW_CLASS_LOGGER.debug(f"当前LLM配置: 提供商={self.llmProvider}, 模型={self.llmModel}")
         
         # 记录OpenAI配置
-        self.AAXW_CLASS_LOGGER.debug(f"OpenAI配置: 模型={self.openaiConfig.modelName}, API基础URL={self.openaiConfig.baseUrl}")
+        self.AAXW_CLASS_LOGGER.debug(f"OpenAI配置: API基础URL={self.openaiProvider.baseUrl}")
         
         # 记录Ollama配置
-        self.AAXW_CLASS_LOGGER.debug(f"Ollama配置: 模型={self.ollamaConfig.modelName}, 服务URL={self.ollamaConfig.serviceUrl}")
+        self.AAXW_CLASS_LOGGER.debug(f"Ollama配置: 服务URL={self.ollamaProvider.serviceUrl}")
 
-    def updateLLMConfig(self, defaultProvider=None, openaiConfig=None, ollamaConfig=None):
+    def updateLLMConfig(self, provider=None, openaiConfig=None, ollamaConfig=None, llmModel=None):
         """更新LLM配置并保存到YAML"""
         changed = False
         
-        if defaultProvider and defaultProvider in ['openai', 'ollama']:
-            self.defaultLLMProvider = defaultProvider
+        if provider and provider in ['openai', 'ollama']:
+            self.llmProvider = provider
+            changed = True
+        
+        if llmModel:
+            self.llmModel = llmModel
             changed = True
             
         if openaiConfig:
             for key, value in openaiConfig.items():
-                if hasattr(self.openaiConfig, key):
-                    setattr(self.openaiConfig, key, value)
+                if hasattr(self.openaiProvider, key):
+                    setattr(self.openaiProvider, key, value)
                     changed = True
                 
         if ollamaConfig:
             for key, value in ollamaConfig.items():
-                if hasattr(self.ollamaConfig, key):
-                    setattr(self.ollamaConfig, key, value)
+                if hasattr(self.ollamaProvider, key):
+                    setattr(self.ollamaProvider, key, value)
                     changed = True
         
         if changed:
@@ -1226,10 +1232,10 @@ class AAXWJumpinConfig:
 
     def getActiveProviderConfig(self):
         """获取当前激活的提供商配置"""
-        if self.defaultLLMProvider == "openai":
-            return self.openaiConfig
-        elif self.defaultLLMProvider == "ollama":
-            return self.ollamaConfig
+        if self.llmProvider == "openai":
+            return self.openaiProvider
+        elif self.llmProvider == "ollama":
+            return self.ollamaProvider
         else:
             return None
 
@@ -1280,7 +1286,7 @@ class AAXWSimpleAIConnOrAgent(AAXWAbstractAIConnOrAgent):
     {message}
     """
     
-    def __init__(self, api_key:str =None,base_url:str=None, model_name: str = "gpt-4o-mini"): # type: ignore
+    def __init__(self, api_key:str =None, base_url:str=None, model_name: str = "gpt-4o-mini"): # type: ignore
         """
         初始化OpenAI连接代理。
         
@@ -1289,26 +1295,50 @@ class AAXWSimpleAIConnOrAgent(AAXWAbstractAIConnOrAgent):
         :param model_name: 使用的模型名称。
         """
         # 从环境变量读取API密钥和URL
-        self.openai_api_key = api_key or os.getenv('OPENAI_API_KEY')
-        self.openai_base_url = base_url or os.getenv('OPENAI_BASE_URL')
+        self.api_key = api_key or os.getenv('OPENAI_API_KEY')
+        self.base_url = base_url or os.getenv('OPENAI_BASE_URL')
         self.model_name = model_name or os.getenv('OPENAI_MODEL_NAME', 'gpt-4o-mini')
         
-        if not self.openai_api_key:
-            raise ValueError("OpenAI API key is required.")
+        # 调用updateConfig方法来初始化所有配置
+        self.updateConfig(
+            apiKey=self.api_key, baseUrl= self.base_url, modelName= self.model_name) # type: ignore
+    
+    def updateConfig(
+            self, apiKey: str = None, baseUrl: str = None, modelName: str = None): # type: ignore
+        """
+        更新OpenAI连接配置。
         
+        :param api_key: 新的OpenAI API密钥。
+        :param base_url: 新的OpenAI API基础URL。
+        :param model_name: 新的模型名称。
+        :param isInit: 是否是初始化调用。
+        """
+    
+        # 更新模式：只更新非None的参数
+        if apiKey is not None:
+            self.api_key = apiKey
+        
+        if baseUrl is not None:
+            self.base_url = baseUrl
+            
+        if modelName is not None:
+            self.model_name = modelName
+            
+        # 构建LLM参数
         chat_params = {
             "temperature": 0,
             "model": self.model_name,
-            "api_key": self.openai_api_key,
+            "api_key": self.api_key,
         }
         
-        if self.openai_base_url:
-            chat_params["base_url"] = self.openai_base_url
-
-        # 
-        # self.AAXW_CLASS_LOGGER.debug(f"chat_params: {chat_params}")
+        if self.base_url:
+            chat_params["base_url"] = self.base_url
+            
+        # 初始化或更新LLM实例
+        self.llm = ChatOpenAI(**chat_params)
         
-        self.llm: ChatOpenAI = ChatOpenAI(**chat_params)
+        # 仅在非初始化时记录日志
+        self.AAXW_CLASS_LOGGER.info(f"OpenAI连接配置已更新，模型: {self.model_name}")
     
     @override
     def requestAndCallback(self, 
@@ -1338,8 +1368,6 @@ class AAXWSimpleAIConnOrAgent(AAXWAbstractAIConnOrAgent):
             response = self.llm.invoke(messages)
             func(str(response.content))
 
-
-
     def embedding(self, prompt: str, model: str = "text-embedding-ada-002"):
         """
         获取文本嵌入。
@@ -1349,15 +1377,28 @@ class AAXWSimpleAIConnOrAgent(AAXWAbstractAIConnOrAgent):
         :return: 文本的嵌入向量。
         """
         embeddings = OpenAIEmbeddings(
-            api_key=self.openai_api_key,
-            base_url=self.openai_base_url,
+            api_key=self.api_key,
+            base_url=self.base_url,
             model=model
         )
         return embeddings.embed_query(prompt)
-
-
-
-
+    
+    def edit(self, prompt: str, instruction: str):
+        """
+        根据指令编辑文本。
+        
+        :param prompt: 原始文本。
+        :param instruction: 编辑指令。
+        :return: 编辑后的文本。
+        """
+        # 目前OpenAI不再提供专门的edit API，使用聊天完成API模拟
+        system_content = f"你是一个文本编辑助手。请按照以下指令编辑提供的文本：\n{instruction}"
+        system_message = SystemMessage(content=system_content)
+        human_message = HumanMessage(content=prompt)
+        messages = [system_message, human_message]
+        
+        response = self.llm.invoke(messages)
+        return response.content
 
 
 @AAXWJumpinDICUtilz.register(key="ollamaAIConnOrAgent")
@@ -1382,21 +1423,24 @@ class AAXWOllamaAIConnOrAgent(AAXWAbstractAIConnOrAgent):
     
     def __init__(self, modelName: str = ""): #llama3.2:3b qwen2:1.5b qwen2.5:7b
         # 设置默认的 API URL
-        self.api_url = "http://localhost:11434"
-        
+        self.base_url = "http://localhost:11434/v1"
+        self.modelName= modelName or os.getenv("OPENAI_MODEL_NAME", "")
+    
+    def updateConfig(
+            self, apiKey: str = "ollama", baseUrl: str = None, modelName: str = None): # type: ignore
+        # 设置默认的 API URLbaseUrl
+        self.base_url = baseUrl
+        self.modelName= modelName
+
         self.client = OpenAI(
-            base_url=f"{self.api_url}/v1",
-            api_key="ollama"
+            base_url=self.base_url,
+            api_key=apiKey,
         )
-        
-        # 如果model_name为空，尝试从环境变量获取
-        if not modelName:
-            modelName = os.getenv("OPENAI_MODEL_NAME", "")
-        
-        self.modelName = None
+
+        # 
         # 如果仍为空，从可用模型中选择一个
         try:
-            if not modelName:
+            if not self.modelName:
                 modelName = self._selectPreferredModel()
                 
             self.modelName = modelName
@@ -1407,8 +1451,7 @@ class AAXWOllamaAIConnOrAgent(AAXWAbstractAIConnOrAgent):
         except Exception as e:
             self.AAXW_CLASS_LOGGER.error(
                 f"Error initializing Ollama model: {str(e)};Ollama访问模块功能可能不可用或需要至少下载1个模型")
-
-        
+        pass
     
     def _selectPreferredModel(self) -> str:
         """从可用模型中选择首选模型"""
@@ -1482,7 +1525,7 @@ class AAXWOllamaAIConnOrAgent(AAXWAbstractAIConnOrAgent):
         try:
             # 构建请求
             req = urllib.request.Request(
-                urllib.parse.urljoin(self.api_url, "/api/pull"),
+                urllib.parse.urljoin(self.base_url, "/api/pull"),
                 data=json.dumps({
                     "name": model_name,
                     "insecure": insecure,
@@ -1558,18 +1601,165 @@ class AAXWOllamaAIConnOrAgent(AAXWAbstractAIConnOrAgent):
         except Exception as e:
             raise Exception(f"Failed to generate stream chat completion: {str(e)}")
 
-# @AAXWJumpinDICUtilz.register(key="aiConnOrAgentProxy")
-# @AAXW_JUMPIN_LOG_MGR.classLogger()
-# class AIConnOrAgentProxy(AAWXAbstractAIConnOrAgent):
-#     def __init__(self, innerInst: AAWXAbstractAIConnOrAgent=None): #type:ignore
-#         self.innerInstance = innerInst
-
-#     @override
-#     def requestAndCallback(self, prompt: str, func: Callable[[str], None],isStream: bool = True):
-#         return self.innerInstance.requestAndCallback(prompt, func=func,isStream=isStream)
-
-#     def setInnerInstance(self, innerInst: AAWXAbstractAIConnOrAgent):
-#         self.innerInstance = innerInst
+@AAXWJumpinDICUtilz.register(
+    key="configurableAIConnOrAgent", 
+    jumpinConfig="jumpinConfig",
+    dependencyContainer="_nativeDependencyContainer"  # 添加 DI 容器注入
+)
+@AAXW_JUMPIN_LOG_MGR.classLogger(level=logging.DEBUG)
+class ConfigurableAIConnOrAgent(AAXWAbstractAIConnOrAgent):
+    """
+    可配置的AI连接器代理类。
+    根据jumpinConfig配置动态选择使用Ollama或标准OpenAI连接器。
+    支持通过依赖注入获取内部实例。
+    """
+    AAXW_CLASS_LOGGER: logging.Logger
+    
+    def __init__(self):
+        """初始化配置型AI连接器代理"""
+        self.jumpinConfig: AAXWJumpinConfig = None  # type:ignore
+        self.innerInstance = None
+        self.dependencyContainer: AAXWDependencyContainer = None  # type:ignore
+        
+    def initConfig(self, jumpinConfig):
+        """
+        根据传入的配置初始化内部实例
+        
+        Args:
+            jumpinConfig: 包含AI连接器配置的对象
+        """
+        self.jumpinConfig = jumpinConfig
+        self._initializeInnerInstance()
+        
+    def _initializeInnerInstance(self):
+        """初始化内部AI连接器实例，根据配置选择合适的实现"""
+        # 获取活跃的 LLM 提供商和模型
+        llmProvider = self.jumpinConfig.llmProvider
+        llmModelName = self.jumpinConfig.llmModel
+        
+        self.AAXW_CLASS_LOGGER.info(f"初始化LLM连接器，提供商: {llmProvider}, 模型: {llmModelName}")
+        
+        if llmProvider == "ollama":
+            # 从DI容器获取Ollama连接器
+            self.AAXW_CLASS_LOGGER.info("使用Ollama连接器")
+            self.innerInstance = self.dependencyContainer.getAANode("ollamaAIConnOrAgent")
+            
+            # 根据类型直接更新Ollama配置
+            if isinstance(self.innerInstance, AAXWOllamaAIConnOrAgent):
+                ollamaConfig = self.jumpinConfig.getActiveProviderConfig()
+                if ollamaConfig and isinstance(ollamaConfig, OllamaProvider):
+                    try:
+                        serviceUrl = ollamaConfig.serviceUrl
+                        self.innerInstance.updateConfig(
+                            baseUrl=serviceUrl,
+                            modelName=llmModelName
+                        )
+                        self.AAXW_CLASS_LOGGER.info(f"已更新Ollama配置，服务URL: {serviceUrl}, 模型: {llmModelName}")
+                    except Exception as e:
+                        self.AAXW_CLASS_LOGGER.error(f"更新Ollama配置失败: {str(e)}")
+        else:
+            # 从DI容器获取OpenAI连接器
+            self.AAXW_CLASS_LOGGER.info("使用OpenAI连接器")
+            self.innerInstance = self.dependencyContainer.getAANode("simpleAIConnOrAgent")
+            
+            # 根据类型直接更新OpenAI配置
+            if isinstance(self.innerInstance, AAXWSimpleAIConnOrAgent):
+                openaiConfig = self.jumpinConfig.getActiveProviderConfig()
+                if openaiConfig and isinstance(openaiConfig, OpenAIProvider):
+                    try:
+                        self.innerInstance.updateConfig(
+                            apiKey=openaiConfig.apiKey,
+                            baseUrl=openaiConfig.baseUrl,
+                            modelName=llmModelName
+                        )
+                        self.AAXW_CLASS_LOGGER.info(f"已更新OpenAI配置，模型: {llmModelName}")
+                    except Exception as e:
+                        self.AAXW_CLASS_LOGGER.error(f"更新OpenAI配置失败: {str(e)}")
+    
+    @override
+    def requestAndCallback(self, prompt: str, func: Callable[[str], None], isStream: bool = True):
+        """
+        向LLM发送请求并通过回调处理响应
+        
+        Args:
+            prompt: 输入提示词
+            func: 回调函数，用于处理返回的响应文本
+            isStream: 是否使用流式响应
+        """
+        # 确保内部实例已初始化
+        if not self.innerInstance:
+            self._initializeInnerInstance()
+            
+        # 如果内部实例仍然为空，抛出异常
+        if not self.innerInstance:
+            errorMsg = "未能初始化AI连接器，请检查配置"
+            self.AAXW_CLASS_LOGGER.error(errorMsg)
+            raise RuntimeError(errorMsg)
+            
+        # 委托给内部实例处理请求
+        try:
+            self.innerInstance.requestAndCallback(prompt, func, isStream)
+        except Exception as e:
+            self.AAXW_CLASS_LOGGER.error(f"AI请求失败: {str(e)}")
+            # 向UI回调发送错误信息
+            func(f"\n\n[错误] AI请求失败: {str(e)}")
+    
+    @override
+    def embedding(self, prompt: str):
+        """
+        获取文本的embedding向量
+        
+        Args:
+            prompt: 输入文本
+            
+        Returns:
+            文本的embedding向量
+        """
+        # 确保内部实例已初始化
+        if not self.innerInstance:
+            self._initializeInnerInstance()
+            
+        # 如果内部实例仍然为空，抛出异常
+        if not self.innerInstance:
+            errorMsg = "未能初始化AI连接器，请检查配置"
+            self.AAXW_CLASS_LOGGER.error(errorMsg)
+            raise RuntimeError(errorMsg)
+            
+        # 委托给内部实例处理embedding请求
+        try:
+            return self.innerInstance.embedding(prompt)
+        except Exception as e:
+            self.AAXW_CLASS_LOGGER.error(f"获取embedding失败: {str(e)}")
+            raise RuntimeError(f"获取embedding失败: {str(e)}")
+    
+    @override
+    def edit(self, prompt: str, instruction: str):
+        """
+        获取LLM的文本编辑结果
+        
+        Args:
+            prompt: 原始文本
+            instruction: 编辑指令
+            
+        Returns:
+            编辑后的文本
+        """
+        # 确保内部实例已初始化
+        if not self.innerInstance:
+            self._initializeInnerInstance()
+            
+        # 如果内部实例仍然为空，抛出异常
+        if not self.innerInstance:
+            errorMsg = "未能初始化AI连接器，请检查配置"
+            self.AAXW_CLASS_LOGGER.error(errorMsg)
+            raise RuntimeError(errorMsg)
+            
+        # 委托给内部实例处理编辑请求
+        try:
+            return self.innerInstance.edit(prompt, instruction)
+        except Exception as e:
+            self.AAXW_CLASS_LOGGER.error(f"文本编辑失败: {str(e)}")
+            raise RuntimeError(f"文本编辑失败: {str(e)}")
 
 
 ##
@@ -3255,7 +3445,7 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
         self.agentEnvironment:AgentEnvironment=None #type:ignore
         self.aaAgent:BaseAgent=None #type:ignore
         pass
-
+    
     @override
     def getName(self) -> str:return  self.name
     @override
@@ -3267,8 +3457,12 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
         #
         #加入管理时获取细节资源,内置简单ai访问器（Openai）
         # ai  （后台类资源默认应该都有）
-        self.simpleAIConnOrAgent:AAXWSimpleAIConnOrAgent=self.dependencyContainer.getAANode(
-            "simpleAIConnOrAgent")
+
+        # self.simpleAIConnOrAgent:AAXWSimpleAIConnOrAgent=self.dependencyContainer.getAANode(
+        #     "simpleAIConnOrAgent")
+        self.simpleAIConnOrAgent:AAXWAbstractAIConnOrAgent=self.dependencyContainer.getAANode(
+            "configurableAIConnOrAgent")
+        
         # 
 
         self.jumpinAIMemoryManager:AAXWJumpinFileAIMemoryManager=self.dependencyContainer.getAANode(
@@ -3776,7 +3970,7 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
             isUserMode = self.userRadio.isChecked()
             self.nameLineEdit.setEnabled(isUserMode)
             self.warningLabel.setVisible(isUserMode and not self.validate())
-        
+    
         @override
         def validate(self):
             """ Rewrite the virtual method """
@@ -4007,7 +4201,7 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
             self.mutexLocker= AAXW_JUMPIN_QTSRR.getMutex(
                 resourceId="Thread_"+str(self.mainWindow.msgShowingPanel.THREAD_SAFE_RESOURCE_ID))
             self.setAutoDelete(True)  # 设置自动删除
-            
+    
         @override
         def run(self):
             """线程运行方法"""
@@ -4663,9 +4857,9 @@ class AAXWJumpinThreadSafeMsgShowingPanel(AAXWScrollPanel):
 class LLMProviderForm(QWidget):
     """LLM模型提供商配置表单"""
     
-    def __init__(self, jumpinConfig):
+    def __init__(self, jumpinConfig:AAXWJumpinConfig):
         super().__init__()
-        self.jumpinConfig = jumpinConfig
+        self.jumpinConfig:AAXWJumpinConfig = jumpinConfig
         
         # 创建主布局
         self.layout = QVBoxLayout(self)
@@ -4705,7 +4899,7 @@ class LLMProviderForm(QWidget):
     def onProviderChanged(self, routeKey):
         """处理提供商切换的方法"""
         # 根据routeKey设置stackedWidget的当前索引
-        print(f"onProviderChanged: {routeKey}")
+        # print(f"onProviderChanged: {routeKey}")
         if routeKey == "openai":
             self.stackedWidget.setCurrentWidget(self.openaiTab)
         elif routeKey == "ollama":
@@ -4720,7 +4914,7 @@ class LLMProviderForm(QWidget):
         apiKeyLabel = BodyLabel("API密钥:")
         self.apiKeyEdit = LineEdit()
         self.apiKeyEdit.setPlaceholderText("输入您的OpenAI API Key")
-        self.apiKeyEdit.setText(self.jumpinConfig.openaiConfig.apiKey)
+        self.apiKeyEdit.setText(self.jumpinConfig.openaiProvider.apiKey)
         self.apiKeyEdit.setClearButtonEnabled(True)
         self.apiKeyEdit.setEchoMode(QLineEdit.EchoMode.Password)
         
@@ -4728,17 +4922,18 @@ class LLMProviderForm(QWidget):
         baseUrlLabel = BodyLabel("基础URL:")
         self.baseUrlEdit = LineEdit()
         self.baseUrlEdit.setPlaceholderText("输入API基础URL（可选）")
-        self.baseUrlEdit.setText(self.jumpinConfig.openaiConfig.baseUrl)
+        self.baseUrlEdit.setText(self.jumpinConfig.openaiProvider.baseUrl)
         self.baseUrlEdit.setClearButtonEnabled(True)
         
         # 模型选择
         modelLabel = BodyLabel("模型:")
         self.modelComboBox = ComboBox()
-        models = ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"]
+        # models = ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"]
+        models = self.jumpinConfig.openaiProvider.candidateModels()
         self.modelComboBox.addItems(models)
         
         # 设置默认模型
-        defaultModel = self.jumpinConfig.openaiConfig.modelName
+        defaultModel = self.jumpinConfig.openaiProvider.defaultModelName
         index = self.modelComboBox.findText(defaultModel)
         if index >= 0:
             self.modelComboBox.setCurrentIndex(index)
@@ -4768,7 +4963,7 @@ class LLMProviderForm(QWidget):
         serviceUrlLabel = BodyLabel("服务地址:")
         self.serviceUrlEdit = LineEdit()
         self.serviceUrlEdit.setPlaceholderText("例如: http://localhost:11434")
-        self.serviceUrlEdit.setText(self.jumpinConfig.ollamaConfig.serviceUrl)
+        self.serviceUrlEdit.setText(self.jumpinConfig.ollamaProvider.serviceUrl)
         self.serviceUrlEdit.setClearButtonEnabled(True)
         
         # 模型选择
@@ -4778,7 +4973,7 @@ class LLMProviderForm(QWidget):
         self.ollamaModelComboBox.addItems(ollamaModels)
         
         # 设置默认模型
-        defaultOllamaModel = self.jumpinConfig.ollamaConfig.modelName
+        defaultOllamaModel = self.jumpinConfig.ollamaProvider.defaultModelName
         index = self.ollamaModelComboBox.findText(defaultOllamaModel)
         if index >= 0:
             self.ollamaModelComboBox.setCurrentIndex(index)
