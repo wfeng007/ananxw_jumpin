@@ -5147,9 +5147,13 @@ class AAXWJumpinSettingPanel(ScrollArea):
         self.scrollWidget = QWidget()
         self.expandLayout = ExpandLayout(self.scrollWidget)
         
-
         # setting label
         self.settingLabel = QLabel("设置", self)
+        # 设置字体更大并加粗
+        font = self.settingLabel.font()
+        font.setPointSize(16)  # 增大字体
+        font.setBold(True)     # 加粗字体
+        self.settingLabel.setFont(font)
 
         # 基本设置组
         self.basicSettingGroup = SettingCardGroup(
@@ -5221,7 +5225,8 @@ class AAXWJumpinSettingPanel(ScrollArea):
         # self.resize(1000, 800)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.setViewportMargins(0, 80, 0, 20)
+        # 这里是空出上部空间，因为设置标签字体更大并加粗，所以空出50
+        self.setViewportMargins(0, 50, 0, 20)  # 原来是80，现在改为50，减小上部区域高度
         self.setWidget(self.scrollWidget)
         self.setWidgetResizable(True)
         self.setObjectName('settingInterface')
@@ -5229,11 +5234,18 @@ class AAXWJumpinSettingPanel(ScrollArea):
         # 初始化样式表
         self.scrollWidget.setObjectName('scrollWidget')
         self.settingLabel.setObjectName('settingLabel')
-        # self.modelSettingLabel.setContentsMargins(36, 10, 0, 0)
+        
+        # 添加样式表以进一步自定义标签外观
+        self.settingLabel.setStyleSheet("""
+            QLabel#settingLabel {
+                color: #303030;
+                margin-bottom: 5px;
+            }
+        """)
 
     def __initLayout(self):
         """初始化布局"""
-        self.settingLabel.move(36, 30)
+        self.settingLabel.move(36, 15)  # 原来是30，现在改为15，减小上部空间
 
         # 将设置组添加到布局中
         self.expandLayout.setSpacing(28)
@@ -5574,10 +5586,10 @@ class AAXWJumpinMainWindow(AAXWFramelessWindow):
         self.navigationInterface.addItem(
             routeKey='settings',
             icon=FIF.SETTING,
-            text='Settings',
+            text='设置',
             onClick=self.showSettingPanel,
             position=NavigationItemPosition.BOTTOM,
-            tooltip='Settings',
+            tooltip='设置(含LLM模型配置)',
         )
 
         #默认展开导航栏
