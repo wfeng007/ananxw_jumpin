@@ -967,13 +967,13 @@ class OpenAIProvider(BaseModel):
     
 class OllamaProvider(BaseModel):
     """Ollama提供商配置DTO"""
-    serviceUrl: str = "http://localhost:11434"
+    serviceUrl: str = "http://localhost:11434/v1"
     # modelName: str = "llama3"
-    defaultModelName:str=""
+    defaultModelName:str="qwen2.5:1.5b"
     def candidateModels(self):
         return [
             "llama3.2",
-            "llama3.1",
+            "qwen2.5:1.5b",
             "llama3.1:8b",
         ]
 
@@ -1071,6 +1071,10 @@ class AAXWJumpinConfig:
         self.openaiProvider = OpenAIProvider()
         self.ollamaProvider = OllamaProvider()
 
+        ## env 环境变量中读取保存的LLM配置，在yaml配置文件中没有时使用。
+        self.envOpenAIApiKey=""
+        self.envOpenAIBaseUrl=""    
+
         # 默认顺序初始化
         self.loadEnv()
         self.loadArgs()
@@ -1092,6 +1096,10 @@ class AAXWJumpinConfig:
         self.logLevel = os.environ.get('AAXW_LOG_LEVEL', self.logLevel)
         self.appConfigFilename = os.environ.get('AAXW_CONFIG_FILE_NAME', self.appConfigFilename)
         self.debug = os.environ.get('AAXW_DEBUG', self.debug)
+
+        # 从环境变量读取LLM配置
+        self.envOpenAIApiKey = os.environ.get('OPENAI_API_KEY', self.envOpenAIApiKey)
+        self.envOpenAIBaseUrl = os.environ.get('OPENAI_BASE_URL', self.envOpenAIBaseUrl)
 
     def loadArgs(self):
         """从命令行参数加载配置"""
@@ -1131,6 +1139,17 @@ class AAXWJumpinConfig:
                                 if hasattr(self.openaiProvider, key):
                                     setattr(self.openaiProvider, key, value)
                         
+                        # 检查openaiProvider的字段，如果为空则使用环境变量
+                        if hasattr(self.openaiProvider, 'apiKey') and (not self.openaiProvider.apiKey or self.openaiProvider.apiKey.strip() == ''):
+                            if self.envOpenAIApiKey:
+                                self.openaiProvider.apiKey = self.envOpenAIApiKey
+                                self.AAXW_CLASS_LOGGER.info("Using OPENAI_API_KEY from environment variable")
+                        
+                        if hasattr(self.openaiProvider, 'baseUrl') and (not self.openaiProvider.baseUrl or self.openaiProvider.baseUrl.strip() == ''):
+                            if self.envOpenAIBaseUrl:
+                                self.openaiProvider.baseUrl = self.envOpenAIBaseUrl
+                                self.AAXW_CLASS_LOGGER.info("Using OPENAI_API_BASE from environment variable")
+                        
                         if 'ollamaProvider' in yaml_config and isinstance(yaml_config['ollamaProvider'], dict):
                             for key, value in yaml_config['ollamaProvider'].items():
                                 if hasattr(self.ollamaProvider, key):
@@ -1149,9 +1168,14 @@ class AAXWJumpinConfig:
         # 构建配置字典
         config_dict = {}
         
-        # 添加基础属性
+        # 添加基础属性，排除特定属性
+        excluded_keys = [
+            'AAXW_CLASS_LOGGER', 'openaiProvider', 'ollamaProvider',
+            'envOpenAIApiKey', 'envOpenAIBaseUrl'
+        ]
+        
         for key, value in self.__dict__.items():
-            if not key.startswith('_') and key != 'AAXW_CLASS_LOGGER' and key not in ['openaiProvider', 'ollamaProvider']:
+            if not key.startswith('_') and key not in excluded_keys:
                 config_dict[key] = value
         
         # 添加Provider配置
@@ -1358,7 +1382,8 @@ class AAXWSimpleAIConnOrAgent(AAXWAbstractAIConnOrAgent):
         human_message = HumanMessage(content=self.USER_PROMPT_TEMPLE.format(message=prompt))
         messages = [system_message, human_message]
 
-        
+        self.AAXW_CLASS_LOGGER.debug(f"使用model_name:{self.model_name}, base_url:{self.base_url}; "
+            f"以及最终 prompt-messages: {messages}")
         if isStream:
             for msgChunk in self.llm.stream(messages):
                 if msgChunk.content:
@@ -1402,7 +1427,7 @@ class AAXWSimpleAIConnOrAgent(AAXWAbstractAIConnOrAgent):
 
 
 @AAXWJumpinDICUtilz.register(key="ollamaAIConnOrAgent")
-@AAXW_JUMPIN_LOG_MGR.classLogger()
+@AAXW_JUMPIN_LOG_MGR.classLogger(level=logging.DEBUG)
 class AAXWOllamaAIConnOrAgent(AAXWAbstractAIConnOrAgent):
     """
     直接使用OpenAI的接口实现。对Ollama的访问；
@@ -1425,6 +1450,7 @@ class AAXWOllamaAIConnOrAgent(AAXWAbstractAIConnOrAgent):
         # 设置默认的 API URL
         self.base_url = "http://localhost:11434/v1"
         self.modelName= modelName or os.getenv("OPENAI_MODEL_NAME", "")
+        self.updateConfig(baseUrl= self.base_url, modelName=self.modelName)
     
     def updateConfig(
             self, apiKey: str = "ollama", baseUrl: str = None, modelName: str = None): # type: ignore
@@ -1432,14 +1458,14 @@ class AAXWOllamaAIConnOrAgent(AAXWAbstractAIConnOrAgent):
         self.base_url = baseUrl
         self.modelName= modelName
 
-        self.client = OpenAI(
-            base_url=self.base_url,
-            api_key=apiKey,
-        )
-
         # 
         # 如果仍为空，从可用模型中选择一个
         try:
+            self.client = OpenAI(
+                base_url=self.base_url,
+                api_key=apiKey,
+            )
+
             if not self.modelName:
                 modelName = self._selectPreferredModel()
                 
@@ -1588,6 +1614,9 @@ class AAXWOllamaAIConnOrAgent(AAXWAbstractAIConnOrAgent):
             ChatCompletionUserMessageParam(content=formatted_prompt, role="user")
         ]
         try:
+            self.AAXW_CLASS_LOGGER.debug(
+                f"使用model_name:{self.modelName}, base_url:{self.base_url}; "
+                f"最终prompt-messages: {messages}")
             stream = self.client.chat.completions.create(
                 model=self.modelName,  #type:ignore
                 messages=messages,
@@ -1700,7 +1729,7 @@ class ConfigurableAIConnOrAgent(AAXWAbstractAIConnOrAgent):
         try:
             self.innerInstance.requestAndCallback(prompt, func, isStream)
         except Exception as e:
-            self.AAXW_CLASS_LOGGER.error(f"AI请求失败: {str(e)}")
+            self.AAXW_CLASS_LOGGER.error(f"AI请求失败及堆栈 {str(e)}\n{ traceback.format_exc()}")
             # 向UI回调发送错误信息
             func(f"\n\n[错误] AI请求失败: {str(e)}")
     
@@ -1770,7 +1799,7 @@ class ConfigurableAIConnOrAgent(AAXWAbstractAIConnOrAgent):
 #列出指定目录对话历史（或记录）列表；
 #载入项的历史记录，成为Memory/session或可进行互动操作的访问-操作器；（内部挂用LLMconn-或外层 agent进行互动操作。）
 #新建一个互动Session；
-@AAXW_JUMPIN_LOG_MGR.classLogger(level=logging.DEBUG)
+@AAXW_JUMPIN_LOG_MGR.classLogger()
 class AAXWJumpinHistoriedMemory:
     """封装单个对话的历史和内存"""
     AAXW_CLASS_LOGGER: logging.Logger
@@ -4857,17 +4886,22 @@ class AAXWJumpinThreadSafeMsgShowingPanel(AAXWScrollPanel):
 class LLMProviderForm(QWidget):
     """LLM模型提供商配置表单"""
     
-    def __init__(self, jumpinConfig:AAXWJumpinConfig):
-        super().__init__()
+    def __init__(self, dependencyContainer:AAXWDependencyContainer ,jumpinConfig:AAXWJumpinConfig,title:str,parent:QWidget=None):
+        super().__init__(parent=parent)
         self.jumpinConfig:AAXWJumpinConfig = jumpinConfig
+        self.dependencyContainer=dependencyContainer
         
         # 创建主布局
         self.layout = QVBoxLayout(self)
         self.layout.setContentsMargins(0, 0, 0, 0)
-        
+        self.layout.setSpacing(10)  # 设置合适的间距
+        self.layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+
         # 添加组标题
-        self.titleLabel = SubtitleLabel("LLM模型配置")
-        self.layout.addWidget(self.titleLabel)
+        self.titleLabel = None
+        if title:
+            self.titleLabel = SubtitleLabel(title)
+            self.layout.addWidget(self.titleLabel)
         
         # 创建分段控件和堆叠窗口
         self.segmentedWidget = SegmentedWidget(self)
@@ -4895,11 +4929,19 @@ class LLMProviderForm(QWidget):
         # 默认选择第一个选项
         self.segmentedWidget.setCurrentItem("openai")
         self.stackedWidget.setCurrentWidget(self.openaiTab)
+
+        # self.segmentedWidget.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        # self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+        self.setMaximumHeight(300)
+        # self.setMinimumHeight(150)
+        # 设置尺寸策略，防止过大的留白
+        # self.stackedWidget.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        # 设置最大高度限制，防止过大的留白
+        
     
     def onProviderChanged(self, routeKey):
         """处理提供商切换的方法"""
         # 根据routeKey设置stackedWidget的当前索引
-        # print(f"onProviderChanged: {routeKey}")
         if routeKey == "openai":
             self.stackedWidget.setCurrentWidget(self.openaiTab)
         elif routeKey == "ollama":
@@ -4909,6 +4951,10 @@ class LLMProviderForm(QWidget):
         """创建OpenAI配置选项卡"""
         container = QWidget()
         layout = QVBoxLayout(container)
+        # layout.setContentsMargins(10, 10, 10, 10)
+        # layout.setSpacing(8)  # 设置合适的间距
+        # container.setMinimumHeight(100)
+        # container.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         
         # API密钥
         apiKeyLabel = BodyLabel("API密钥:")
@@ -4950,7 +4996,9 @@ class LLMProviderForm(QWidget):
         layout.addWidget(modelLabel)
         layout.addWidget(self.modelComboBox)
         layout.addWidget(self.saveOpenAIButton)
-        layout.addStretch(1)
+        # 移除这行代码，它会导致下方留白
+        # layout.addStretch(1)
+        layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         
         return container
     
@@ -4958,6 +5006,8 @@ class LLMProviderForm(QWidget):
         """创建Ollama配置选项卡"""
         container = QWidget()
         layout = QVBoxLayout(container)
+        # layout.setContentsMargins(10, 10, 10, 10)
+        # layout.setSpacing(8)  # 设置合适的间距
         
         # 服务地址
         serviceUrlLabel = BodyLabel("服务地址:")
@@ -4969,7 +5019,7 @@ class LLMProviderForm(QWidget):
         # 模型选择
         modelLabel = BodyLabel("模型:")
         self.ollamaModelComboBox = ComboBox()
-        ollamaModels = ["llama3.1", "llama3", "llama2", "qwen2", "qwen2.5", "deepseek"]
+        ollamaModels = ["llama3.1", "llama3", "llama2", "qwen2.5:1.5b", "qwen2.5:0.5b", "deepseek"]
         self.ollamaModelComboBox.addItems(ollamaModels)
         
         # 设置默认模型
@@ -4988,7 +5038,9 @@ class LLMProviderForm(QWidget):
         layout.addWidget(modelLabel)
         layout.addWidget(self.ollamaModelComboBox)
         layout.addWidget(self.saveOllamaButton)
-        layout.addStretch(1)
+        # 移除这行代码，它会导致下方留白
+        # layout.addStretch(1)
+        layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         
         return container
     
@@ -5009,15 +5061,23 @@ class LLMProviderForm(QWidget):
         
         # 调用更新方法，更新LLM配置
         self.jumpinConfig.updateLLMConfig(
-            defaultProvider="openai", 
-            openaiConfig=openaiConfig
+            provider="openai", 
+            openaiConfig=openaiConfig,
+            llmModel=modelName  # 添加这一行，确保llmModel也被更新
         )
+
+
+        self.jumpinConfig.saveConfigToYaml()
         
         # 重新加载配置以确保一致性
         self.jumpinConfig.reloadConfig()
         
         # 输出当前LLM配置到日志
         self.jumpinConfig.logLLMConfig()
+
+        # 重新初始化configurableAIConnOrAgent
+        configurableAIConnOrAgent:ConfigurableAIConnOrAgent =self.dependencyContainer.getAANode("configurableAIConnOrAgent")
+        configurableAIConnOrAgent._initializeInnerInstance()
         
         # 显示成功消息
         InfoBar.success(
@@ -5045,15 +5105,23 @@ class LLMProviderForm(QWidget):
         
         # 调用更新方法，更新LLM配置
         self.jumpinConfig.updateLLMConfig(
-            defaultProvider="ollama", 
-            ollamaConfig=ollamaConfig
+            provider="ollama", 
+            ollamaConfig=ollamaConfig,
+            llmModel=modelName  # 添加这一行，确保llmModel也被更新
         )
+        
+        # 保存配置到文件
+        self.jumpinConfig.saveConfigToYaml()
         
         # 重新加载配置以确保一致性
         self.jumpinConfig.reloadConfig()
         
         # 输出当前LLM配置到日志
         self.jumpinConfig.logLLMConfig()
+
+        # 重新初始化configurableAIConnOrAgent
+        configurableAIConnOrAgent:ConfigurableAIConnOrAgent =self.dependencyContainer.getAANode("configurableAIConnOrAgent")
+        configurableAIConnOrAgent._initializeInnerInstance()
         
         # 显示成功消息
         InfoBar.success(
@@ -5071,11 +5139,14 @@ class AAXWJumpinSettingPanel(ScrollArea):
     """ Setting interface """
     AAXW_CLASS_LOGGER:logging.Logger
 
-    def __init__(self, jumpinConfig:AAXWJumpinConfig,parent=None):
+    def __init__(self, dependencyContainer:AAXWDependencyContainer,
+                 jumpinConfig:AAXWJumpinConfig,parent=None):
         super().__init__(parent=parent)
         self.jumpinConfig:AAXWJumpinConfig=jumpinConfig
+        self.dependencyContainer=dependencyContainer
         self.scrollWidget = QWidget()
         self.expandLayout = ExpandLayout(self.scrollWidget)
+        
 
         # setting label
         self.settingLabel = QLabel("设置", self)
@@ -5109,7 +5180,10 @@ class AAXWJumpinSettingPanel(ScrollArea):
         self.basicSettingGroup.addSettingCard(self.workDirCard)
         
         # 创建LLM模型配置表单
-        self.llmProviderForm = LLMProviderForm(self.jumpinConfig)
+        self.llmProviderForm = LLMProviderForm(
+            dependencyContainer=self.dependencyContainer,
+            jumpinConfig=self.jumpinConfig,
+            title=None) #type:ignore
         
         # 创建LLM模型设置组
         self.modelSettingGroup = SettingCardGroup(
@@ -5144,7 +5218,7 @@ class AAXWJumpinSettingPanel(ScrollArea):
 
     def __initWidget(self):
         """初始化控件属性"""
-        self.resize(1000, 800)
+        # self.resize(1000, 800)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.setViewportMargins(0, 80, 0, 20)
@@ -5536,7 +5610,10 @@ class AAXWJumpinMainWindow(AAXWFramelessWindow):
 
         # 已有config
         # 设置面板加入展示堆 
-        self.settingPanel = AAXWJumpinSettingPanel(self.jumpinConfig,self)
+        self.settingPanel = AAXWJumpinSettingPanel(
+            dependencyContainer=self.diContainer,
+            jumpinConfig=self.jumpinConfig,
+            parent=self)
         self.mainStackedFrame.addWidget(self.settingPanel)
         
         # 初始化
