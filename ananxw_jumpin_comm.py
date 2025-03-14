@@ -31,37 +31,40 @@ AAXW_JUMPIN_LOG_MGR = AAXWLoggerManager()
 AAXW_JUMPIN_MODULE_LOGGER:logging.Logger=AAXW_JUMPIN_LOG_MGR.getModuleLogger(
     sys.modules[__name__])
 
+
+AAXWJumpinDICUtilz=AAXWDependencyContainer()
+
 # TODO 这个类写法用处不大吧？ 实例化用全局大写即可？
-class AAXWJumpinDICUtilz: #单例化
-    """AAXWDependencyContainer的单例化工具类"""
-    __instance = None
-    _insLock = threading.Lock()
-    # _opLock = threading.Lock()
+# class AAXWJumpinDICUtilz: #单例化
+#     """AAXWDependencyContainer的单例化工具类"""
+#     __instance = None
+#     _insLock = threading.Lock()
+#     # _opLock = threading.Lock()
 
-    @classmethod
-    def getInstance(cls):
-        if cls.__instance is None:
-            with cls._insLock:
-                if cls.__instance is None:
-                    cls.__instance = AAXWDependencyContainer()
-        return cls.__instance
+#     @classmethod
+#     def getInstance(cls):
+#         if cls.__instance is None:
+#             with cls._insLock:
+#                 if cls.__instance is None:
+#                     cls.__instance = AAXWDependencyContainer()
+#         return cls.__instance
 
-    @classmethod
-    def register(cls, key: str, isSingleton: bool = True, isLazy: bool = False, **dependencies):
-        return cls.getInstance().register(key, isSingleton, isLazy, **dependencies)
+#     @classmethod
+#     def register(cls, key: str, isSingleton: bool = True, isLazy: bool = False, **dependencies):
+#         return cls.getInstance().register(key, isSingleton, isLazy, **dependencies)
 
-    @classmethod
-    def getAANode(cls, key: str) -> Any:
-        # with cls._opLock:
-            return cls.getInstance().getAANode(key)
+#     @classmethod
+#     def getAANode(cls, key: str) -> Any:
+#         # with cls._opLock:
+#             return cls.getInstance().getAANode(key)
 
-    @classmethod
-    def setAANode(cls, key: str, node: Any, isSingleton: bool = True, **dependencies):
-        return cls.getInstance().setAANode(key, node, isSingleton, **dependencies)
+#     @classmethod
+#     def setAANode(cls, key: str, node: Any, isSingleton: bool = True, **dependencies):
+#         return cls.getInstance().setAANode(key, node, isSingleton, **dependencies)
 
-    @classmethod
-    def clear(cls):
-        with cls._insLock:
-            if cls.__instance:
-                cls.__instance.clear()
-            cls.__instance = None
+#     @classmethod
+#     def clear(cls):
+#         with cls._insLock:
+#             if cls.__instance:
+#                 cls.__instance.clear()
+#             cls.__instance = None
