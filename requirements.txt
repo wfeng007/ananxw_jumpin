@@ -1,5 +1,6 @@
 # python == 3.9.11
 # Core dependencies
+colorlog==6.8.2
 python-dotenv==1.0.1
 pyyaml==6.0.2
 typing-extensions==4.12.2; python_version < "3.12"
@@ -23,6 +24,7 @@ openai==1.42.0
 langchain==0.3.0
 langchain-openai==0.2.2
 langchain-community==0.3.0
+langgraph==0.2.25
 
 # for builtin plugins
 # Vectordb pdf-tools

@@ -53,8 +53,10 @@
 
 # 
 # 0.9+
-#       实现初步的agent框架能力，提供1个agent样例如：动态改名；
+#       已实现初步的agent框架能力，提供1个agent样例如：自主动态改名；
+#       已实现专门的记忆/历史列表面板、单项记忆/历史card化展示及其操作功能；
 #       mac运行支持与打包支持；
+#
 #       代码块需支持plaintext/unknown 以及其他结构，未知，平文为全白。
 #       提供其他ai相关样例，如：chateveredit等
 #       coze集成对接应用样例；
@@ -79,7 +81,7 @@ try:
     from __init__ import __package_name__  #type:ignore
     print(f'导入了包__init__.py 中的 __package_name__:{__package_name__}')
 except ImportError:
-    #   pyinstaller 后os.path.abspath(__file__)“本文件”来确定路径会变成 _interal目录（默认资源目录）
+    #   pyinstaller 后os.path.abspath(__file__)"本文件"来确定路径会变成 _interal目录（默认资源目录）
     __package_name__= "ananxw_jumpin"
     print(f'导入本代码文件:{__file__} 中的 __package_name__:{__package_name__}')
 
@@ -120,8 +122,9 @@ def _setup_app_env_():
 _setup_app_env_()
 
 
-from typing import Callable, List, Dict, Type,Any,TypeVar,Union,cast, Tuple,Protocol
+from typing import Callable, List, Dict, Type,Any,TypeVar,Union,cast, Tuple,Protocol,Optional
 from typing import cast
+from pydantic import BaseModel, Field # pydantic对象模型支持
 from functools import wraps
 
 try:
@@ -153,7 +156,7 @@ from PySide6.QtWidgets import (
     QApplication, QSystemTrayIcon, QFrame, QWidget, QScrollArea,
     QHBoxLayout, QVBoxLayout, QSizePolicy, QLineEdit, QPushButton,
     QTextBrowser, QStyleOption, QMenu, QPlainTextEdit, QLabel,QToolBar,
-    QStackedWidget,
+    QStackedWidget,QButtonGroup,
 )
 from PySide6.QtGui import (
     QKeySequence, QShortcut, QTextDocument, QTextCursor, QMouseEvent,
@@ -166,10 +169,13 @@ from PySide6.QtGui import (
 # qfluentwidgets(PySide6-Fluent-Widgets) pyside6上的界面扩展
 from qfluentwidgets import (
     NavigationInterface, NavigationItemPosition, NavigationAvatarWidget,NavigationTreeWidget,
-    NavigationPushButton,MessageBoxBase,SubtitleLabel,LineEdit,CaptionLabel,
+    NavigationPushButton,MessageBoxBase,SubtitleLabel,LineEdit,CaptionLabel,PushButton,
+    BodyLabel,TextWrap,CardWidget,StrongBodyLabel,PlainTextEdit,TextEdit,TextBrowser,
+    SegmentedWidget,ComboBox,CheckBox,FlowLayout,InfoBar,InfoBarPosition,EditableComboBox,
+    PillPushButton,PrimaryPushButton,
     NavigationWidget, MessageBox, SettingCardGroup, SwitchSettingCard, FolderListSettingCard,
     OptionsSettingCard, PushSettingCard, HyperlinkCard, PrimaryPushSettingCard, ScrollArea,
-    ComboBoxSettingCard, ExpandLayout, Theme, CustomColorSettingCard,
+    ComboBoxSettingCard, ExpandLayout, Theme, CustomColorSettingCard,RadioButton,IconWidget,
     setTheme, setThemeColor, RangeSettingCard, isDarkTheme, ConfigItem, SettingCard, qrouter
 )
 from qfluentwidgets import FluentIcon as FIF
@@ -209,6 +215,14 @@ import urllib.parse
 import urllib.request
 import json
 
+
+
+#本包 导入
+from ananxw_jumpin.ananxw_framework import AAXWDependencyContainer
+from ananxw_jumpin.ananxw_jumpin_comm import AAXW_JUMPIN_LOG_MGR,AAXWJumpinDICUtilz
+#
+from ananxw_jumpin.ananxw_aiagent import BaseAgentAction,AgentEnvironment, BaseAgent
+
 ##
 # 导入结束
 ##
@@ -220,249 +234,11 @@ print(f"Found evnpath: {__evnpath} , will load it.")
 _ = load_dotenv(__evnpath)  #
 
 # 版本
-__version__ = "0.8.0"
+__version__ = "0.9.0"
 
-
-# 日志器
-class AAXWLoggerManager:
-    _instance = None
-    _initialized = False
-    APP_LOGGER_NAME = "AAXW"
-    
-    APP_DEFAULT_LEVEL = logging.INFO
-
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super(AAXWLoggerManager, cls).__new__(cls)
-        return cls._instance
-
-    def __init__(self):
-        if not self._initialized:
-            self.loggers = {}
-            self.logDir = None
-            self.fileHandler:logging.Handler = None #type:ignore
-            self.consoleHandler:logging.Handler = None #type:ignore
-            self.setupBasicLogger()
-            self._initialized = True
-
-    def setupBasicLogger(self):
-        """设置基本的控制台处理器"""
-        self.consoleHandler = logging.StreamHandler()
-        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-        self.consoleHandler.setFormatter(formatter)
-
-        # 设置应用级别日志器
-        self.appLogger = logging.getLogger(self.APP_LOGGER_NAME)
-        self.appLogger.propagate = False #不传播
-        self.appLogger.setLevel(self.APP_DEFAULT_LEVEL)
-        self.appLogger.addHandler(self.consoleHandler)
-
-    #这里后续扩展出注册不同日志文件，可以关联不同范围或级别的日志。
-    def setLogDirAndFile(self, logDir,filename="app.log"):
-        """设置工作目录并创建文件处理器"""
-        self.logDir = logDir
-        log_file = os.path.join(logDir, filename)
-        os.makedirs(os.path.dirname(log_file), exist_ok=True)
-        self.fileHandler = TimedRotatingFileHandler(
-            log_file,
-            when="midnight",
-            interval=1,
-            backupCount=3,
-            encoding='utf-8'
-        )
-        formatter = logging.Formatter(
-            '%(asctime)s - %(name)s - %(levelname)s - %(module)s.%(funcName)s [%(filename)s:%(lineno)d] - %(message)s'
-        )
-        self.fileHandler.setFormatter(formatter)
-
-        # 更新所有现有的日志器
-        for logger in self.loggers.values():
-            if self.fileHandler not in logger.handlers:
-                logger.addHandler(self.fileHandler)
-
-        # 为应用级别日志器添加文件处理器
-        self.appLogger.addHandler(self.fileHandler)
-
-    def getLogger(self, name, level=None,isPropagate=False):
-        """
-        获取或创建一个日志器
-        :param name: 日志器名称
-        :param level: 日志级别，如果为None则不设置
-        :param isPropagate: 是否传播日志消息到父日志器
-        """
-        full_name = f"{self.APP_LOGGER_NAME}.{name}" if name else self.APP_LOGGER_NAME
-        if full_name not in self.loggers:
-            logger = logging.getLogger(full_name)
-
-            logger.propagate=isPropagate
-
-            if level is not None:
-                logger.setLevel(level)
-            else:
-                # 如果没有指定级别，则不设置，让它继承父级别
-                logger.setLevel(logging.NOTSET)
-            
-            # 只有在这个日志器还没有处理器时才添加
-            if not logger.handlers:
-                logger.addHandler(self.consoleHandler)
-                if self.fileHandler:
-                    logger.addHandler(self.fileHandler)
-            
-            self.loggers[full_name] = logger
-        return self.loggers[full_name]
-
-    def getModuleLogger(self, module, level=None, isPropagate=False):
-        """获取模块级别的日志器"""
-        return self.getLogger(module.__name__, level, isPropagate)
-    
-    def getClassLogger(self, cls, level=None, isPropagate=False):
-        """获取类级别的日志器"""
-        return self.getLogger(f"{cls.__module__}.{cls.__name__}", level, isPropagate)
-    
-    def getClassLoggerByName(self, moduleName:str,className:str, level=None, isPropagate=False):
-        """获取类级别的日志器"""
-        return self.getLogger(f"{moduleName}.{className}", level, isPropagate)
-
-    def classLogger(self, level=None, isPropagate=False):
-        """为类添加日志器的装饰器  设置了类属性:AAXW_CLASS_LOGGER"""
-        T = TypeVar('T')
-        def decorator(cls:T)->T:
-            # cls.AAXW_CLASS_LOGGER = self.getClassLogger(cls, level, isPropagate) #type:ignore
-            setattr(cls, 'AAXW_CLASS_LOGGER', self.getClassLogger(cls, level, isPropagate))
-            return cls
-        return decorator
-
-    def getRootLogger(self):
-        """获取根日志器"""
-        return logging.getLogger()
-
-    def getAppLogger(self):
-        """获取应用级别日志器"""
-        return self.appLogger
-
-    def setLoggerLevel(self, name, level):
-        """设置指定日志器的级别"""
-        full_name = f"{self.APP_LOGGER_NAME}.{name}" if name else self.APP_LOGGER_NAME
-        if full_name in self.loggers:
-            self.loggers[full_name].setLevel(level)
-
-    def setLoggerFormatter(self, name, formatter):
-        """设置指定日志器的格式器"""
-        full_name = f"{self.APP_LOGGER_NAME}.{name}" if name else self.APP_LOGGER_NAME
-        if full_name in self.loggers:
-            for handler in self.loggers[full_name].handlers:
-                handler.setFormatter(formatter)
-
-# 创建日志管理器实例 模块globe层次；
-AAXW_JUMPIN_LOG_MGR = AAXWLoggerManager() 
-# 本模块日志器
+#本模块，模块日志器
 AAXW_JUMPIN_MODULE_LOGGER:logging.Logger=AAXW_JUMPIN_LOG_MGR.getModuleLogger(
     sys.modules[__name__])
-
-
-
-# Di框架与插件框架
-# framework-di , framework-plugin
-class AAXWDependencyContainer:
-    """
-    简易的依赖组织容器
-    注册依赖关系：
-    @dependencyContainer.register('key', isSingleton=True, isLazy=False)
-    class...
-    isLazy 暂时未实现，均为False；
-
-    创建/获取已有，资源对象，如其依赖未创建则会创建对应依赖：
-    dependencyContainer.getAANode(key)
-    
-    """
-    def __init__(self):
-        self._factories: Dict[str, Callable] = {}
-        self._dependencies: Dict[str, Dict[str, str]] = {}
-        self._isSingletonFlags: Dict[str, bool] = {}
-        self._isLazyFlags: Dict[str, bool] = {}
-        self._instances: Dict[str, Any] = {}
-        #放入自己作为aware 自发现使用
-        self.setAANode(key='_nativeDependencyContainer',node=self)
-
-    def register(self, key: str, isSingleton: bool = True, isLazy: bool = False, **dependencies):
-        T = TypeVar('T', bound=Callable[..., Any])
-        def decorator(f: T)-> T:
-            self._factories[key] = f
-            self._dependencies[key] = dependencies
-            self._isSingletonFlags[key] = isSingleton
-            self._isLazyFlags[key] = isLazy
-            return f
-        return decorator
-
-    def getAANode(self, key: str) -> Any:
-        if key not in self._factories:
-            raise KeyError(f"没有注册名为 {key} 的依赖")
-        
-        isSingleton = self._isSingletonFlags[key]
-        if isSingleton and key in self._instances:
-            return self._instances[key]
-        
-        instance = self._createInstance(key)
-        
-        if isSingleton:
-            self._instances[key] = instance
-        
-        return instance
-
-    def setAANode(self, key: str, node: Any, isSingleton: bool = True, **dependencies):
-        if isSingleton:
-            self._instances[key] = node
-        
-        # 注册工厂函数
-        self._factories[key] = lambda: node
-        
-        # 注册依赖关系
-        self._dependencies[key] = dependencies
-        
-        # 设置单例和懒加载标志
-        self._isSingletonFlags[key] = isSingleton
-        self._isLazyFlags[key] = False  # setAANode 默认不使用懒加载
-        
-        # 注入依赖
-        self._injectDependencies(node, dependencies)
-        
-        return node
-
-    def _injectDependencies(self, instance: Any, dependencies: Dict[str, str]):
-        for attr, dep_key in dependencies.items():
-            if dep_key in self._instances:
-                setattr(instance, attr, self._instances[dep_key])
-            elif dep_key in self._factories:
-                setattr(instance, attr, self.getAANode(dep_key))
-            else:
-                raise KeyError(f"依赖 {dep_key} 未注册")
-
-    def _createInstance(self, key: str) -> Any:
-        factory = self._factories[key]
-        instance = factory()
-        
-        dependencies = self._dependencies[key]
-        self._injectDependencies(instance, dependencies)
-        
-        return instance
-
-    def _lazyProperty(self, dep_key):
-        #返回改写属性为特定方法；
-        #当第一次访问该属性时设置并返回
-        def getter(obj):
-            attr_name = f'_{dep_key}'
-            if not hasattr(obj, attr_name) or getattr(obj, attr_name) is None:
-                setattr(obj, attr_name, self.getAANode(dep_key)) #这里get是非线程安全的
-            return getattr(obj, attr_name)
-        return property(getter)
-
-    def clear(self):
-        self._instances.clear()
-        self._factories.clear()
-        self._dependencies.clear()
-        self._isSingletonFlags.clear()
-        self._isLazyFlags.clear()
-
 
 
 ##
@@ -1131,39 +907,7 @@ class AAXWAppletManager:
 # 应用级别框架扩展
 ##
 #
-class AAXWJumpinDICUtilz: #单例化
-    """AAXWDependencyContainer的单例化工具类"""
-    __instance = None
-    _insLock = threading.Lock()
-    # _opLock = threading.Lock()
 
-    @classmethod
-    def getInstance(cls):
-        if cls.__instance is None:
-            with cls._insLock:
-                if cls.__instance is None:
-                    cls.__instance = AAXWDependencyContainer()
-        return cls.__instance
-
-    @classmethod
-    def register(cls, key: str, isSingleton: bool = True, isLazy: bool = False, **dependencies):
-        return cls.getInstance().register(key, isSingleton, isLazy, **dependencies)
-
-    @classmethod
-    def getAANode(cls, key: str) -> Any:
-        # with cls._opLock:
-            return cls.getInstance().getAANode(key)
-
-    @classmethod
-    def setAANode(cls, key: str, node: Any, isSingleton: bool = True, **dependencies):
-        return cls.getInstance().setAANode(key, node, isSingleton, **dependencies)
-
-    @classmethod
-    def clear(cls):
-        with cls._insLock:
-            if cls.__instance:
-                cls.__instance.clear()
-            cls.__instance = None
             
 
 
@@ -1205,22 +949,53 @@ class AAXWJumpinPluginManager(AAXWFileSourcePluginManager):
 # 
 ##
 
+# 基本config信息，与默认配置；
+# 添加LLM提供商配置的DTO类
+class OpenAIProvider(BaseModel):
+    """OpenAI提供商配置DTO"""
+    apiKey: str = ""
+    baseUrl: str = ""
+    # modelName: str = "gpt-4o-mini"
+    defaultModelName:str="gpt-4o-mini"
+
+    def candidateModels(self):
+        return [
+            "gpt-4o-mini",
+            "gpt-4o",
+            "gpt-3.5-turbo",
+        ]
+    
+class OllamaProvider(BaseModel):
+    """Ollama提供商配置DTO"""
+    serviceUrl: str = "http://localhost:11434/v1"
+    # modelName: str = "llama3"
+    defaultModelName:str="qwen2.5:1.5b"
+    def candidateModels(self):
+        return [
+            "llama3.2",
+            "qwen2.5:1.5b",
+            "llama3.1:8b",
+        ]
 
 # 基本config信息，与默认配置；
 @AAXWJumpinDICUtilz.register(key="jumpinConfig") 
-@AAXW_JUMPIN_LOG_MGR.classLogger()
+@AAXW_JUMPIN_LOG_MGR.classLogger(level=logging.DEBUG)
 class AAXWJumpinConfig:
     AAXW_CLASS_LOGGER:logging.Logger
 
     # 默认配置
-    FAMILY_NAME="AAXW" #之后可用来拆分抽象；
+    FAMILY_NAME = "AAXW"  # 之后可用来拆分抽象
     APP_NAME_DEFAULT = "AAXW_Jumpin"
     APP_VERSION_DEFAULT = __version__
-    DEBUG_DEFAULT = False #暂时没用到
+    DEBUG_DEFAULT = False  # 暂时没用到
     LOG_LEVEL_DEFAULT = "INFO"
     APP_WORK_DIR_DEFAULT = "./"
     APP_CONFIG_FILENAME_DEFAULT = "aaxw_jumpin_config.yaml"
 
+    # LLM配置默认值
+    DEFAULT_LLM_PROVIDER = "openai"  # 默认LLM提供商
+    DEFAULT_LLM_MODEL = "gpt-4o-mini"  # 默认LLM模型
+    
     # 原有的 QSS 配置保持不变
     MSGSHOWINGPANEL_QSS = """
     QFrame {
@@ -1279,7 +1054,7 @@ class AAXWJumpinConfig:
     """
 
     def __init__(self):
-        # 初始化实例属性
+        # 初始化基本属性
         self.appName = self.APP_NAME_DEFAULT
         self.appVersion = self.APP_VERSION_DEFAULT
         
@@ -1287,8 +1062,20 @@ class AAXWJumpinConfig:
         self.logLevel = self.LOG_LEVEL_DEFAULT
         self.appWorkDir = self.APP_WORK_DIR_DEFAULT
         self.appConfigFilename = self.APP_CONFIG_FILENAME_DEFAULT
+        
+        # 初始化LLM配置属性 - 修改属性名
+        self.llmProvider = self.DEFAULT_LLM_PROVIDER
+        self.llmModel = self.DEFAULT_LLM_MODEL
+        
+        # 使用DTO类初始化配置
+        self.openaiProvider = OpenAIProvider()
+        self.ollamaProvider = OllamaProvider()
 
-        #默认顺序初始化；
+        ## env 环境变量中读取保存的LLM配置，在yaml配置文件中没有时使用。
+        self.envOpenAIApiKey=""
+        self.envOpenAIBaseUrl=""    
+
+        # 默认顺序初始化
         self.loadEnv()
         self.loadArgs()
         self.loadYaml()
@@ -1297,18 +1084,25 @@ class AAXWJumpinConfig:
                     f"logLevel={self.logLevel}, "
                     f"appConfigFilename={self.appConfigFilename}, "
                     f"debug={self.debug}")
-        #暂时初始化时调用
+        # 记录LLM配置
+        self.logLLMConfig()
+        
+        # 暂时初始化时调用
         self.initAANode()
 
-
-
     def loadEnv(self):
+        """从环境变量加载配置"""
         self.appWorkDir = os.environ.get('AAXW_APPWORKDIR', self.appWorkDir)
         self.logLevel = os.environ.get('AAXW_LOG_LEVEL', self.logLevel)
         self.appConfigFilename = os.environ.get('AAXW_CONFIG_FILE_NAME', self.appConfigFilename)
         self.debug = os.environ.get('AAXW_DEBUG', self.debug)
 
+        # 从环境变量读取LLM配置
+        self.envOpenAIApiKey = os.environ.get('OPENAI_API_KEY', self.envOpenAIApiKey)
+        self.envOpenAIBaseUrl = os.environ.get('OPENAI_BASE_URL', self.envOpenAIBaseUrl)
+
     def loadArgs(self):
+        """从命令行参数加载配置"""
         parser = argparse.ArgumentParser()
         parser.add_argument('--appworkdir', help='Application work directory')
         parser.add_argument('--log-level', help='Logging level')
@@ -1325,41 +1119,149 @@ class AAXWJumpinConfig:
         if args.debug is not None:
             self.debug = args.debug
 
-
-    #yaml config
-    def loadYaml(self,yamlPath=None):
-        yaml_path = os.path.join(self.appWorkDir, self.appConfigFilename)
+    def loadYaml(self, yamlPath=None):
+        """从YAML配置文件加载配置"""
+        yaml_path = yamlPath or os.path.join(self.appWorkDir, self.appConfigFilename)
         if os.path.exists(yaml_path):
             with open(yaml_path, 'r', encoding='utf-8') as file:
                 try:
                     yaml_config = yaml.safe_load(file)
-                    self.__dict__.update(yaml_config)
-                    self.AAXW_CLASS_LOGGER.info(f"Yaml config file loaded: new base-config"
-                            f"appWorkDir={self.appWorkDir}, "
-                            f"logLevel={self.logLevel}, "
-                            f"appConfigFilename={self.appConfigFilename}, "
-                            f"debug={self.debug}")
+                    if yaml_config:
+                        # 更新基础配置
+                        for key, value in yaml_config.items():
+                            if key != 'openaiProvider' and key != 'ollamaProvider':
+                                if hasattr(self, key):
+                                    setattr(self, key, value)
+                        
+                        # 更新Provider配置，移除兼容旧版本的代码
+                        if 'openaiProvider' in yaml_config and isinstance(yaml_config['openaiProvider'], dict):
+                            for key, value in yaml_config['openaiProvider'].items():
+                                if hasattr(self.openaiProvider, key):
+                                    setattr(self.openaiProvider, key, value)
+                        
+                        # 检查openaiProvider的字段，如果为空则使用环境变量
+                        if hasattr(self.openaiProvider, 'apiKey') and (not self.openaiProvider.apiKey or self.openaiProvider.apiKey.strip() == ''):
+                            if self.envOpenAIApiKey:
+                                self.openaiProvider.apiKey = self.envOpenAIApiKey
+                                self.AAXW_CLASS_LOGGER.info("Using OPENAI_API_KEY from environment variable")
+                        
+                        if hasattr(self.openaiProvider, 'baseUrl') and (not self.openaiProvider.baseUrl or self.openaiProvider.baseUrl.strip() == ''):
+                            if self.envOpenAIBaseUrl:
+                                self.openaiProvider.baseUrl = self.envOpenAIBaseUrl
+                                self.AAXW_CLASS_LOGGER.info("Using OPENAI_API_BASE from environment variable")
+                        
+                        if 'ollamaProvider' in yaml_config and isinstance(yaml_config['ollamaProvider'], dict):
+                            for key, value in yaml_config['ollamaProvider'].items():
+                                if hasattr(self.ollamaProvider, key):
+                                    setattr(self.ollamaProvider, key, value)
+                    
+                    self.AAXW_CLASS_LOGGER.info(f"Yaml config file loaded: {yaml_path}")
                 except yaml.YAMLError as e:
                     self.AAXW_CLASS_LOGGER.warning(f"Error reading YAML file: {e}")
+        else:
+            self.AAXW_CLASS_LOGGER.warning(f"YAML config file not found: {yaml_path}")
+
+    def saveConfigToYaml(self, yamlPath=None):
+        """保存配置到YAML文件"""
+        yaml_path = yamlPath or os.path.join(self.appWorkDir, self.appConfigFilename)
+        
+        # 构建配置字典
+        config_dict = {}
+        
+        # 添加基础属性，排除特定属性
+        excluded_keys = [
+            'AAXW_CLASS_LOGGER', 'openaiProvider', 'ollamaProvider',
+            'envOpenAIApiKey', 'envOpenAIBaseUrl'
+        ]
+        
+        for key, value in self.__dict__.items():
+            if not key.startswith('_') and key not in excluded_keys:
+                config_dict[key] = value
+        
+        # 添加Provider配置
+        config_dict['openaiProvider'] = self.openaiProvider.model_dump()
+        config_dict['ollamaProvider'] = self.ollamaProvider.model_dump()
+        
+        try:
+            # 确保目录存在
+            os.makedirs(os.path.dirname(os.path.abspath(yaml_path)), exist_ok=True)
+            
+            # 写入YAML文件
+            with open(yaml_path, 'w', encoding='utf-8') as file:
+                yaml.safe_dump(config_dict, file, default_flow_style=False, allow_unicode=True)
+            
+            self.AAXW_CLASS_LOGGER.info(f"配置已保存到: {yaml_path}")
+            return True
+        except Exception as e:
+            self.AAXW_CLASS_LOGGER.error(f"保存配置失败: {str(e)}")
+            return False
 
     def setWorkCfgAndloadYaml(self, workdir=None, configName=None):
+        """设置工作目录和配置文件名，并加载配置"""
         if workdir: self.appWorkDir = workdir
         if configName: self.appConfigFilename = configName
         self.loadYaml()
 
-    def initAANode(self): #init after di；当前秀先在自己内部执行；
+    def logLLMConfig(self):
+        """记录当前LLM配置"""
+        self.AAXW_CLASS_LOGGER.debug(f"当前LLM配置: 提供商={self.llmProvider}, 模型={self.llmModel}")
+        
+        # 记录OpenAI配置
+        self.AAXW_CLASS_LOGGER.debug(f"OpenAI配置: API基础URL={self.openaiProvider.baseUrl}")
+        
+        # 记录Ollama配置
+        self.AAXW_CLASS_LOGGER.debug(f"Ollama配置: 服务URL={self.ollamaProvider.serviceUrl}")
+
+    def updateLLMConfig(self, provider=None, openaiConfig=None, ollamaConfig=None, llmModel=None):
+        """更新LLM配置并保存到YAML"""
+        changed = False
+        
+        if provider and provider in ['openai', 'ollama']:
+            self.llmProvider = provider
+            changed = True
+        
+        if llmModel:
+            self.llmModel = llmModel
+            changed = True
+            
+        if openaiConfig:
+            for key, value in openaiConfig.items():
+                if hasattr(self.openaiProvider, key):
+                    setattr(self.openaiProvider, key, value)
+                    changed = True
+                
+        if ollamaConfig:
+            for key, value in ollamaConfig.items():
+                if hasattr(self.ollamaProvider, key):
+                    setattr(self.ollamaProvider, key, value)
+                    changed = True
+        
+        if changed:
+            self.saveConfigToYaml()
+            self.logLLMConfig()
+        
+        return changed
+
+    def reloadConfig(self):
+        """重新加载配置"""
+        self.loadYaml()
+        self.logLLMConfig()
+
+    def initAANode(self): #init after di；当前先在自己内部执行；
         #这里日志器进程全局的，所以其实__init__初始化时就能调用；
         AAXW_JUMPIN_LOG_MGR.setLogDirAndFile(logDir=self.appWorkDir,filename="aaxw_app.log")
 
         #其他di胡执行的工作；
         pass
 
-    # @classmethod
-    # def create_with_current_dir(cls):
-    #     config = cls()
-    #     script_dir = os.path.dirname(os.path.abspath(__file__))
-    #     config.set_work_dir(script_dir)
-    #     return config
+    def getActiveProviderConfig(self):
+        """获取当前激活的提供商配置"""
+        if self.llmProvider == "openai":
+            return self.openaiProvider
+        elif self.llmProvider == "ollama":
+            return self.ollamaProvider
+        else:
+            return None
 
 #
 # AI相关
@@ -1408,7 +1310,7 @@ class AAXWSimpleAIConnOrAgent(AAXWAbstractAIConnOrAgent):
     {message}
     """
     
-    def __init__(self, api_key:str =None,base_url:str=None, model_name: str = "gpt-4o-mini"): # type: ignore
+    def __init__(self, api_key:str =None, base_url:str=None, model_name: str = "gpt-4o-mini"): # type: ignore
         """
         初始化OpenAI连接代理。
         
@@ -1417,26 +1319,50 @@ class AAXWSimpleAIConnOrAgent(AAXWAbstractAIConnOrAgent):
         :param model_name: 使用的模型名称。
         """
         # 从环境变量读取API密钥和URL
-        self.openai_api_key = api_key or os.getenv('OPENAI_API_KEY')
-        self.openai_base_url = base_url or os.getenv('OPENAI_BASE_URL')
+        self.api_key = api_key or os.getenv('OPENAI_API_KEY')
+        self.base_url = base_url or os.getenv('OPENAI_BASE_URL')
         self.model_name = model_name or os.getenv('OPENAI_MODEL_NAME', 'gpt-4o-mini')
         
-        if not self.openai_api_key:
-            raise ValueError("OpenAI API key is required.")
+        # 调用updateConfig方法来初始化所有配置
+        self.updateConfig(
+            apiKey=self.api_key, baseUrl= self.base_url, modelName= self.model_name) # type: ignore
+    
+    def updateConfig(
+            self, apiKey: str = None, baseUrl: str = None, modelName: str = None): # type: ignore
+        """
+        更新OpenAI连接配置。
         
+        :param api_key: 新的OpenAI API密钥。
+        :param base_url: 新的OpenAI API基础URL。
+        :param model_name: 新的模型名称。
+        :param isInit: 是否是初始化调用。
+        """
+    
+        # 更新模式：只更新非None的参数
+        if apiKey is not None:
+            self.api_key = apiKey
+        
+        if baseUrl is not None:
+            self.base_url = baseUrl
+            
+        if modelName is not None:
+            self.model_name = modelName
+            
+        # 构建LLM参数
         chat_params = {
             "temperature": 0,
             "model": self.model_name,
-            "api_key": self.openai_api_key,
+            "api_key": self.api_key,
         }
         
-        if self.openai_base_url:
-            chat_params["base_url"] = self.openai_base_url
-
-        # 
-        # self.AAXW_CLASS_LOGGER.debug(f"chat_params: {chat_params}")
+        if self.base_url:
+            chat_params["base_url"] = self.base_url
+            
+        # 初始化或更新LLM实例
+        self.llm = ChatOpenAI(**chat_params)
         
-        self.llm: ChatOpenAI = ChatOpenAI(**chat_params)
+        # 仅在非初始化时记录日志
+        self.AAXW_CLASS_LOGGER.info(f"OpenAI连接配置已更新，模型: {self.model_name}")
     
     @override
     def requestAndCallback(self, 
@@ -1456,7 +1382,8 @@ class AAXWSimpleAIConnOrAgent(AAXWAbstractAIConnOrAgent):
         human_message = HumanMessage(content=self.USER_PROMPT_TEMPLE.format(message=prompt))
         messages = [system_message, human_message]
 
-        
+        self.AAXW_CLASS_LOGGER.debug(f"使用model_name:{self.model_name}, base_url:{self.base_url}; "
+            f"以及最终 prompt-messages: {messages}")
         if isStream:
             for msgChunk in self.llm.stream(messages):
                 if msgChunk.content:
@@ -1465,8 +1392,6 @@ class AAXWSimpleAIConnOrAgent(AAXWAbstractAIConnOrAgent):
         else:
             response = self.llm.invoke(messages)
             func(str(response.content))
-
-
 
     def embedding(self, prompt: str, model: str = "text-embedding-ada-002"):
         """
@@ -1477,19 +1402,32 @@ class AAXWSimpleAIConnOrAgent(AAXWAbstractAIConnOrAgent):
         :return: 文本的嵌入向量。
         """
         embeddings = OpenAIEmbeddings(
-            api_key=self.openai_api_key,
-            base_url=self.openai_base_url,
+            api_key=self.api_key,
+            base_url=self.base_url,
             model=model
         )
         return embeddings.embed_query(prompt)
-
-
-
-
+    
+    def edit(self, prompt: str, instruction: str):
+        """
+        根据指令编辑文本。
+        
+        :param prompt: 原始文本。
+        :param instruction: 编辑指令。
+        :return: 编辑后的文本。
+        """
+        # 目前OpenAI不再提供专门的edit API，使用聊天完成API模拟
+        system_content = f"你是一个文本编辑助手。请按照以下指令编辑提供的文本：\n{instruction}"
+        system_message = SystemMessage(content=system_content)
+        human_message = HumanMessage(content=prompt)
+        messages = [system_message, human_message]
+        
+        response = self.llm.invoke(messages)
+        return response.content
 
 
 @AAXWJumpinDICUtilz.register(key="ollamaAIConnOrAgent")
-@AAXW_JUMPIN_LOG_MGR.classLogger()
+@AAXW_JUMPIN_LOG_MGR.classLogger(level=logging.DEBUG)
 class AAXWOllamaAIConnOrAgent(AAXWAbstractAIConnOrAgent):
     """
     直接使用OpenAI的接口实现。对Ollama的访问；
@@ -1510,21 +1448,25 @@ class AAXWOllamaAIConnOrAgent(AAXWAbstractAIConnOrAgent):
     
     def __init__(self, modelName: str = ""): #llama3.2:3b qwen2:1.5b qwen2.5:7b
         # 设置默认的 API URL
-        self.api_url = "http://localhost:11434"
-        
-        self.client = OpenAI(
-            base_url=f"{self.api_url}/v1",
-            api_key="ollama"
-        )
-        
-        # 如果model_name为空，尝试从环境变量获取
-        if not modelName:
-            modelName = os.getenv("OPENAI_MODEL_NAME", "")
-        
-        self.modelName = None
+        self.base_url = "http://localhost:11434/v1"
+        self.modelName= modelName or os.getenv("OPENAI_MODEL_NAME", "")
+        self.updateConfig(baseUrl= self.base_url, modelName=self.modelName)
+    
+    def updateConfig(
+            self, apiKey: str = "ollama", baseUrl: str = None, modelName: str = None): # type: ignore
+        # 设置默认的 API URLbaseUrl
+        self.base_url = baseUrl
+        self.modelName= modelName
+
+        # 
         # 如果仍为空，从可用模型中选择一个
         try:
-            if not modelName:
+            self.client = OpenAI(
+                base_url=self.base_url,
+                api_key=apiKey,
+            )
+
+            if not self.modelName:
                 modelName = self._selectPreferredModel()
                 
             self.modelName = modelName
@@ -1535,8 +1477,7 @@ class AAXWOllamaAIConnOrAgent(AAXWAbstractAIConnOrAgent):
         except Exception as e:
             self.AAXW_CLASS_LOGGER.error(
                 f"Error initializing Ollama model: {str(e)};Ollama访问模块功能可能不可用或需要至少下载1个模型")
-
-        
+        pass
     
     def _selectPreferredModel(self) -> str:
         """从可用模型中选择首选模型"""
@@ -1610,7 +1551,7 @@ class AAXWOllamaAIConnOrAgent(AAXWAbstractAIConnOrAgent):
         try:
             # 构建请求
             req = urllib.request.Request(
-                urllib.parse.urljoin(self.api_url, "/api/pull"),
+                urllib.parse.urljoin(self.base_url, "/api/pull"),
                 data=json.dumps({
                     "name": model_name,
                     "insecure": insecure,
@@ -1673,6 +1614,9 @@ class AAXWOllamaAIConnOrAgent(AAXWAbstractAIConnOrAgent):
             ChatCompletionUserMessageParam(content=formatted_prompt, role="user")
         ]
         try:
+            self.AAXW_CLASS_LOGGER.debug(
+                f"使用model_name:{self.modelName}, base_url:{self.base_url}; "
+                f"最终prompt-messages: {messages}")
             stream = self.client.chat.completions.create(
                 model=self.modelName,  #type:ignore
                 messages=messages,
@@ -1686,18 +1630,165 @@ class AAXWOllamaAIConnOrAgent(AAXWAbstractAIConnOrAgent):
         except Exception as e:
             raise Exception(f"Failed to generate stream chat completion: {str(e)}")
 
-# @AAXWJumpinDICUtilz.register(key="aiConnOrAgentProxy")
-# @AAXW_JUMPIN_LOG_MGR.classLogger()
-# class AIConnOrAgentProxy(AAWXAbstractAIConnOrAgent):
-#     def __init__(self, innerInst: AAWXAbstractAIConnOrAgent=None): #type:ignore
-#         self.innerInstance = innerInst
-
-#     @override
-#     def requestAndCallback(self, prompt: str, func: Callable[[str], None],isStream: bool = True):
-#         return self.innerInstance.requestAndCallback(prompt, func=func,isStream=isStream)
-
-#     def setInnerInstance(self, innerInst: AAWXAbstractAIConnOrAgent):
-#         self.innerInstance = innerInst
+@AAXWJumpinDICUtilz.register(
+    key="configurableAIConnOrAgent", 
+    jumpinConfig="jumpinConfig",
+    dependencyContainer="_nativeDependencyContainer"  # 添加 DI 容器注入
+)
+@AAXW_JUMPIN_LOG_MGR.classLogger(level=logging.DEBUG)
+class ConfigurableAIConnOrAgent(AAXWAbstractAIConnOrAgent):
+    """
+    可配置的AI连接器代理类。
+    根据jumpinConfig配置动态选择使用Ollama或标准OpenAI连接器。
+    支持通过依赖注入获取内部实例。
+    """
+    AAXW_CLASS_LOGGER: logging.Logger
+    
+    def __init__(self):
+        """初始化配置型AI连接器代理"""
+        self.jumpinConfig: AAXWJumpinConfig = None  # type:ignore
+        self.innerInstance = None
+        self.dependencyContainer: AAXWDependencyContainer = None  # type:ignore
+        
+    def initConfig(self, jumpinConfig):
+        """
+        根据传入的配置初始化内部实例
+        
+        Args:
+            jumpinConfig: 包含AI连接器配置的对象
+        """
+        self.jumpinConfig = jumpinConfig
+        self._initializeInnerInstance()
+        
+    def _initializeInnerInstance(self):
+        """初始化内部AI连接器实例，根据配置选择合适的实现"""
+        # 获取活跃的 LLM 提供商和模型
+        llmProvider = self.jumpinConfig.llmProvider
+        llmModelName = self.jumpinConfig.llmModel
+        
+        self.AAXW_CLASS_LOGGER.info(f"初始化LLM连接器，提供商: {llmProvider}, 模型: {llmModelName}")
+        
+        if llmProvider == "ollama":
+            # 从DI容器获取Ollama连接器
+            self.AAXW_CLASS_LOGGER.info("使用Ollama连接器")
+            self.innerInstance = self.dependencyContainer.getAANode("ollamaAIConnOrAgent")
+            
+            # 根据类型直接更新Ollama配置
+            if isinstance(self.innerInstance, AAXWOllamaAIConnOrAgent):
+                ollamaConfig = self.jumpinConfig.getActiveProviderConfig()
+                if ollamaConfig and isinstance(ollamaConfig, OllamaProvider):
+                    try:
+                        serviceUrl = ollamaConfig.serviceUrl
+                        self.innerInstance.updateConfig(
+                            baseUrl=serviceUrl,
+                            modelName=llmModelName
+                        )
+                        self.AAXW_CLASS_LOGGER.info(f"已更新Ollama配置，服务URL: {serviceUrl}, 模型: {llmModelName}")
+                    except Exception as e:
+                        self.AAXW_CLASS_LOGGER.error(f"更新Ollama配置失败: {str(e)}")
+        else:
+            # 从DI容器获取OpenAI连接器
+            self.AAXW_CLASS_LOGGER.info("使用OpenAI连接器")
+            self.innerInstance = self.dependencyContainer.getAANode("simpleAIConnOrAgent")
+            
+            # 根据类型直接更新OpenAI配置
+            if isinstance(self.innerInstance, AAXWSimpleAIConnOrAgent):
+                openaiConfig = self.jumpinConfig.getActiveProviderConfig()
+                if openaiConfig and isinstance(openaiConfig, OpenAIProvider):
+                    try:
+                        self.innerInstance.updateConfig(
+                            apiKey=openaiConfig.apiKey,
+                            baseUrl=openaiConfig.baseUrl,
+                            modelName=llmModelName
+                        )
+                        self.AAXW_CLASS_LOGGER.info(f"已更新OpenAI配置，模型: {llmModelName}")
+                    except Exception as e:
+                        self.AAXW_CLASS_LOGGER.error(f"更新OpenAI配置失败: {str(e)}")
+    
+    @override
+    def requestAndCallback(self, prompt: str, func: Callable[[str], None], isStream: bool = True):
+        """
+        向LLM发送请求并通过回调处理响应
+        
+        Args:
+            prompt: 输入提示词
+            func: 回调函数，用于处理返回的响应文本
+            isStream: 是否使用流式响应
+        """
+        # 确保内部实例已初始化
+        if not self.innerInstance:
+            self._initializeInnerInstance()
+            
+        # 如果内部实例仍然为空，抛出异常
+        if not self.innerInstance:
+            errorMsg = "未能初始化AI连接器，请检查配置"
+            self.AAXW_CLASS_LOGGER.error(errorMsg)
+            raise RuntimeError(errorMsg)
+            
+        # 委托给内部实例处理请求
+        try:
+            self.innerInstance.requestAndCallback(prompt, func, isStream)
+        except Exception as e:
+            self.AAXW_CLASS_LOGGER.error(f"AI请求失败及堆栈 {str(e)}\n{ traceback.format_exc()}")
+            # 向UI回调发送错误信息
+            func(f"\n\n[错误] AI请求失败: {str(e)}")
+    
+    @override
+    def embedding(self, prompt: str):
+        """
+        获取文本的embedding向量
+        
+        Args:
+            prompt: 输入文本
+            
+        Returns:
+            文本的embedding向量
+        """
+        # 确保内部实例已初始化
+        if not self.innerInstance:
+            self._initializeInnerInstance()
+            
+        # 如果内部实例仍然为空，抛出异常
+        if not self.innerInstance:
+            errorMsg = "未能初始化AI连接器，请检查配置"
+            self.AAXW_CLASS_LOGGER.error(errorMsg)
+            raise RuntimeError(errorMsg)
+            
+        # 委托给内部实例处理embedding请求
+        try:
+            return self.innerInstance.embedding(prompt)
+        except Exception as e:
+            self.AAXW_CLASS_LOGGER.error(f"获取embedding失败: {str(e)}")
+            raise RuntimeError(f"获取embedding失败: {str(e)}")
+    
+    @override
+    def edit(self, prompt: str, instruction: str):
+        """
+        获取LLM的文本编辑结果
+        
+        Args:
+            prompt: 原始文本
+            instruction: 编辑指令
+            
+        Returns:
+            编辑后的文本
+        """
+        # 确保内部实例已初始化
+        if not self.innerInstance:
+            self._initializeInnerInstance()
+            
+        # 如果内部实例仍然为空，抛出异常
+        if not self.innerInstance:
+            errorMsg = "未能初始化AI连接器，请检查配置"
+            self.AAXW_CLASS_LOGGER.error(errorMsg)
+            raise RuntimeError(errorMsg)
+            
+        # 委托给内部实例处理编辑请求
+        try:
+            return self.innerInstance.edit(prompt, instruction)
+        except Exception as e:
+            self.AAXW_CLASS_LOGGER.error(f"文本编辑失败: {str(e)}")
+            raise RuntimeError(f"文本编辑失败: {str(e)}")
 
 
 ##
@@ -1708,7 +1799,7 @@ class AAXWOllamaAIConnOrAgent(AAXWAbstractAIConnOrAgent):
 #列出指定目录对话历史（或记录）列表；
 #载入项的历史记录，成为Memory/session或可进行互动操作的访问-操作器；（内部挂用LLMconn-或外层 agent进行互动操作。）
 #新建一个互动Session；
-@AAXW_JUMPIN_LOG_MGR.classLogger(level=logging.DEBUG)
+@AAXW_JUMPIN_LOG_MGR.classLogger()
 class AAXWJumpinHistoriedMemory:
     """封装单个对话的历史和内存"""
     AAXW_CLASS_LOGGER: logging.Logger
@@ -3362,7 +3453,7 @@ class AIConnectRunnable(QRunnable,QObject):
         self.updateUI.emit(str(newContent), str(self.uiId)) 
 
 
-# applet-example
+# 默认功能的applet
 @AAXW_JUMPIN_LOG_MGR.classLogger()
 class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
     "默认带有复合功能的Applet实现"
@@ -3379,19 +3470,28 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
         self.title="🐶OP"
 
         self.backupContentBlockStrategy:AAXWContentBlockStrategy=None #type:ignore
-        pass
 
+        self.agentEnvironment:AgentEnvironment=None #type:ignore
+        self.aaAgent:BaseAgent=None #type:ignore
+        pass
+    
     @override
     def getName(self) -> str:return  self.name
     @override
     def getTitle(self) -> str:return  self.title
+
+    
     @override
     def onAdd(self):
         #
         #加入管理时获取细节资源,内置简单ai访问器（Openai）
         # ai  （后台类资源默认应该都有）
-        self.simpleAIConnOrAgent:AAXWSimpleAIConnOrAgent=self.dependencyContainer.getAANode(
-            "simpleAIConnOrAgent")
+
+        # self.simpleAIConnOrAgent:AAXWSimpleAIConnOrAgent=self.dependencyContainer.getAANode(
+        #     "simpleAIConnOrAgent")
+        self.simpleAIConnOrAgent:AAXWAbstractAIConnOrAgent=self.dependencyContainer.getAANode(
+            "configurableAIConnOrAgent")
+        
         # 
 
         self.jumpinAIMemoryManager:AAXWJumpinFileAIMemoryManager=self.dependencyContainer.getAANode(
@@ -3399,25 +3499,126 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
 
         self.currentHistoriedMemory:AAXWJumpinHistoriedMemory=None #type:ignore
 
+        #
+        # 默认agent
+        self.agentEnvironment=AgentEnvironment(runtimeType="pyside6")
+        self.aaAgent=self.agentEnvironment.createAgent("ANAN")
+        # 创建并配置Agent Action
+        renameAgentAction = self.ChatHisRenameAgentAction(compoApplet=self)
+        # 连接重命名信号到槽函数
+        renameAgentAction.signalEmitter.renameSignal.connect(
+            slot=self._renameMemoryAction,
+            type=Qt.ConnectionType.QueuedConnection  # 使用队列连接确保线程安全
+        )
+        # 增加action
+        self.aaAgent.addActions([
+            self.ChatHisReadAgentAction(aiMemoryManager=self.jumpinAIMemoryManager),
+            renameAgentAction
+        ]
+        )
+        #aaAgent 创建后就启动状态。 
+
+        #列表展示面板
+        self.memoriesListPanel: AAXWJumpinDefaultCompoApplet.MemoriesListPanel =None #type:ignore
+        
         #持续展示近期列表；只要applet还在mgr运行，就持续展示；
         #直接在applet初始化时初始化；
         self._initAIMemoryListUI()
 
-        # 初始化“新互动”的功能
+        # 初始化"新互动"表菜单项
         self._initNewInteractionUI()
-        
+
+        # 初始化所有记忆/历史列表菜单项
+        self._initAllAIMemeoryListUI()
+
         pass
-
-
 
     @override
     def onRemove(self):
         self.AAXW_CLASS_LOGGER.warning(
             f"这是个默认Applet{self.__class__.__name__}只有关闭整体时才应该被移除释放。")
-        
+        self.aaAgent.stop()
+        self.agentEnvironment.stopAll()
         pass
 
+
+    class ChatHisReadAgentAction(BaseAgentAction):
+        """对话历史读取动作"""
+        #Action管理器使用
+        name: str = "对话历史读取"
+        description: str = "读取指定名的'对话历史'的内容"
+        # 
+        aiMemoryManager: Optional[
+            AAXWJumpinFileAIMemoryManager] = Field(default=None, description="AI记忆管理器")
+
+        # 这是用来获取参数的Schema信息，用来生成prompt或来解析。
+        class ArgumentSchema(BaseModel):
+            """读取对话历史的参数模型"""
+            chatHisName: str = Field(..., description="对话历史名称")
+            content: str = Field(default="", description="指定范围内容,可选参数")
+
+        args_schema: Type[BaseModel] = ArgumentSchema
+
+        def _run(self, chatHisName: str, content: str = "") -> str:
+            if self.aiMemoryManager is None:
+                    return f"[错误] 未注入 aiMemoryManager,无法读取对话历史 {chatHisName},无法完成Action"
+                
+            try:
+                memory = self.aiMemoryManager.loadOrCreateMemory(chatHisName)
+                msgLs:List[BaseMessage]=memory.message_history.messages
+                
+                # 获取最后10条消息
+                last_messages = msgLs[-10:] if len(msgLs) > 10 else msgLs
+                
+                # 格式化消息内容
+                formatted_messages = []
+                for msg in last_messages:
+                    role = "Human" if isinstance(msg, HumanMessage) else "Assistant"
+                    formatted_messages.append(f"{role}: {msg.content}")
+                
+                history_content = "\n\n".join(formatted_messages)
+                return f"## 对话历史 {chatHisName} 的内容:\n\n{history_content}"
+            except Exception as e:
+                return f"[错误] 读取对话历史 {chatHisName} 失败: {str(e)}"
+
+    class ChatHisRenameAgentAction(BaseAgentAction):
+        """重命名对话历史动作"""
+        name: str = "对话历史重命名"
+        description: str = "将指定名称的对话历史重命名为新名称"
+        
+        # 继承QObject以支持信号机制
+        class RenameSignalEmitter(QObject):
+            renameSignal = Signal(str, str)  # 重命名信号(oldName, newName)
     
+        # 将signalEmitter定义为Field
+        signalEmitter: RenameSignalEmitter = Field(
+            default_factory=RenameSignalEmitter,
+            description="信号发射器"
+        )
+    
+        compoApplet: Optional[
+            'AAXWJumpinDefaultCompoApplet'] = Field(default=None, description="复合功能Applet")
+
+        class ArgumentSchema(BaseModel):
+            """重命名对话历史的参数模型"""
+            chatHisName: str = Field(..., description="原对话历史名称")
+            newName: str = Field(..., description="新的对话历史名称")
+
+        args_schema: Type[BaseModel] = ArgumentSchema
+
+        def _run(self, chatHisName: str, newName: str) -> str:
+            if self.compoApplet is None:
+                return f"[错误] 未注入 compoApplet,无法重命名对话历史 {chatHisName}"
+            
+            try:
+                # 通过信号触发重命名操作
+                self.signalEmitter.renameSignal.emit(chatHisName, newName)
+                return f"[成功] 已发送重命名请求: {chatHisName} -> {newName}"
+                
+            except Exception as e:
+                return f"[错误] 重命名失败: {str(e)}"
+
+
 
     @override
     def onActivate(self): 
@@ -3458,7 +3659,7 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
     
     # ui-init
     def _initNewInteractionUI(self):
-        # 初始化“新互动”的功能
+        # 初始化"新互动"的功能
         niWg:NavigationWidget=self.mainWindow.navigationInterface.widget('new_interaction')
         niWg.clicked.connect(self.doNewInteractionAction)
         pass
@@ -3482,8 +3683,8 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
         for record in reversed(mems):
             # 定义右键菜单项
             menuItems = [
-                ("重命名", lambda _,r=record: self._renameMemoryShowDialogUI(record=r)),
-                ("删除", lambda _,r=record: self._deleteMemoryAction(record=r))
+                ("重命名", lambda _,r=record: self.showRenameMemoryDialogUI(name=r)),
+                ("删除", lambda _,r=record: self.deleteMemoryAction(name=r))
             ]
 
             self.mainWindow.navigationInterface.insertItemWithContextMenu(
@@ -3499,7 +3700,197 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
                 position=NavigationItemPosition.SCROLL,
                 tooltip=f'{record}'
             )
+
+    def _initAllAIMemeoryListUI(self):
+        """初始化 列出所有memory/history的菜单项以及列表展示面板"""
+
+        #初始化列表展示面板
+        if self.memoriesListPanel is None:
+            self.memoriesListPanel = self.MemoriesListPanel(
+                applet=self,
+                title="记忆与对话历史列表",
+                parent=self.mainWindow.mainStackedFrame)
+            self.mainWindow.mainStackedFrame.addWidget(self.memoriesListPanel)
+
+        #初始化列出功能菜单项
+        allmemoryItem = cast(NavigationTreeWidget, 
+            self.mainWindow.navigationInterface.widget('all_history'))
+        allmemoryItem.clicked.connect(self.listAllMemoriesAction)
+
+        pass
+
+
+    #
+    # 
+    def listAllMemoriesAction(self):
+        """展示memories列表面板"""
+        
+        # 获取记忆列表(默认按修改时间降序,新的在前)
+        mems = self.jumpinAIMemoryManager.listMemoryNames(
+            offset=0,
+            limit=200,  # 默认只展示最近100
+            sortByModified=True,
+            ascending=False
+        )
+
+        # 构建记忆数据格式
+        memories = [{
+            "name":mems[i],
+            "title": f"{mems[i]}", 
+            "description": "...概要描述..."} 
+            for i in range(len(mems))
+        ]
+
+        self.memoriesListPanel.renderMemoryList(memories)
+        #前台展示
+        self.mainWindow.mainStackedFrame.setCurrentWidget(self.memoriesListPanel)
+        # self.memoriesListPanel.show()
+
+    class MemoOrHisCardWidget(CardWidget):
+        def __init__(self, name,title, description, index, applet,parent=None):
+            super().__init__(parent)
+            self.memoOrHisName=name
+            self.index = index
+            # self.routekey = routeKey
+            self.applet:AAXWJumpinDefaultCompoApplet=applet #type:ignore
+            
+            # 设置卡片属性
+            self.setBorderRadius(8)
+            self.setObjectName('memoOrHisCardWidget')
+            self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)  # 添加此行
+            # self.setFixedHeight(120)  # 添加此行，设置固定高度
+            
+            # 主布局
+            self.hBoxLayout = QHBoxLayout(self)
+            
+            # 左侧图标
+            self.iconWidget = IconWidget(FIF.HISTORY, self)
+            self.iconWidget.setFixedSize(16, 16)
+            
+            # 中间内容布局
+            self.contentLayout = QVBoxLayout()
+            self.contentLayout.setSpacing(1)
+            self.contentLayout.setContentsMargins(0, 0, 0, 0)
+            self.contentLayout.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+            
+            # 标题和描述
+            stitle = title[:10] + '...'if len(title) > 12 else title
+            # self.titleLabel = SubtitleLabel(stitle, self)
+            self.titleLabel = StrongBodyLabel(stitle, self)
+            # self.descriptionLabel = BodyLabel(TextWrap.wrap(description, 45, False)[0], self)
+            # 使用 PlainTextEdit 来展示描述
+            # self.descriptionLabel = TextEdit(self)
+            self.descriptionLabel = TextBrowser(self)
+            self.descriptionLabel.setPlainText(description)
+            self.descriptionLabel.setReadOnly(True)  # 设置为只读
+            self.descriptionLabel.setFixedHeight(80)
+            # 设置样式为无边框且颜色与外部组件一致
+            self.descriptionLabel.setStyleSheet("""
+                QTextBrowser {
+                    border: none;  /* 无边框 */
+                    background-color: transparent;  /* 背景透明 */
+                }
+            """)
+            
+            # 右侧按钮布局
+            self.buttonLayout = QVBoxLayout()
+            self.buttonLayout.setSpacing(4)
+            self.buttonLayout.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom)
+            
+            # 按钮
+            self.detailButton = PushButton('详情', self, icon=FIF.INFO)
+            self.deleteButton = PushButton('删除', self, icon=FIF.DELETE)
+            self.renameButton = PushButton('重命名', self, icon=FIF.EDIT)
+            
+            for btn in (self.detailButton, self.deleteButton, self.renameButton):
+                btn.setFixedWidth(100)
+                
+            # 组装布局
+            # self.contentLayout.addStretch(1)
+            self.contentLayout.addWidget(self.titleLabel)
+            self.contentLayout.addWidget(self.descriptionLabel)
+            # self.contentLayout.addStretch(1)
+            
+            
+            self.buttonLayout.addWidget(self.detailButton)
+            self.buttonLayout.addWidget(self.renameButton)
+            self.buttonLayout.addWidget(self.deleteButton)
+            
+            self.hBoxLayout.addWidget(
+                self.iconWidget, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+            self.hBoxLayout.addLayout(self.contentLayout, 1)
+            self.hBoxLayout.addLayout(self.buttonLayout, 0)
+            
+            # 设置布局属性
+            self.hBoxLayout.setContentsMargins(20, 16, 16, 16)
+            self.hBoxLayout.setSpacing(28)
+            
+            # 设置卡片属性
+            self.setBorderRadius(8)
+            self.setObjectName('customCard')
+            
+            # 信号连接
+            self.detailButton.clicked.connect(self.on_detail_click)
+            self.deleteButton.clicked.connect(self.on_delete_click)
+            self.renameButton.clicked.connect(self.on_rename_click)
+        
+        def mouseReleaseEvent(self, e):
+            super().mouseReleaseEvent(e)
+            # signalBus.switchToCard.emit(self.routekey, self.index)
+        
+        def on_detail_click(self): 
+            #  self.applet.
+            self.applet.loadMemoryAction(record=self.memoOrHisName)
+            pass
+        def on_delete_click(self): 
+            print(f"Delete memo or his name:{self.memoOrHisName}")
+            self.applet.deleteMemoryAction(self.memoOrHisName)
+        def on_rename_click(self): 
+            print(f"Rename memo or his name:{self.memoOrHisName}")
+            self.applet.showRenameMemoryDialogUI(self.memoOrHisName)
     
+    #
+    class MemoriesListPanel(QWidget):
+        def __init__(self,applet,title="",parent=None):
+            super().__init__(parent)
+            self.applet:AAXWJumpinDefaultCompoApplet=applet
+            self.titleLabel = QLabel(title, self)
+            self.vBoxLayout = QVBoxLayout(self)
+            # self.setGeometry(100, 100, 400, 300)
+            self.vBoxLayout.addWidget(self.titleLabel)
+            self.scrollArea = ScrollArea(self)
+            self.scrollArea.setWidgetResizable(True)
+            self.container = QWidget()
+            self.flowLayout = QVBoxLayout(self.container)
+            self.scrollArea.setWidget(self.container)
+            self.vBoxLayout.addWidget(self.scrollArea)
+            self.vBoxLayout.setContentsMargins(10, 10, 10, 10)
+            self.vBoxLayout.setSpacing(10)
+
+        def renderMemoryList(self, memories):
+            """刷新记忆列表:
+            memories[{
+                title:'xxx'
+                description:'xxx'
+            },...]
+            """
+            # 清空当前内容
+            self.clearMemoryList()
+            # 添加新的记忆项
+            for index, memory in enumerate(memories):
+                card = AAXWJumpinDefaultCompoApplet.MemoOrHisCardWidget(
+                    name=memory['name'],title=memory['title'],
+                    description=memory['description'],index=index,applet=self.applet,parent=self)
+                self.flowLayout.addWidget(card)
+
+        def clearMemoryList(self):
+            """清空记忆列表展示"""
+            for i in reversed(range(self.flowLayout.count())):
+                widget = self.flowLayout.itemAt(i).widget()
+                if widget is not None:
+                    widget.deleteLater()
+
+
     def _initBuddyAndAppletListUI(self):
         """初始化伙伴与应用列表UI
         Partner指AIAgent或其他可互动主体；
@@ -3533,21 +3924,21 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
 
 
     @Slot()
-    def _deleteMemoryAction(self, record: str):
+    def deleteMemoryAction(self, name: str):
         """删除记忆操作
         Args:
             record: 记忆ID
         """
         # TODO: 可以添加确认对话框
-        self.AAXW_CLASS_LOGGER.info(f"删除记忆操作:{record}")
+        self.AAXW_CLASS_LOGGER.info(f"删除记忆操作:{name}")
         try:
             # 从文件系统删除
-            self.jumpinAIMemoryManager.deleteMemory(record)
+            self.jumpinAIMemoryManager.deleteMemory(name)
             # 从导航栏移除
-            self.mainWindow.navigationInterface.removeWidget(record)
+            self.mainWindow.navigationInterface.removeWidget(name)
             # 如果当前加载的就是这条记忆,清空显示
             if (self.currentHistoriedMemory and 
-                self.currentHistoriedMemory.chat_id == record):
+                self.currentHistoriedMemory.chat_id == name):
                 self.currentHistoriedMemory = None
                 self.clearContentAction()
             # 刷新列表
@@ -3564,6 +3955,20 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
             self.titleLabel = SubtitleLabel('修改互动名称：', self)
             self.nameLineEdit = LineEdit(self)
             
+            # 添加单选按钮组
+            self.radioGroup = QButtonGroup(self) 
+            self.userRadio = RadioButton('用户指定', self)
+            self.agentRadio = RadioButton('Agent自动', self)
+            self.radioGroup.addButton(self.userRadio)
+            self.radioGroup.addButton(self.agentRadio)
+            self.userRadio.setChecked(True)  # 默认选中用户指定
+            
+            # 创建水平布局放置单选按钮
+            radioLayout = QHBoxLayout()
+            radioLayout.addWidget(self.userRadio)
+            radioLayout.addWidget(self.agentRadio)
+            radioLayout.addStretch()
+            
             if oldName:
                 self.nameLineEdit.setText(oldName)
             else:
@@ -3575,6 +3980,7 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
 
             # add widget to view layout
             self.viewLayout.addWidget(self.titleLabel)
+            self.viewLayout.addLayout(radioLayout)  # 添加单选按钮组布局
             self.viewLayout.addWidget(self.nameLineEdit)
             self.viewLayout.addWidget(self.warningLabel)
             self.warningLabel.hide()
@@ -3584,10 +3990,24 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
             self.cancelButton.setText('取消')
 
             self.widget.setMinimumWidth(350)
-        
+            
+            # 连接单选按钮状态改变信号
+            self.radioGroup.buttonClicked.connect(self._onRadioChanged)
+            
+        def _onRadioChanged(self):
+            """单选按钮状态改变时的处理"""
+            isUserMode = self.userRadio.isChecked()
+            self.nameLineEdit.setEnabled(isUserMode)
+            self.warningLabel.setVisible(isUserMode and not self.validate())
+    
         @override
         def validate(self):
             """ Rewrite the virtual method """
+            # 如果是Agent自动模式，直接返回True
+            if self.agentRadio.isChecked():
+                return True
+                
+            # 用户指定模式下进行验证
             text = self.nameLineEdit.text()
             # 修改正则表达式以支持中文字符
             isValid = (4 <= len(text) <= 20) and bool(
@@ -3599,16 +4019,34 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
         def getNewName(self) -> str:
             """获取新名称"""
             return self.nameLineEdit.text()
+            
+        def isAgentMode(self) -> bool:
+            """获取是否为Agent自动模式"""
+            return self.agentRadio.isChecked()
 
     @Slot()
-    def _renameMemoryShowDialogUI(self, record: str):
-        dialog = self.RenameMemoryMessageBox(oldName=record, parent=self.mainWindow)
+    def showRenameMemoryDialogUI(self, name: str):
+        dialog = self.RenameMemoryMessageBox(oldName=name, parent=self.mainWindow)
         if dialog.exec():
-            newName = dialog.getNewName()
-            self.AAXW_CLASS_LOGGER.info(f"准备重命名记忆:{record} 新名称:{newName}")
-            self._renameMemoryAction(record, newName)
+            if dialog.isAgentMode() :
+                # self.aaAgent.sendMessageToMe(
+                #     "请帮我将'"+
+                #     name+
+                #     "'的对话历史改名，先读取对话历史内容并小结出新名字，然后将其改名。"+
+                #     "对话历史名字不能超过15个字符。改完请回复我一下。"
+                # )
+                self.aaAgent.senseEnvironmentEvent(
+                    command="请帮忙将'"+
+                    name+
+                    "'的对话历史改名，先读取对话历史内容并小结出新名字，然后将其改名。"+
+                    "对话历史名字不能超过15个字符且保留原后缀。改完或失败就结束无需回复。"
+                )
+            else:
+                newName = dialog.getNewName()
+                self.AAXW_CLASS_LOGGER.info(f"准备重命名记忆:{name} 新名称:{newName}")
+                self._renameMemoryAction(name, newName)
         else:
-            self.AAXW_CLASS_LOGGER.info(f"取消重命名记忆:{record}")
+            self.AAXW_CLASS_LOGGER.info(f"取消重命名记忆:{name}")
 
     @Slot()
     def _renameMemoryAction(self, record: str,newName:str):
@@ -3656,6 +4094,11 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
         
         # 刷新界面
         self.mainWindow.navigationInterface.panel.update()
+
+        # 增加 刷新指定位置（比如 新加的列表面板）
+        if self.mainWindow.mainStackedFrame.currentWidget() is self.memoriesListPanel:
+            #刷新列表
+            self.listAllMemoriesAction()
     
 
     
@@ -3751,7 +4194,8 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
         # 创建并启动AI处理线程
         aiThread = self.MemorisedAIConnectUpdateShowingPanelRunnable(
             text=text, uiCellId=str(rrid), llmagent=self.simpleAIConnOrAgent, 
-            hMemo=self.currentHistoriedMemory,mainWindow=self.mainWindow)
+            hMemo=self.currentHistoriedMemory,mainWindow=self.mainWindow,
+            aaAgent=self.aaAgent)
         aiThread.updateUI.connect(self.mainWindow.msgShowingPanel.appendContentByRowId)
         
         # 使用mainWindow的线程池来管理线程
@@ -3763,7 +4207,6 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
     def _logInput(self):
         # 打印输入框中的内容
         self.AAXW_CLASS_LOGGER.debug(f"Input: {self.mainWindow.inputPanel.promptInputEdit.text()}")
-
 
 
     
@@ -3787,7 +4230,7 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
             self.mutexLocker= AAXW_JUMPIN_QTSRR.getMutex(
                 resourceId="Thread_"+str(self.mainWindow.msgShowingPanel.THREAD_SAFE_RESOURCE_ID))
             self.setAutoDelete(True)  # 设置自动删除
-            
+    
         @override
         def run(self):
             """线程运行方法"""
@@ -3825,7 +4268,7 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
                                 # self.msleep(100)
                         QThread.msleep(50)  # 模拟延迟
 
-    @AAXW_JUMPIN_LOG_MGR.classLogger()#level=logging.INFO
+    @AAXW_JUMPIN_LOG_MGR.classLogger()
     class MemorisedAIConnectUpdateShowingPanelRunnable(AIConnectRunnable,QObject):
         AAXW_CLASS_LOGGER: logging.Logger
 
@@ -3838,7 +4281,8 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
         # updateUI = Signal(str,str)  
 
         def __init__(self,text:str,uiCellId:str,llmagent:AAXWAbstractAIConnOrAgent,
-                hMemo:AAXWJumpinHistoriedMemory,mainWindow:'AAXWJumpinMainWindow'):
+                hMemo:AAXWJumpinHistoriedMemory,mainWindow:'AAXWJumpinMainWindow',
+                aaAgent:Optional[BaseAgent]=None):
             QObject.__init__(self)
             AIConnectRunnable.__init__(self,text=text,uiCellId=uiCellId,llmagent=llmagent)
             self.hMemo = hMemo
@@ -3848,6 +4292,7 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
                 resourceId="Thread_"+str(self.mainWindow.msgShowingPanel.THREAD_SAFE_RESOURCE_ID))
             self.wholeResponse = ""
             self.setAutoDelete(True)  # 设置自动删除
+            self.aaAgent:Optional[BaseAgent]=aaAgent
             
         def run(self):
             # 等待之前user快更新完成
@@ -3884,16 +4329,41 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
                     #TODO 如果服务卡顿一直不返回，有时候需要提供强制终端的手段；
                     self.llmagent.requestAndCallback(prompted, self.onResponse)
                 except Exception as e:
-                    self.AAXW_CLASS_LOGGER.error(f"An exception occurred: {str(e)}")
+                    import traceback
+                    self.AAXW_CLASS_LOGGER.error(f"An exception occurred: {str(e)}", exc_info=True)
+                    self.AAXW_CLASS_LOGGER.error(traceback.format_exc())
                     exec_e=e
-                    # raise e
                 finally:
                     #onfinish
                     if exec_e is None and self.wholeResponse: #没有异常才写入库
                         ai_message = AIMessage(content=self.wholeResponse)
                         self.hMemo.save(ai_message)
+                        self.asyncMemoryRenameByAgent(self.hMemo.chat_id)
                     pass
-
+        
+        def asyncMemoryRenameByAgent(self,name:str):
+            """异步改名"""
+            if name is None:
+                return
+            try:
+                if  self.aaAgent is None:
+                    self.AAXW_CLASS_LOGGER.warning(f"aaAgent为None,无法用agent改名。")
+                    return 
+                if not name.startswith('interact'):
+                    self.AAXW_CLASS_LOGGER.debug(f"对话历史（记忆）'{name}'无需改名")
+                    return 
+                
+                self.AAXW_CLASS_LOGGER.info(f"异步发起对话历史（记忆）' {name}'重命名,向Agent提供环境事件。")
+                self.aaAgent.senseEnvironmentEvent(
+                    command="请帮忙将'"+
+                    name+
+                    "'的对话历史改名，先读取对话历史内容并小结出新名字，然后将其改名。"+
+                    "对话历史名字不能超过15个字符且保留原后缀。改完或失败就结束无需回复。"
+                )
+            except Exception as e:
+                self.AAXW_CLASS_LOGGER.error(f"异步发起重命名对话历史'{name}'时发生错误: {str(e)}", exc_info=True)
+                self.AAXW_CLASS_LOGGER.error(traceback.format_exc())
+        
         def onResponse(self,str):
             self.wholeResponse += str
             self.callUpdateUI(str)
@@ -4412,183 +4882,381 @@ class AAXWJumpinThreadSafeMsgShowingPanel(AAXWScrollPanel):
         return super().clearContent()
 
 
+# 
+class LLMProviderForm(QWidget):
+    """LLM模型提供商配置表单"""
+    
+    def __init__(self, dependencyContainer:AAXWDependencyContainer ,jumpinConfig:AAXWJumpinConfig,title:str,parent:QWidget=None):
+        super().__init__(parent=parent)
+        self.jumpinConfig:AAXWJumpinConfig = jumpinConfig
+        self.dependencyContainer=dependencyContainer
+        
+        # 创建主布局
+        self.layout = QVBoxLayout(self)
+        self.layout.setContentsMargins(0, 0, 0, 0)
+        self.layout.setSpacing(10)  # 设置合适的间距
+        self.layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        # 添加组标题
+        self.titleLabel = None
+        if title:
+            self.titleLabel = SubtitleLabel(title)
+            self.layout.addWidget(self.titleLabel)
+        
+        # 创建分段控件和堆叠窗口
+        self.segmentedWidget = SegmentedWidget(self)
+        self.stackedWidget = QStackedWidget(self)
+        
+        # 创建标签页
+        self.openaiTab = self.createOpenAITab()
+        self.ollamaTab = self.createOllamaTab()
+        
+        # 添加标签页到堆叠窗口
+        self.stackedWidget.addWidget(self.openaiTab)
+        self.stackedWidget.addWidget(self.ollamaTab)
+        
+        # 添加选项到分段控件
+        self.segmentedWidget.addItem(text="OpenAI", routeKey="openai")
+        self.segmentedWidget.addItem(text="Ollama", routeKey="ollama")
+        
+        # 连接信号 - 使用currentItemChanged信号和自定义处理函数
+        self.segmentedWidget.currentItemChanged.connect(self.onProviderChanged)
+        
+        # 添加到布局
+        self.layout.addWidget(self.segmentedWidget)
+        self.layout.addWidget(self.stackedWidget)
+        
+        # 默认选择第一个选项
+        self.segmentedWidget.setCurrentItem("openai")
+        self.stackedWidget.setCurrentWidget(self.openaiTab)
+
+        # self.segmentedWidget.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        # self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+        self.setMaximumHeight(300)
+        # self.setMinimumHeight(150)
+        # 设置尺寸策略，防止过大的留白
+        # self.stackedWidget.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        # 设置最大高度限制，防止过大的留白
+        
+    
+    def onProviderChanged(self, routeKey):
+        """处理提供商切换的方法"""
+        # 根据routeKey设置stackedWidget的当前索引
+        if routeKey == "openai":
+            self.stackedWidget.setCurrentWidget(self.openaiTab)
+        elif routeKey == "ollama":
+            self.stackedWidget.setCurrentWidget(self.ollamaTab)
+    
+    def createOpenAITab(self):
+        """创建OpenAI配置选项卡"""
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        # layout.setContentsMargins(10, 10, 10, 10)
+        # layout.setSpacing(8)  # 设置合适的间距
+        # container.setMinimumHeight(100)
+        # container.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        
+        # API密钥
+        apiKeyLabel = BodyLabel("API密钥:")
+        self.apiKeyEdit = LineEdit()
+        self.apiKeyEdit.setPlaceholderText("输入您的OpenAI API Key")
+        self.apiKeyEdit.setText(self.jumpinConfig.openaiProvider.apiKey)
+        self.apiKeyEdit.setClearButtonEnabled(True)
+        self.apiKeyEdit.setEchoMode(QLineEdit.EchoMode.Password)
+        
+        # 基础URL
+        baseUrlLabel = BodyLabel("基础URL:")
+        self.baseUrlEdit = LineEdit()
+        self.baseUrlEdit.setPlaceholderText("输入API基础URL（可选）")
+        self.baseUrlEdit.setText(self.jumpinConfig.openaiProvider.baseUrl)
+        self.baseUrlEdit.setClearButtonEnabled(True)
+        
+        # 模型选择
+        modelLabel = BodyLabel("模型:")
+        self.modelComboBox = ComboBox()
+        # models = ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"]
+        models = self.jumpinConfig.openaiProvider.candidateModels()
+        self.modelComboBox.addItems(models)
+        
+        # 设置默认模型
+        defaultModel = self.jumpinConfig.openaiProvider.defaultModelName
+        index = self.modelComboBox.findText(defaultModel)
+        if index >= 0:
+            self.modelComboBox.setCurrentIndex(index)
+        
+        # 保存按钮
+        self.saveOpenAIButton = PrimaryPushButton("保存设置")
+        self.saveOpenAIButton.clicked.connect(self.saveOpenAISettings)
+        
+        # 添加组件到布局
+        layout.addWidget(apiKeyLabel)
+        layout.addWidget(self.apiKeyEdit)
+        layout.addWidget(baseUrlLabel)
+        layout.addWidget(self.baseUrlEdit)
+        layout.addWidget(modelLabel)
+        layout.addWidget(self.modelComboBox)
+        layout.addWidget(self.saveOpenAIButton)
+        # 移除这行代码，它会导致下方留白
+        # layout.addStretch(1)
+        layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        
+        return container
+    
+    def createOllamaTab(self):
+        """创建Ollama配置选项卡"""
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        # layout.setContentsMargins(10, 10, 10, 10)
+        # layout.setSpacing(8)  # 设置合适的间距
+        
+        # 服务地址
+        serviceUrlLabel = BodyLabel("服务地址:")
+        self.serviceUrlEdit = LineEdit()
+        self.serviceUrlEdit.setPlaceholderText("例如: http://localhost:11434")
+        self.serviceUrlEdit.setText(self.jumpinConfig.ollamaProvider.serviceUrl)
+        self.serviceUrlEdit.setClearButtonEnabled(True)
+        
+        # 模型选择
+        modelLabel = BodyLabel("模型:")
+        self.ollamaModelComboBox = ComboBox()
+        ollamaModels = ["llama3.1", "llama3", "llama2", "qwen2.5:1.5b", "qwen2.5:0.5b", "deepseek"]
+        self.ollamaModelComboBox.addItems(ollamaModels)
+        
+        # 设置默认模型
+        defaultOllamaModel = self.jumpinConfig.ollamaProvider.defaultModelName
+        index = self.ollamaModelComboBox.findText(defaultOllamaModel)
+        if index >= 0:
+            self.ollamaModelComboBox.setCurrentIndex(index)
+        
+        # 保存按钮
+        self.saveOllamaButton = PrimaryPushButton("保存设置")
+        self.saveOllamaButton.clicked.connect(self.saveOllamaSettings)
+        
+        # 添加组件到布局
+        layout.addWidget(serviceUrlLabel)
+        layout.addWidget(self.serviceUrlEdit)
+        layout.addWidget(modelLabel)
+        layout.addWidget(self.ollamaModelComboBox)
+        layout.addWidget(self.saveOllamaButton)
+        # 移除这行代码，它会导致下方留白
+        # layout.addStretch(1)
+        layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        
+        return container
+    
+    def saveOpenAISettings(self):
+        """保存OpenAI设置"""
+        # 获取输入值
+        apiKey = self.apiKeyEdit.text().strip()
+        baseUrl = self.baseUrlEdit.text().strip()
+        modelName = self.modelComboBox.currentText()
+        
+        # 更新配置并保存
+        # 设置默认提供商为OpenAI
+        openaiConfig = {
+            "apiKey": apiKey,
+            "baseUrl": baseUrl,
+            "modelName": modelName
+        }
+        
+        # 调用更新方法，更新LLM配置
+        self.jumpinConfig.updateLLMConfig(
+            provider="openai", 
+            openaiConfig=openaiConfig,
+            llmModel=modelName  # 添加这一行，确保llmModel也被更新
+        )
+
+
+        self.jumpinConfig.saveConfigToYaml()
+        
+        # 重新加载配置以确保一致性
+        self.jumpinConfig.reloadConfig()
+        
+        # 输出当前LLM配置到日志
+        self.jumpinConfig.logLLMConfig()
+
+        # 重新初始化configurableAIConnOrAgent
+        configurableAIConnOrAgent:ConfigurableAIConnOrAgent =self.dependencyContainer.getAANode("configurableAIConnOrAgent")
+        configurableAIConnOrAgent._initializeInnerInstance()
+        
+        # 显示成功消息
+        InfoBar.success(
+            title='成功',
+            content="OpenAI设置已保存",
+            orient=Qt.Orientation.Horizontal,
+            isClosable=True,
+            position=InfoBarPosition.TOP,
+            duration=2000,
+            parent=self
+        )
+
+    def saveOllamaSettings(self):
+        """保存Ollama设置"""
+        # 获取输入值
+        serviceUrl = self.serviceUrlEdit.text().strip()
+        modelName = self.ollamaModelComboBox.currentText()
+        
+        # 更新配置并保存
+        # 设置默认提供商为Ollama
+        ollamaConfig = {
+            "serviceUrl": serviceUrl,
+            "modelName": modelName
+        }
+        
+        # 调用更新方法，更新LLM配置
+        self.jumpinConfig.updateLLMConfig(
+            provider="ollama", 
+            ollamaConfig=ollamaConfig,
+            llmModel=modelName  # 添加这一行，确保llmModel也被更新
+        )
+        
+        # 保存配置到文件
+        self.jumpinConfig.saveConfigToYaml()
+        
+        # 重新加载配置以确保一致性
+        self.jumpinConfig.reloadConfig()
+        
+        # 输出当前LLM配置到日志
+        self.jumpinConfig.logLLMConfig()
+
+        # 重新初始化configurableAIConnOrAgent
+        configurableAIConnOrAgent:ConfigurableAIConnOrAgent =self.dependencyContainer.getAANode("configurableAIConnOrAgent")
+        configurableAIConnOrAgent._initializeInnerInstance()
+        
+        # 显示成功消息
+        InfoBar.success(
+            title='成功',
+            content="Ollama设置已保存",
+            orient=Qt.Orientation.Horizontal,
+            isClosable=True,
+            position=InfoBarPosition.TOP,
+            duration=2000,
+            parent=self
+        )
+
 @AAXW_JUMPIN_LOG_MGR.classLogger()
 class AAXWJumpinSettingPanel(ScrollArea):
     """ Setting interface """
     AAXW_CLASS_LOGGER:logging.Logger
 
-    def __init__(self, jumpinConfig:AAXWJumpinConfig,parent=None):
+    def __init__(self, dependencyContainer:AAXWDependencyContainer,
+                 jumpinConfig:AAXWJumpinConfig,parent=None):
         super().__init__(parent=parent)
         self.jumpinConfig:AAXWJumpinConfig=jumpinConfig
+        self.dependencyContainer=dependencyContainer
         self.scrollWidget = QWidget()
         self.expandLayout = ExpandLayout(self.scrollWidget)
-
+        
         # setting label
         self.settingLabel = QLabel("设置", self)
+        # 设置字体更大并加粗
+        font = self.settingLabel.font()
+        font.setPointSize(16)  # 增大字体
+        font.setBold(True)     # 加粗字体
+        self.settingLabel.setFont(font)
 
-        # music folders
+        # 基本设置组
         self.basicSettingGroup = SettingCardGroup(
             "基本设置信息", self.scrollWidget)
 
         self.appNameCard = SettingCard(
             icon=FIF.FOLDER,
             title="应用名称",
-            content=str(self.jumpinConfig.appName),
-            parent=self.basicSettingGroup
+            content=self.jumpinConfig.appName,
+            # 上面 设定为 Field-Value对显示
         )
-        self.appNameCard.setEnabled(False)
 
-        self.appVersionCard = SettingCard(
-            icon=FIF.FOLDER,
-            title="应用版本",
-            content=str(self.jumpinConfig.appVersion),
-            parent=self.basicSettingGroup
+        self.versionCard = SettingCard(
+            icon=FIF.CODE,
+            title="版本信息",
+            content=self.jumpinConfig.appVersion,
         )
-        self.appVersionCard.setEnabled(False)
 
-        self.appWorkDirCard = SettingCard(
+        self.workDirCard = SettingCard(
             icon=FIF.FOLDER,
             title="工作目录",
-            content=str(self.jumpinConfig.appWorkDir),
-            parent=self.basicSettingGroup
+            content=self.jumpinConfig.appWorkDir,
         )
-        self.appWorkDirCard.setEnabled(False)
 
-        self.appConfigFileNameCard = SettingCard(
-            icon=FIF.FIT_PAGE,
-            title="应用配置文件名（尝试读取）",
-            content=str(self.jumpinConfig.appConfigFilename),
-            parent=self.basicSettingGroup
-        )
-        self.appConfigFileNameCard.setEnabled(False)
-
-        self.debugCard = PushSettingCard(
-            text='set debug',
-            icon=FIF.CODE,
-            title="debug",
-            content=str(self.jumpinConfig.debug),
-            parent=self.basicSettingGroup
-        )
-        self.debugCard.setEnabled(False)
-
-        # personalization
-        self.othersGroup = SettingCardGroup(
-            self.tr('其他设置'), self.scrollWidget)
-        self.otherCard = SettingCard(
-            icon=FIF.TRANSPARENT,
-            title='待添加其他设置...',
-            content='待添加...',
-            parent=self.othersGroup
-        )
+        # 添加到基本设置组
+        self.basicSettingGroup.addSettingCard(self.appNameCard)
+        self.basicSettingGroup.addSettingCard(self.versionCard)
+        self.basicSettingGroup.addSettingCard(self.workDirCard)
         
-        # # material
-        # self.materialGroup = SettingCardGroup(
-        #     self.tr('Material'), self.scrollWidget)
-  
-        # # update software
-        # self.updateSoftwareGroup = SettingCardGroup(
-        #     self.tr("Software update"), self.scrollWidget)
+        # 创建LLM模型配置表单
+        self.llmProviderForm = LLMProviderForm(
+            dependencyContainer=self.dependencyContainer,
+            jumpinConfig=self.jumpinConfig,
+            title=None) #type:ignore
+        
+        # 创建LLM模型设置组
+        self.modelSettingGroup = SettingCardGroup(
+            "LLM模型设置", self.scrollWidget)
+        
+        # 直接添加LLMProviderForm到模型设置组
+        self.modelSettingGroup.addSettingCard(self.llmProviderForm)
+        
+        # 其他设置组
+        self.otherSettingGroup = SettingCardGroup(
+            "其他设置", self.scrollWidget)
 
+        self.downloadFolderCard = PrimaryPushSettingCard(
+            icon=FIF.DOWNLOAD,
+            title='关于',
+            content="",
+            text='前往GitHub'
+        )
+        self.downloadFolderCard.clicked.connect(self.__onDownloadFolderCardClicked)
 
-        # application
-        self.aboutGroup = SettingCardGroup('帮助与反馈', self.scrollWidget)
-        self.helpCard = HyperlinkCard(
-            "www.baidu.com",
-            text='打开帮助页面',
-            icon=FIF.HELP,
-            title='Help',
-            content='打开帮助页面：www.baidu.com。。。',
-            parent=self.aboutGroup
-        )
-        self.feedbackCard = PrimaryPushSettingCard(
-            text='反馈',
-            icon=FIF.FEEDBACK,
-            title='简单主按钮',
-            content='简单主按钮...',
-            parent=self.aboutGroup
-        )
+        # 添加到其他设置组
+        self.otherSettingGroup.addSettingCard(self.downloadFolderCard)
 
         self.__initWidget()
-
-    def __initWidget(self):
-        self.resize(1000, 800)
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
-        self.setViewportMargins(0, 80, 0, 20)
-        self.setWidget(self.scrollWidget)
-        self.setWidgetResizable(True)
-        self.setObjectName('settingInterface')
-
-        # initialize style sheet
-        self.scrollWidget.setObjectName('scrollWidget')
-        self.settingLabel.setObjectName('settingLabel')
-        # StyleSheet.SETTING_INTERFACE.apply(self)
-
-
-        # initialize layout
         self.__initLayout()
         self.__connectSignalToSlot()
 
+    def __onDownloadFolderCardClicked(self):
+        """ download folder card clicked slot """
+        # 打开GitHub页面或其他相关操作
+        pass
+
+    def __initWidget(self):
+        """初始化控件属性"""
+        # self.resize(1000, 800)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        # 这里是空出上部空间，因为设置标签字体更大并加粗，所以空出50
+        self.setViewportMargins(0, 50, 0, 20)  # 原来是80，现在改为50，减小上部区域高度
+        self.setWidget(self.scrollWidget)
+        self.setWidgetResizable(True)
+        self.setObjectName('settingInterface')
+        
+        # 初始化样式表
+        self.scrollWidget.setObjectName('scrollWidget')
+        self.settingLabel.setObjectName('settingLabel')
+        
+        # 添加样式表以进一步自定义标签外观
+        self.settingLabel.setStyleSheet("""
+            QLabel#settingLabel {
+                color: #303030;
+                margin-bottom: 5px;
+            }
+        """)
+
     def __initLayout(self):
-        self.settingLabel.move(36, 30)
+        """初始化布局"""
+        self.settingLabel.move(36, 15)  # 原来是30，现在改为15，减小上部空间
 
-        # add cards to group
-        self.basicSettingGroup.addSettingCard(self.appWorkDirCard)
-        self.basicSettingGroup.addSettingCard(self.appNameCard)
-        self.basicSettingGroup.addSettingCard(self.appVersionCard)
-        self.basicSettingGroup.addSettingCard(self.appConfigFileNameCard)
-        self.basicSettingGroup.addSettingCard(self.debugCard)
-
-        self.othersGroup.addSettingCard(self.otherCard)
-   
-        self.aboutGroup.addSettingCard(self.helpCard)
-        self.aboutGroup.addSettingCard(self.feedbackCard)
-
-        # add setting card group to layout
+        # 将设置组添加到布局中
         self.expandLayout.setSpacing(28)
         self.expandLayout.setContentsMargins(36, 10, 36, 0)
         self.expandLayout.addWidget(self.basicSettingGroup)
-        self.expandLayout.addWidget(self.othersGroup)
-        # self.expandLayout.addWidget(self.materialGroup)
-        # self.expandLayout.addWidget(self.updateSoftwareGroup)
-        self.expandLayout.addWidget(self.aboutGroup)
-
-    # def __showRestartTooltip(self):
-    #     """ show restart tooltip """
-    #     InfoBar.success(
-    #         self.tr('Updated successfully'),
-    #         self.tr('Configuration takes effect after restart'),
-    #         duration=1500,
-    #         parent=self
-    #     )
-
-    def __onDownloadFolderCardClicked(self):
-        """ download folder card clicked slot """
-        # folder = QFileDialog.getExistingDirectory(
-        #     self, self.tr("Choose folder"), "./")
-        # if not folder or cfg.get(cfg.downloadFolder) == folder:
-        #     return
-
-        # cfg.set(cfg.downloadFolder, folder)
-        # self.downloadFolderCard.setContent(folder)
-        pass
+        self.expandLayout.addWidget(self.modelSettingGroup)  # 添加LLM模型设置组
+        self.expandLayout.addWidget(self.otherSettingGroup)
 
     def __connectSignalToSlot(self):
-        """ connect signal to slot """
-        # cfg.appRestartSig.connect(self.__showRestartTooltip)
-
-        # # music in the pc
-        # self.downloadFolderCard.clicked.connect(
-        #     self.__onDownloadFolderCardClicked)
-
-        # # personalization
-        # cfg.themeChanged.connect(setTheme)
-        # self.themeColorCard.colorChanged.connect(lambda c: setThemeColor(c))
-        # self.micaCard.checkedChanged.connect(signalBus.micaEnableChanged)
-
-        # # about
-        # self.feedbackCard.clicked.connect(
-        #     lambda: QDesktopServices.openUrl(QUrl(FEEDBACK_URL)))
+        """连接信号和槽"""
+        # 在此处添加需要的信号连接
         pass
 
 class JumpinNavigationWidget(NavigationPushButton):
@@ -4790,9 +5458,6 @@ class AAXWJumpinMainWindow(AAXWFramelessWindow):
         
 
 
-
-        
-
         # 默认显示消息展示面板
         self.mainStackedFrame.setCurrentWidget(self.msgShowingPanel)
         # initialize content layout
@@ -4816,10 +5481,8 @@ class AAXWJumpinMainWindow(AAXWFramelessWindow):
             mainWindow=self,
             parent=self
         )
-
         
         self.inputPanel.promptInputEdit.setFocus()
-
 
         self.installAppHotKey()
 
@@ -4923,10 +5586,10 @@ class AAXWJumpinMainWindow(AAXWFramelessWindow):
         self.navigationInterface.addItem(
             routeKey='settings',
             icon=FIF.SETTING,
-            text='Settings',
+            text='设置',
             onClick=self.showSettingPanel,
             position=NavigationItemPosition.BOTTOM,
-            tooltip='Settings',
+            tooltip='设置(含LLM模型配置)',
         )
 
         #默认展开导航栏
@@ -4959,7 +5622,10 @@ class AAXWJumpinMainWindow(AAXWFramelessWindow):
 
         # 已有config
         # 设置面板加入展示堆 
-        self.settingPanel = AAXWJumpinSettingPanel(self.jumpinConfig,self)
+        self.settingPanel = AAXWJumpinSettingPanel(
+            dependencyContainer=self.diContainer,
+            jumpinConfig=self.jumpinConfig,
+            parent=self)
         self.mainStackedFrame.addWidget(self.settingPanel)
         
         # 初始化
@@ -4975,9 +5641,6 @@ class AAXWJumpinMainWindow(AAXWFramelessWindow):
     def showMsgShowingPanel(self):
         # 显示消息展示面板
         self.mainStackedFrame.setCurrentWidget(self.msgShowingPanel)
-    
-
-
 
     # def showFirefMessageBox(self):
     #     w = MessageBox(
@@ -4986,7 +5649,7 @@ class AAXWJumpinMainWindow(AAXWFramelessWindow):
     #         parent=self
     #     )
     #     w.yesButton.setText('你也好')
-    #     w.cancelButton.setText('下次一定说“你也好”')
+    #     w.cancelButton.setText('下次一定说"你也好"')
 
     #     if w.exec():
     #         # QDesktopServices.openUrl(QUrl("https://xxxxx"))
@@ -5296,7 +5959,7 @@ if __name__ == "__main__":
             #安装插件，时会实例化插件其中可能会需要各种主干资源。
             pluginManager.installAllDetectedPlugins() #安装初始化所有插件
         
-            # 插件以及applet加载完成后， 初始化“伙伴与应用”的列表
+            # 插件以及applet加载完成后， 初始化"伙伴与应用"的列表
             defaultCompoApplet._initBuddyAndAppletListUI()
 
             tray=AAXWJumpinTrayKit(mainWindow)
