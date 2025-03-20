@@ -55,8 +55,8 @@ setup(
     python_requires='>=3.9',  # 
     # packages=find_packages(),  # 自动查找包
     packages=['ananxw_jumpin'],
-    package_dir={'ananxw_jumpin': '.'}, #指定为当前目录为包
-    py_modules=['ananxw_jumpin_allin1f', 'builtin_plugins'],  # 
+    package_dir={'ananxw_jumpin': 'ananxw_jumpin'}, # 指定ananxw_jumpin目录为包
+    py_modules=['main', 'builtin_plugins', 'ananxw_jumpin_allin1f'],  # 添加main.py作为模块
     include_package_data=True,  # 如果有非 Python 文件需要包含，设置为 True 同时会检测MANIFEST.in文件？
     package_data={
         'ananxw_jumpin': [
