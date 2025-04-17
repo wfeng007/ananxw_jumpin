@@ -41,24 +41,11 @@ from PySide6.QtWidgets import QApplication, QWidget, QFrame
 from pydantic import BaseModel, Field
 
 
-
+# @FIXME 要兼容打包与工程执行；需要跟下面_setup_app_env_合并融合。
 # 确定应用根目录
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 # 将工程根目录添加到搜索路径
 sys.path.insert(0, SCRIPT_DIR)
-
-# 导入本地包
-from ananxw_jumpin.ananxw_framework import AAXWDependencyContainer
-from ananxw_jumpin.comm import AAXW_JUMPIN_LOG_MGR, AAXWJumpinDICUtilz
-from ananxw_jumpin.backbone import AAXWJumpinConfig,AAXWJumpinFileAIMemoryManager
-from ananxw_jumpin.gui_pyside6 import AAXWJumpinMainWindow
-from ananxw_jumpin.default_plugins import AAXWJumpinDefaultCompoApplet
-from ananxw_jumpin.gui_pyside6 import AAXWJumpinTrayKit
-from ananxw_jumpin.gui_pyside6 import AAXWGlobalShortcut
-
-# 版本
-from ananxw_jumpin import __version__ 
-
 
 def get_resource_path(relative_path):
     """获取资源文件的绝对路径，兼容打包和开发环境"""
@@ -69,6 +56,87 @@ def get_resource_path(relative_path):
         # 开发环境
         base_path = SCRIPT_DIR
     return os.path.join(base_path, relative_path)
+
+
+def _setup_app_env_():
+    # 设定在不同模式下环境情况
+
+    if __name__ == "__main__": #作为入口运行
+
+        # 将当前目录作为包的根目录
+        # if base_path not in sys.path:
+        #     sys.path.insert(0, base_path)
+
+        if getattr(sys, 'frozen', False):
+            # 作为入口运行 且为打包后执行：
+            # 核心问题修复：确保正确设置打包后的模块查找路径
+            base_dir = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
+            
+            # 将运行目录也加入路径搜索，因为部分资源可能在dist目录下而不是_MEIPASS中
+            run_dir = os.path.dirname(sys.executable)
+            if run_dir not in sys.path:
+                sys.path.insert(0, run_dir)
+                
+            # 添加_libs目录到搜索路径
+            libs_dir = os.path.join(run_dir, '_libs')
+            if os.path.exists(libs_dir) and libs_dir not in sys.path:
+                sys.path.insert(0, libs_dir)
+                
+            # 确保可以找到ananxw_jumpin包
+            if base_dir not in sys.path:
+                sys.path.insert(0, base_dir)
+                
+            # 尝试直接将ananxw_jumpin包的路径添加到sys.path
+            package_path = os.path.join(base_dir, 'ananxw_jumpin')
+            if os.path.exists(package_path) and package_path not in sys.path:
+                sys.path.insert(0, package_path)
+                
+            # 额外调试信息，帮助排查问题
+            print(f"Runtime sys.path: {sys.path}")
+            print(f"Looking for package at: {package_path}")
+            print(f"Package exists: {os.path.exists(package_path)}")
+            
+            # 检查是否可以直接导入
+            try:
+                import ananxw_jumpin
+                print(f"Successfully imported ananxw_jumpin from {ananxw_jumpin.__file__}")
+            except ImportError as e:
+                print(f"Failed to import ananxw_jumpin: {e}")
+                
+        else:
+            # 作为入口运行 且为开发环境直接执行
+            # base_path = os.path.dirname(os.path.abspath(__file__))
+            # 获取当前文件的目录，也作为包扫描路径
+            project_root = os.path.dirname(os.path.abspath(__file__))
+            if project_root not in sys.path:
+                sys.path.insert(0, project_root)  # 插入到路径最前面
+            ...
+    else :
+        # 作为模块导入运行     
+        # 当前不存在；   
+        pass
+_setup_app_env_()
+
+import ananxw_jumpin
+import ananxw_jumpin.ananxw_framework
+import ananxw_jumpin.backbone
+import ananxw_jumpin.gui_pyside6
+import ananxw_jumpin.default_plugins
+import ananxw_jumpin.builtin_plugins
+import ananxw_jumpin.builtin_plugins_debug
+
+# 导入本地包
+# from ananxw_jumpin.ananxw_framework import AAXWDependencyContainer
+from ananxw_jumpin.comm import AAXW_JUMPIN_LOG_MGR, AAXWJumpinDICUtilz
+from ananxw_jumpin.backbone import AAXWJumpinConfig,AAXWJumpinFileAIMemoryManager
+from ananxw_jumpin.gui_pyside6 import AAXWJumpinMainWindow
+from ananxw_jumpin.default_plugins import AAXWJumpinDefaultCompoApplet
+from ananxw_jumpin.gui_pyside6 import AAXWJumpinTrayKit
+from ananxw_jumpin.gui_pyside6 import AAXWGlobalShortcut
+
+# 版本
+from ananxw_jumpin import __version__ 
+
 
 # 读取补充环境变量的配置.env，find_dotenv()
 #   会以本文件为基础逐层目录往上寻找，直到寻找到为止。
@@ -84,7 +152,6 @@ AAXW_JUMPIN_MODULE_LOGGER:logging.Logger=AAXW_JUMPIN_LOG_MGR.getModuleLogger(
     sys.modules[__name__])
 
 if __name__ == "__main__":
-
     try:
         # 这里使用了相对导入，但builtin_plugins做为自己模块增加包名的操作。
         import ananxw_jumpin.builtin_plugins
@@ -176,10 +243,11 @@ if __name__ == "__main__":
 
             if pluginManager:pluginManager.release()
             AAXWJumpinDICUtilz.clear()
- 
+
     #执行main
     main_allin1file()
-    pass
+
+    
 
 
 ##
