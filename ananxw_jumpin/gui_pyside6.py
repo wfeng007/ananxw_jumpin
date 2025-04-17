@@ -208,6 +208,9 @@ class AAXWJumpinInputPanel(QWidget):
 
         # 为 promptInputEdit 设置样式
         self.promptInputEdit.setStyleSheet("; ".join([f"{k}: {v}" for k, v in AAXWJumpinConfig.INPUT_EDIT_QSS_DICT.items()]))
+        
+        # 确保输入面板本身也有背景色
+        self.setStyleSheet(f"{AAXWJumpinConfig.INPUT_PANEL_QSS}; background-color: #f9f9f9;")
 
         #操作信号曹，需要挂到外部；
         self.funcButtonLeft.clicked.connect(self.toggleLeftFunc) #组件默认实现；
@@ -521,8 +524,11 @@ class AAXWCompoMarkdownContentBlock(QFrame): #原来是QWidget
     }
     AAXWCompoMarkdownContentBlock[contentOwnerType="ROW_CONTENT_OWNER_TYPE_USER"] {
         border: 1px solid #a0a0a0;
-        background-color: #d4f2e7;
+        background-color: #d4f2e7; 
         margin-left: 200px; /* 模拟右对齐，实际最好脚本中用layout实现对齐； */
+    }
+    AAXWCompoMarkdownContentBlock[contentOwnerType="ROW_CONTENT_OWNER_TYPE_USER"] > QTextBrowser {
+        background-color: #d4f2e7; 
     }
 
     """
@@ -1243,6 +1249,12 @@ class AAXWScrollPanel(QFrame):
             # 高度先限定，然后根据内部变化，关闭滚动条
             tb.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
             tb.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            
+            # 明确设置背景颜色
+            # if contentOwnerType == "ROW_CONTENT_OWNER_TYPE_USER":
+            #     tb.setStyleSheet("background-color: #e0e0e0; color: #000000;")
+            # else:
+            #     tb.setStyleSheet("background-color: #e6e6fa; color: #00008b;")
 
             # 关闭自动格式化？
             tb.setAutoFormatting(QTextBrowser.AutoFormattingFlag.AutoNone)
@@ -1383,6 +1395,10 @@ class AAXWScrollPanel(QFrame):
         #
         panelLayout.setContentsMargins(1, 1, 1, 1)
         panelLayout.setSpacing(1)
+        self.setLayout(panelLayout) #
+
+        # 确保滚动面板有固定背景色
+        # self.setStyleSheet(AAXWJumpinConfig.SCROLL_PANEL_QSS)
 
 
     def addRowContent(self, content, rowId, contentOwner="unknown", 

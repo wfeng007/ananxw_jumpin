@@ -745,8 +745,6 @@ class AAXWAppletManager:
 #
 
             
-
-
 #
 #
 @AAXWJumpinDICUtilz.register(key="jumpinPluginManager",
@@ -832,13 +830,28 @@ class AAXWJumpinConfig:
     DEFAULT_LLM_PROVIDER = "openai"  # 默认LLM提供商
     DEFAULT_LLM_MODEL = "gpt-4o-mini"  # 默认LLM模型
     
-    # 原有的 QSS 配置保持不变
+    # 信息展示面板的配置默认 QSS
     MSGSHOWINGPANEL_QSS = """
     QFrame {
         border: 1px solid #ccc;
         border-radius: 5px;
-        background-color: #f9f9f9;
+        background-color: #f0f0f0 !important;
     }
+    QScrollArea {
+        background-color: #f0f0f0 !important;
+        border: none; /* 这个是实际scrollArea外部边框 */
+    }
+    QScrollArea > QWidget { 
+        /* background-color: #f0f0f0 !important;*/
+    }
+    QScrollArea > QWidget > QWidget {/* 这个是实际scrollArea展示出的背景色，可以设置为d4f2e7 查看到变化*/
+        background-color: #f0f0f0 !important;
+    }
+    
+    /* 下面的对QTextBrowser的样式配置，对用了AAXWCompoMarkdownContentBlock的 AAXWScrollPanel 没有用。
+    这些应该由创建 QTextBrowser或AAXWCompoMarkdownContentBlock的 QSS 来配置。
+    当前有效的应该是AAXWCompoMarkdownContentBlock.BASE_QSS 这个配置。
+    */
     QTextBrowser {
         background-color: #e0e0e0;
         border: 1px solid #ccc;
@@ -846,11 +859,11 @@ class AAXWJumpinConfig:
         padding: 5px;
     }
     QTextBrowser[contentOwnerType="ROW_CONTENT_OWNER_TYPE_USER"] {
-        background-color: #e0e0e0;
+        background-color: #e0e0e0; /*d4f2e7 e0e0e0*/
         margin-left: 200px;
     }
     QTextBrowser[contentOwnerType="ROW_CONTENT_OWNER_TYPE_OTHERS"] {
-        background-color: #e6e6fa;
+        background-color: #e6e6fa; /*d4f2e7 e6e6fa*/
         color: #00008b;
     }
     """
@@ -869,11 +882,13 @@ class AAXWJumpinConfig:
         "border": "1px solid gray",
         "padding": "5px",
         "border-radius": "5px",
+        "background-color": "#d4f2e7",  # 添加固定白色背景
+        "color": "#000000"  # 添加固定黑色文字颜色
     }
 
     # 新增 INPUT_PANEL_STYLE
     INPUT_PANEL_QSS = """
-        AAXWInputPanel {
+        AAXWJumpinInputPanel {
             background-color: #f0f0f0;
             border-radius: 10px;
         }
@@ -888,6 +903,15 @@ class AAXWJumpinConfig:
             background-color: #45a049;
         }
     """
+
+    # 添加新的样式配置
+    # SCROLL_PANEL_QSS = """
+    # QFrame {
+    #     border: 1px solid #ccc;
+    #     border-radius: 5px;
+    #     background-color: #f9f9f9;
+    # }
+    # """
 
     def __init__(self):
         # 初始化基本属性
