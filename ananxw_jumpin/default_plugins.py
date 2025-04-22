@@ -715,9 +715,12 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
             self.vBoxLayout.addWidget(self.titleLabel)
             self.scrollArea = ScrollArea(self)
             self.scrollArea.setWidgetResizable(True)
+
             self.container = QWidget()
             self.flowLayout = QVBoxLayout(self.container)
+            self.flowLayout.setAlignment(Qt.AlignmentFlag.AlignTop)
             self.scrollArea.setWidget(self.container)
+            
             self.vBoxLayout.addWidget(self.scrollArea)
             self.vBoxLayout.setContentsMargins(10, 10, 10, 10)
             self.vBoxLayout.setSpacing(10)

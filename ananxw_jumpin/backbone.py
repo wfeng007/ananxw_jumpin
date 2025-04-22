@@ -1155,17 +1155,18 @@ class AAXWAbstractAIConnOrAgent(ABC):
 class AAXWSimpleAIConnOrAgent(AAXWAbstractAIConnOrAgent):
     """
     简单实现的连接LLM/Agent的类，支持流式获取响应。
-    使用Langchain封装的OpenAI的接口实现。
+    直接使用OpenAI API实现，不再依赖Langchain的ChatOpenAI封装。
+    但仍使用langchain的Message对象来构建消息。
     """
     AAXW_CLASS_LOGGER:logging.Logger
 
-    SYSTME_PROMPT_TEMPLE="""
+    SYSTEM_PROMPT_TEMPLATE="""
     你的名字是ANAN是一个AI入口助理;
     请关注用户跟你说的内容，和善的回答用户，与用户要求。
     如果用户说的不明确，请提示用户可以说的更明确。
     """
 
-    USER_PROMPT_TEMPLE="""
+    USER_PROMPT_TEMPLATE="""
     以下是用户说的内容：
     {message}
     """
@@ -1195,34 +1196,39 @@ class AAXWSimpleAIConnOrAgent(AAXWAbstractAIConnOrAgent):
         :param api_key: 新的OpenAI API密钥。
         :param base_url: 新的OpenAI API基础URL。
         :param model_name: 新的模型名称。
-        :param isInit: 是否是初始化调用。
         """
-    
+        self.AAXW_CLASS_LOGGER.warning(f"to updateConfig: apiKey:***, baseUrl:{baseUrl}, modelName:{modelName}")
+
         # 更新模式：只更新非None的参数
-        if apiKey is not None:
+        if apiKey and apiKey.strip() !="":
             self.api_key = apiKey
         
-        if baseUrl is not None:
+        if baseUrl and baseUrl.strip() !="":
             self.base_url = baseUrl
             
-        if modelName is not None:
+        if modelName and modelName.strip() !="":
             self.model_name = modelName
+        
+        # 验证API密钥是否存在
+        if not self.api_key:
+            self.AAXW_CLASS_LOGGER.error("OpenAI API密钥为空，请配置有效的API密钥")
+            return
             
-        # 构建LLM参数
-        chat_params = {
-            "temperature": 0,
-            "model": self.model_name,
+        # 初始化OpenAI客户端
+        client_params = {
             "api_key": self.api_key,
         }
         
         if self.base_url:
-            chat_params["base_url"] = self.base_url
+            client_params["base_url"] = self.base_url
             
-        # 初始化或更新LLM实例
-        self.llm = ChatOpenAI(**chat_params)
-        
-        # 仅在非初始化时记录日志
-        self.AAXW_CLASS_LOGGER.info(f"OpenAI连接配置已更新，模型: {self.model_name}")
+        # 初始化或更新OpenAI客户端实例
+        try:
+            self.client = OpenAI(**client_params)
+            # 记录日志
+            self.AAXW_CLASS_LOGGER.info(f"OpenAI连接配置已更新，模型: {self.model_name}")
+        except Exception as e:
+            self.AAXW_CLASS_LOGGER.error(f"初始化OpenAI客户端失败: {str(e)}\n{traceback.format_exc()}")
     
     @override
     def requestAndCallback(self, 
@@ -1238,20 +1244,57 @@ class AAXWSimpleAIConnOrAgent(AAXWAbstractAIConnOrAgent):
         :param isStream: 是否使用流式响应。
         """
         
-        system_message = SystemMessage(content=self.SYSTME_PROMPT_TEMPLE)
-        human_message = HumanMessage(content=self.USER_PROMPT_TEMPLE.format(message=prompt))
-        messages = [system_message, human_message]
+        # 检查API密钥和客户端是否已初始化
+        if not self.api_key:
+            error_msg = "OpenAI API密钥未配置，无法发送请求"
+            self.AAXW_CLASS_LOGGER.error(error_msg)
+            func(f"\n\n[错误] {error_msg}")
+            return
+            
+        if not hasattr(self, 'client') or self.client is None:
+            error_msg = "OpenAI客户端未初始化，无法发送请求"
+            self.AAXW_CLASS_LOGGER.error(error_msg)
+            func(f"\n\n[错误] {error_msg}")
+            return
+        
+        # 仍然使用langchain的Message对象构建消息
+        system_message = SystemMessage(content=self.SYSTEM_PROMPT_TEMPLATE)
+        human_message = HumanMessage(content=self.USER_PROMPT_TEMPLATE.format(message=prompt))
+        
+        # 转换为OpenAI API的消息格式
+        messages = [
+            ChatCompletionSystemMessageParam(content=system_message.content, role="system"),
+            ChatCompletionUserMessageParam(content=human_message.content, role="user")
+        ]
 
         self.AAXW_CLASS_LOGGER.debug(f"使用model_name:{self.model_name}, base_url:{self.base_url}; "
             f"以及最终 prompt-messages: {messages}")
-        if isStream:
-            for msgChunk in self.llm.stream(messages):
-                if msgChunk.content:
-                    time.sleep(0.1)
-                    func(str(msgChunk.content))
-        else:
-            response = self.llm.invoke(messages)
-            func(str(response.content))
+        try:
+            if isStream:
+                # 流式请求
+                stream = self.client.chat.completions.create(
+                    model=self.model_name,
+                    messages=messages,
+                    stream=True
+                )
+                
+                for chunk in stream:
+                    if chunk.choices[0].delta.content is not None:
+                        content = chunk.choices[0].delta.content
+                        # time.sleep(0.1)
+                        func(content)
+            else:
+                # 非流式请求
+                response = self.client.chat.completions.create(
+                    model=self.model_name,
+                    messages=messages,
+                    stream=False
+                )
+                func(response.choices[0].message.content)
+        except Exception as e:
+            request_type = "流式" if isStream else "非流式"
+            self.AAXW_CLASS_LOGGER.error(f"{request_type}请求处理失败: {str(e)}\n{traceback.format_exc()}")
+            func(f"\n\n[错误] 请求处理失败: {str(e)}")
 
     def embedding(self, prompt: str, model: str = "text-embedding-ada-002"):
         """
@@ -1261,12 +1304,21 @@ class AAXWSimpleAIConnOrAgent(AAXWAbstractAIConnOrAgent):
         :param model: 使用的嵌入模型。
         :return: 文本的嵌入向量。
         """
-        embeddings = OpenAIEmbeddings(
-            api_key=self.api_key,
-            base_url=self.base_url,
-            model=model
-        )
-        return embeddings.embed_query(prompt)
+        # 检查API密钥和客户端是否已初始化
+        if not self.api_key or not hasattr(self, 'client') or self.client is None:
+            self.AAXW_CLASS_LOGGER.error("OpenAI API密钥未配置或客户端未初始化，无法获取嵌入")
+            return None
+            
+        try:
+            # 直接使用OpenAI API获取嵌入
+            response = self.client.embeddings.create(
+                model=model,
+                input=prompt
+            )
+            return response.data[0].embedding
+        except Exception as e:
+            self.AAXW_CLASS_LOGGER.error(f"嵌入处理失败: {str(e)}\n{traceback.format_exc()}")
+            return None
     
     def edit(self, prompt: str, instruction: str):
         """
@@ -1276,14 +1328,35 @@ class AAXWSimpleAIConnOrAgent(AAXWAbstractAIConnOrAgent):
         :param instruction: 编辑指令。
         :return: 编辑后的文本。
         """
+        # 检查API密钥和客户端是否已初始化
+        if not self.api_key or not hasattr(self, 'client') or self.client is None:
+            error_msg = "OpenAI API密钥未配置或客户端未初始化，无法执行编辑"
+            self.AAXW_CLASS_LOGGER.error(error_msg)
+            return f"[错误] {error_msg}"
+            
         # 目前OpenAI不再提供专门的edit API，使用聊天完成API模拟
         system_content = f"你是一个文本编辑助手。请按照以下指令编辑提供的文本：\n{instruction}"
+        
+        # 仍然使用langchain的Message对象构建消息
         system_message = SystemMessage(content=system_content)
         human_message = HumanMessage(content=prompt)
-        messages = [system_message, human_message]
         
-        response = self.llm.invoke(messages)
-        return response.content
+        # 转换为OpenAI API的消息格式
+        messages = [
+            ChatCompletionSystemMessageParam(content=system_message.content, role="system"),
+            ChatCompletionUserMessageParam(content=human_message.content, role="user")
+        ]
+        
+        try:
+            # 使用OpenAI API
+            response = self.client.chat.completions.create(
+                model=self.model_name,
+                messages=messages
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            self.AAXW_CLASS_LOGGER.error(f"编辑请求处理失败: {str(e)}\n{traceback.format_exc()}")
+            return f"[错误] 编辑请求处理失败: {str(e)}"
 
 
 @AAXWJumpinDICUtilz.register(key="ollamaAIConnOrAgent")
@@ -1310,21 +1383,30 @@ class AAXWOllamaAIConnOrAgent(AAXWAbstractAIConnOrAgent):
         # 设置默认的 API URL
         self.base_url = "http://localhost:11434/v1"
         self.modelName= modelName or os.getenv("OPENAI_MODEL_NAME", "")
+        self.apiKey = "ollama"
         self.updateConfig(baseUrl= self.base_url, modelName=self.modelName)
     
     def updateConfig(
             self, apiKey: str = "ollama", baseUrl: str = None, modelName: str = None): # type: ignore
         # 设置默认的 API URLbaseUrl
-        self.base_url = baseUrl
-        self.modelName= modelName
+
+        if apiKey and apiKey.strip() !="" :
+            self.apiKey = apiKey
+
+        if baseUrl and baseUrl.strip() !="":
+            self.base_url = baseUrl
+
+        if modelName and modelName.strip() !="":
+            self.modelName= modelName
 
         # 
-        # 如果仍为空，从可用模型中选择一个
         try:
+            #@TODO 这里上一个 client 是否要关闭
             self.client = OpenAI(
                 base_url=self.base_url,
-                api_key=apiKey,
+                api_key=self.apiKey,
             )
+            
 
             if not self.modelName:
                 modelName = self._selectPreferredModel()
