@@ -292,6 +292,10 @@ class MyPlugin(AAXWAbstractPlugin):
     ![kbs_ui12](./readme_ref_res/kbs_ui2.png)
 
 ## 📝 版本历史与计划
+- v0.10:
+    - 已进行重构拆分ananxw_jumpin_ain1f.py。
+    - 已解决部分展示元素跟随系统模式的问题，先强制设置为指定颜色；
+    - 已增加模型管理面板，支持openai基本模型和ollama的基本管理；提供基本的yaml配置，来保存模型配置等。
 - v0.9:
     - 已实现初步的agent框架能力，提供1个agent样例如：动态改名；
     - 已提供LLM模型配置功能；
@@ -313,12 +317,12 @@ class MyPlugin(AAXWAbstractPlugin):
 
 ### 🌈 计划与路线概要
 
-v0.10.0
+v0.11.0
 - MCP协议标准化集成能力初步建立， MCP Host能力建立，对接首个MCP工具，能提供基本的操作执行；（后期可能调整方向为MCP终端）
+- 模型管理优化，如增肌ollama的模型的完整下载等管理界面。
 - 搜索集成browser_use或websearch集成应用案例。
 - 代码块需支持plaintext/unknown 以及其他结构，未知，平文为全白。
 - 引用材料展示区；
-- ollama模型基础管理，迁移至模型设置界面；
 - 界面优化：如状态功能条；Applet/Agent专属主面板；MCP设置主面板；
 -
 - coze集成对接应用样例；
