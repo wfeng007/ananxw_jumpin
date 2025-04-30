@@ -12,7 +12,11 @@
 # @Author:wfeng007
 # @Date:2024-03-20
 # @Last Modified by:wfeng007
+##
 #
+# 从原ananxw_jumpin_ain1f.py中拆离而来。包含核心应用框架。
+#
+##
 """
 核心业务逻辑模块，包含：
 1. 配置管理
@@ -1279,9 +1283,17 @@ class AAXWSimpleAIConnOrAgent(AAXWAbstractAIConnOrAgent):
                 )
                 
                 for chunk in stream:
-                    if chunk.choices[0].delta.content is not None:
-                        content = chunk.choices[0].delta.content
-                        # time.sleep(0.1)
+                    # 防止空块或没有选项的块导致索引错误
+                    if not hasattr(chunk, 'choices') or len(chunk.choices) == 0:
+                        continue
+                    # 检查是否有delta属性    
+                    if not hasattr(chunk.choices[0], 'delta'):
+                        continue
+                    # 检查delta内容
+                    delta = chunk.choices[0].delta
+                    if hasattr(delta, 'content') and delta.content is not None:
+                        content = delta.content
+                        # time.sleep(0.1)  # 已被注释掉
                         func(content)
             else:
                 # 非流式请求
@@ -1566,8 +1578,16 @@ class AAXWOllamaAIConnOrAgent(AAXWAbstractAIConnOrAgent):
             )  #type:ignore
 
             for chunk in stream:
-                if chunk.choices[0].delta.content is not None:
-                    content = chunk.choices[0].delta.content
+                # 防止空块或没有选项的块导致索引错误
+                if not hasattr(chunk, 'choices') or len(chunk.choices) == 0:
+                    continue
+                # 检查是否有delta属性
+                if not hasattr(chunk.choices[0], 'delta'):
+                    continue
+                # 检查delta内容
+                delta = chunk.choices[0].delta
+                if hasattr(delta, 'content') and delta.content is not None:
+                    content = delta.content
                     func(content)
         except Exception as e:
             raise Exception(f"Failed to generate stream chat completion: {str(e)}")
