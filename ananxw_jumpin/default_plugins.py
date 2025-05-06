@@ -22,64 +22,6 @@ from PySide6.QtWidgets import (
     QFrame, QToolBar
 )
 
-from langchain.prompts import PromptTemplate
-
-from .backbone import (
-    AAXWAbstractBasePlugin, 
-    AAXWAbstractApplet,
-    AAXWDependencyContainer,
-    AAXWJumpinConfig,
-    AAXWJumpinAppletManager,
-    AAXWJumpinHistoriedMemory,
-    AAXWJumpinFileAIMemoryManager,
-    AAXWAbstractAIConnOrAgent,
-
-)
-
-
-# pyside6 
-from PySide6.QtCore import (
-    Qt, QEvent, QObject, QThread, Signal, QTimer, QSize, QPoint,
-    QRegularExpression,QMutex,QRunnable,QThreadPool,Slot,
-)
-from PySide6.QtWidgets import (
-    QApplication, QSystemTrayIcon, QFrame, QWidget, QScrollArea,
-    QHBoxLayout, QVBoxLayout, QSizePolicy, QLineEdit, QPushButton,
-    QTextBrowser, QStyleOption, QMenu, QPlainTextEdit, QLabel,QToolBar,
-    QStackedWidget,QButtonGroup,
-)
-from PySide6.QtGui import (
-    QKeySequence, QShortcut, QTextDocument, QTextCursor, QMouseEvent,
-    QPainter, QIcon, QImage, QPixmap, QTextOption, QSyntaxHighlighter,
-    QTextCharFormat, QColor
-)
-
-from .ananxw_aiagent import BaseAgentAction,BaseAgent,AgentEnvironment
-
-from .comm import AAXW_JUMPIN_LOG_MGR
-# if TYPE_CHECKING:
-from .gui_pyside6 import (
-    AAXWContentBlockStrategy, CardWidget, MessageBoxBase,
-    AAXWJumpinMainWindow,AAXWJumpinCompoMarkdownContentStrategy,NavigationWidget,ScrollArea,
-    AAXWScrollPanel,AAXW_JUMPIN_QTSRR,QTimeoutMutexLocker,
-)
-
-
-
-from qfluentwidgets import FluentIcon as FIF
-from qfluentwidgets import (
-    NavigationInterface, NavigationItemPosition, NavigationAvatarWidget, NavigationTreeWidget,
-    NavigationPushButton, MessageBoxBase, SubtitleLabel, LineEdit, CaptionLabel, PushButton,
-    BodyLabel, TextWrap, CardWidget, StrongBodyLabel, PlainTextEdit, TextEdit, TextBrowser,
-    SegmentedWidget, ComboBox, CheckBox, FlowLayout, InfoBar, InfoBarPosition, EditableComboBox,
-    PillPushButton, PrimaryPushButton,
-    NavigationWidget, MessageBox, SettingCardGroup, SwitchSettingCard, FolderListSettingCard,
-    OptionsSettingCard, PushSettingCard, HyperlinkCard, PrimaryPushSettingCard, ScrollArea,
-    ComboBoxSettingCard, ExpandLayout, Theme, CustomColorSettingCard, RadioButton, IconWidget,
-    setTheme, setThemeColor, RangeSettingCard, isDarkTheme, ConfigItem, SettingCard, qrouter
-)
-
-
 # ai相关
 # openai客户端
 from openai import OpenAI
@@ -100,6 +42,65 @@ from langchain.schema import (
         SystemMessage  # 等价于OpenAI接口中的system role
     )
 from langchain.memory import ConversationBufferMemory
+from langchain.prompts import PromptTemplate
+
+
+
+# pyside6 
+from PySide6.QtCore import (
+    Qt, QEvent, QObject, QThread, Signal, QTimer, QSize, QPoint,
+    QRegularExpression,QMutex,QRunnable,QThreadPool,Slot,
+)
+from PySide6.QtWidgets import (
+    QApplication, QSystemTrayIcon, QFrame, QWidget, QScrollArea,
+    QHBoxLayout, QVBoxLayout, QSizePolicy, QLineEdit, QPushButton,
+    QTextBrowser, QStyleOption, QMenu, QPlainTextEdit, QLabel,QToolBar,
+    QStackedWidget,QButtonGroup,
+)
+from PySide6.QtGui import (
+    QKeySequence, QShortcut, QTextDocument, QTextCursor, QMouseEvent,
+    QPainter, QIcon, QImage, QPixmap, QTextOption, QSyntaxHighlighter,
+    QTextCharFormat, QColor
+)
+
+# pyside6 - qfluentwidgetss
+from qfluentwidgets import FluentIcon as FIF
+from qfluentwidgets import (
+    NavigationInterface, NavigationItemPosition, NavigationAvatarWidget, NavigationTreeWidget,
+    NavigationPushButton, MessageBoxBase, SubtitleLabel, LineEdit, CaptionLabel, PushButton,
+    BodyLabel, TextWrap, CardWidget, StrongBodyLabel, PlainTextEdit, TextEdit, TextBrowser,
+    SegmentedWidget, ComboBox, CheckBox, FlowLayout, InfoBar, InfoBarPosition, EditableComboBox,
+    PillPushButton, PrimaryPushButton,
+    NavigationWidget, MessageBox, SettingCardGroup, SwitchSettingCard, FolderListSettingCard,
+    OptionsSettingCard, PushSettingCard, HyperlinkCard, PrimaryPushSettingCard, ScrollArea,
+    ComboBoxSettingCard, ExpandLayout, Theme, CustomColorSettingCard, RadioButton, IconWidget,
+    setTheme, setThemeColor, RangeSettingCard, isDarkTheme, ConfigItem, SettingCard, qrouter
+)
+
+
+# inner modules
+from .comm import AAXW_JUMPIN_LOG_MGR
+
+from .backbone import (
+    AAXWAbstractBasePlugin, 
+    AAXWAbstractApplet,
+    AAXWDependencyContainer,
+    AAXWJumpinConfig,
+    AAXWJumpinAppletManager,
+    AAXWJumpinHistoriedMemory,
+    AAXWJumpinFileAIMemoryManager,
+    AAXWAbstractAIConnOrAgent,
+
+)
+
+from .gui_pyside6 import (
+    AAXWContentBlockStrategy, CardWidget, MessageBoxBase,
+    AAXWJumpinMainWindow,AAXWJumpinCompoMarkdownContentStrategy,NavigationWidget,ScrollArea,
+    AAXWScrollPanel,AAXW_JUMPIN_QTSRR,QTimeoutMutexLocker,
+)
+from .ananxw_aiagent import BaseAgentAction,BaseAgent,AgentEnvironment,SafetyFallbackAgent
+
+
 
 # 本模块，模块日志器
 AAXW_JUMPIN_MODULE_LOGGER:logging.Logger=AAXW_JUMPIN_LOG_MGR.getModuleLogger(
@@ -314,7 +315,6 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
     "默认带有复合功能的Applet实现"
     AAXW_CLASS_LOGGER:logging.Logger
 
-
     def __init__(self):
         self.appletManager:AAXWJumpinAppletManager=None #type:ignore
         self.dependencyContainer:AAXWDependencyContainer=None #type:ignore
@@ -357,7 +357,20 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
         #
         # 默认agent
         self.agentEnvironment=AgentEnvironment(runtimeType="pyside6")
-        self.aaAgent=self.agentEnvironment.createAgent("ANAN")
+        
+        # 已临时处理 aaAgent初始化失败的方式。
+        ##  TODO 最好再增加1个可切换agent的界面功能，从失败转移的SafetyFallbackAgent到正常agent；
+        try:
+            self.aaAgent=self.agentEnvironment.createAgent("ANAN")
+        except Exception as e:
+            self.AAXW_CLASS_LOGGER.error(f"Agent初始化失败: {str(e)}\n{traceback.format_exc()}")
+            self.aaAgent = SafetyFallbackAgent("ANAN_EMPTY")
+            self.AAXW_CLASS_LOGGER.warning("已使用空Agent实现作为备用")
+        
+        if self.aaAgent is None:
+            self.aaAgent = SafetyFallbackAgent("ANAN_EMPTY")
+            self.AAXW_CLASS_LOGGER.warning("aaAgent is None,已使用空Agent实现作为备用")
+        
         # 创建并配置Agent Action
         renameAgentAction = self.ChatHisRenameAgentAction(compoApplet=self)
         # 连接重命名信号到槽函数
@@ -369,9 +382,7 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
         self.aaAgent.addActions([
             self.ChatHisReadAgentAction(aiMemoryManager=self.jumpinAIMemoryManager),
             renameAgentAction
-        ]
-        )
-        #aaAgent 创建后就启动状态。 
+        ])
 
         #列表展示面板
         self.memoriesListPanel: AAXWJumpinDefaultCompoApplet.MemoriesListPanel =None #type:ignore

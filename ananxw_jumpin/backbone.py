@@ -1187,10 +1187,17 @@ class AAXWSimpleAIConnOrAgent(AAXWAbstractAIConnOrAgent):
         self.api_key = api_key or os.getenv('OPENAI_API_KEY')
         self.base_url = base_url or os.getenv('OPENAI_BASE_URL')
         self.model_name = model_name or os.getenv('OPENAI_MODEL_NAME', 'gpt-4o-mini')
+        self.client = None
         
-        # 调用updateConfig方法来初始化所有配置
-        self.updateConfig(
-            apiKey=self.api_key, baseUrl= self.base_url, modelName= self.model_name) # type: ignore
+        # 尝试初始化客户端，但不强制要求成功
+        try:
+            self.updateConfig(
+                apiKey=self.api_key, 
+                baseUrl=self.base_url, 
+                modelName=self.model_name
+            )
+        except Exception as e:
+            self.AAXW_CLASS_LOGGER.warning(f"初始化OpenAI客户端时出现警告: {str(e)}")
     
     def updateConfig(
             self, apiKey: str = None, baseUrl: str = None, modelName: str = None): # type: ignore
@@ -1201,7 +1208,7 @@ class AAXWSimpleAIConnOrAgent(AAXWAbstractAIConnOrAgent):
         :param base_url: 新的OpenAI API基础URL。
         :param model_name: 新的模型名称。
         """
-        self.AAXW_CLASS_LOGGER.warning(f"to updateConfig: apiKey:***, baseUrl:{baseUrl}, modelName:{modelName}")
+        self.AAXW_CLASS_LOGGER.debug(f"to updateConfig: apiKey:***, baseUrl:{baseUrl}, modelName:{modelName}")
 
         # 更新模式：只更新非None的参数
         if apiKey and apiKey.strip() !="":
@@ -1215,7 +1222,7 @@ class AAXWSimpleAIConnOrAgent(AAXWAbstractAIConnOrAgent):
         
         # 验证API密钥是否存在
         if not self.api_key:
-            self.AAXW_CLASS_LOGGER.error("OpenAI API密钥为空，请配置有效的API密钥")
+            self.AAXW_CLASS_LOGGER.warning("OpenAI API密钥为空，请配置有效的API密钥")
             return
             
         # 初始化OpenAI客户端
@@ -1233,6 +1240,7 @@ class AAXWSimpleAIConnOrAgent(AAXWAbstractAIConnOrAgent):
             self.AAXW_CLASS_LOGGER.info(f"OpenAI连接配置已更新，模型: {self.model_name}")
         except Exception as e:
             self.AAXW_CLASS_LOGGER.error(f"初始化OpenAI客户端失败: {str(e)}\n{traceback.format_exc()}")
+            # raise  # 重新抛出异常，让调用者知道初始化失败
     
     @override
     def requestAndCallback(self, 
