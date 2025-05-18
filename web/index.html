@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ANANXW Jumpin WebView</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f0f2f5;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #1a73e8;
+            text-align: center;
+        }
+        .content {
+            margin-top: 20px;
+        }
+        .button {
+            display: inline-block;
+            padding: 10px 20px;
+            background-color: #1a73e8;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 10px;
+        }
+        .button:hover {
+            background-color: #1557b0;
+        }
+        /* 资源卡片样式 */
+        .resource-card {
+            margin-top: 30px;
+            padding: 20px;
+            background-color: #f8f9fa;
+            border-radius: 8px;
+            border: 1px solid #dee2e6;
+        }
+        .resource-card h2 {
+            color: #1a73e8;
+            margin-bottom: 15px;
+        }
+        .resource-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        .resource-link {
+            display: inline-block;
+            padding: 8px 16px;
+            background-color: #e8f0fe;
+            color: #1a73e8;
+            text-decoration: none;
+            border-radius: 4px;
+            transition: all 0.2s ease;
+        }
+        .resource-link:hover {
+            background-color: #1a73e8;
+            color: white;
+            transform: translateY(-2px);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>ANANXW Jumpin WebView</h1>
+        <div class="content">
+            <h2>欢迎使用 WebView 功能</h2>
+            <p>这是一个简单的验证页面，用于测试 WebView 功能是否正常工作。</p>
+            <div style="text-align: center;">
+                <button class="button" onclick="testAlert()">测试弹窗</button>
+                <button class="button" onclick="testConsole()">测试控制台</button>
+            </div>
+        </div>
+
+        <!-- 资源链接卡片 -->
+        <div class="resource-card">
+            <h2>可用资源</h2>
+            <div class="resource-list">
+                <a href="index.html" class="resource-link">index.html</a>
+                <a href="mcplist.html" class="resource-link">mcplist.html</a>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function testAlert() {
+            alert('WebView 弹窗测试成功！');
+        }
+
+        function testConsole() {
+            console.log('测试普通日志输出');
+            console.info('测试信息日志输出');
+            console.warn('测试警告日志输出');
+            console.error('测试错误日志输出');
+        }
+
+        // 页面加载完成时的测试
+        window.onload = function() {
+            console.log('页面加载完成！');
+            // 添加更多测试输出
+            console.info('页面加载信息');
+            console.warn('页面加载警告测试');
+            console.error('页面加载错误测试');
+
+            // 高亮当前页面链接
+            const currentPath = window.location.pathname;
+            document.querySelectorAll('.resource-link').forEach(link => {
+                if (currentPath.endsWith(link.getAttribute('href'))) {
+                    link.style.backgroundColor = '#1a73e8';
+                    link.style.color = 'white';
+                }
+            });
+        };
+    </script>
+</body>
+</html> 

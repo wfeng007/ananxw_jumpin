@@ -592,7 +592,7 @@ class SensingPerceivingThinkingActingProcess:
             input_event=state.event.toMarkdownStr()
         )
         
-        # print(f"onPerceiving 最终提示词内容: {prompt}")
+        self.AAXW_CLASS_LOGGER.debug(f"最终prompt:\n{prompt}\n")
         try:
             response = self.llm.invoke(prompt)
             # print(f"onPerceiving 直接输出: {response}")
