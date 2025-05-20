@@ -472,6 +472,7 @@ class ReplyUserAction(BaseAgentAction):
 
     args_schema: Type[BaseModel] = ArgumentSchema
 
+    @override
     def _run(self, content: str, memoName: str = "") -> str:
         if memoName:
             print(f"[模拟] 回复用户(关联备忘录 {memoName}): {content}")
@@ -824,6 +825,46 @@ class AgentEnvironment:
 
 
 
+class SafetyFallbackAgent(BaseAgent):
+    """安全故障转移Agent实现，用于在主要Agent初始化失败时作为备用。
+    提供基本的日志记录和友好的错误提示，确保系统可以继续运行。
+    """
+    
+    def __init__(self, name: str):
+        super().__init__(name)
+        self.AAXW_CLASS_LOGGER = AAXW_AIAGENT_LOG_MGR.getClassLogger(self.__class__)
+        self.AAXW_CLASS_LOGGER.warning(f"使用安全故障转移Agent: {name}，这表明主要Agent初始化失败")
+
+    @override
+    def run(self):
+        """空实现的运行方法"""
+        self.AAXW_CLASS_LOGGER.warning(f"安全故障转移Agent {self.name} 尝试运行")
+        self.isRunning = True
+
+    @override
+    def sendMessageToMe(self, message: str) -> str:
+        """记录接收到的消息并返回友好提示"""
+        self.AAXW_CLASS_LOGGER.warning(f"安全故障转移Agent {self.name} 收到消息: {message}")
+        return "Agent未能正确初始化，请检查LLM配置并确保所需服务可用。如需帮助，请查看日志获取详细信息。"
+
+    @override
+    def senseEnvironmentEvent(self, command: str) -> None:
+        """记录接收到的环境事件"""
+        self.AAXW_CLASS_LOGGER.warning(f"安全故障转移Agent {self.name} 收到环境事件: {command}")
+
+    @override
+    def addActions(self, actions: List[BaseAgentAction]) -> None:
+        """记录尝试添加的动作"""
+        action_names = [action.name for action in actions]
+        self.AAXW_CLASS_LOGGER.warning(f"安全故障转移Agent {self.name} 尝试添加动作: {action_names}")
+
+    @override
+    def stop(self) -> None:
+        """记录停止事件"""
+        self.AAXW_CLASS_LOGGER.warning(f"安全故障转移Agent {self.name} 停止运行")
+        self.isRunning = False
+
+
 if __name__ == "__main__":
     
     load_dotenv()
@@ -840,6 +881,7 @@ if __name__ == "__main__":
 
         args_schema: Type[BaseModel] = ArgumentSchema
 
+        @override
         def _run(self, memoName: str, content: str = "") -> str:
             print(f"[模拟] 读取备忘录 {memoName} 的内容：---你好，{memoName}是1个比较重要的事情，需要尽快完成---")
             return f"---你好，{memoName}是1个比较重要的事情，需要尽快完成---"
@@ -856,6 +898,7 @@ if __name__ == "__main__":
 
         args_schema: Type[BaseModel] = ArgumentSchema
 
+        @override
         def _run(self, memoName: str, newName: str) -> str:
             print(f"[模拟] 将备忘录 {memoName} 重命名为 {newName}")
             return f"已将备忘录 {memoName} 重命名为 {newName}"
@@ -916,41 +959,3 @@ if __name__ == "__main__":
 # """
 # #
 
-class SafetyFallbackAgent(BaseAgent):
-    """安全故障转移Agent实现，用于在主要Agent初始化失败时作为备用。
-    提供基本的日志记录和友好的错误提示，确保系统可以继续运行。
-    """
-    
-    def __init__(self, name: str):
-        super().__init__(name)
-        self.AAXW_CLASS_LOGGER = AAXW_AIAGENT_LOG_MGR.getClassLogger(self.__class__)
-        self.AAXW_CLASS_LOGGER.warning(f"使用安全故障转移Agent: {name}，这表明主要Agent初始化失败")
-
-    @override
-    def run(self):
-        """空实现的运行方法"""
-        self.AAXW_CLASS_LOGGER.warning(f"安全故障转移Agent {self.name} 尝试运行")
-        self.isRunning = True
-
-    @override
-    def sendMessageToMe(self, message: str) -> str:
-        """记录接收到的消息并返回友好提示"""
-        self.AAXW_CLASS_LOGGER.warning(f"安全故障转移Agent {self.name} 收到消息: {message}")
-        return "Agent未能正确初始化，请检查LLM配置并确保所需服务可用。如需帮助，请查看日志获取详细信息。"
-
-    @override
-    def senseEnvironmentEvent(self, command: str) -> None:
-        """记录接收到的环境事件"""
-        self.AAXW_CLASS_LOGGER.warning(f"安全故障转移Agent {self.name} 收到环境事件: {command}")
-
-    @override
-    def addActions(self, actions: List[BaseAgentAction]) -> None:
-        """记录尝试添加的动作"""
-        action_names = [action.name for action in actions]
-        self.AAXW_CLASS_LOGGER.warning(f"安全故障转移Agent {self.name} 尝试添加动作: {action_names}")
-
-    @override
-    def stop(self) -> None:
-        """记录停止事件"""
-        self.AAXW_CLASS_LOGGER.warning(f"安全故障转移Agent {self.name} 停止运行")
-        self.isRunning = False

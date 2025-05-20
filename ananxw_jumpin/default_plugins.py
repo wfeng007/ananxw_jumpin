@@ -10,6 +10,7 @@ from datetime import datetime
 import traceback
 from typing import Optional, List, Dict, Any, Union, cast, Type
 from pydantic import BaseModel, Field
+import asyncio
 
 try:
     from typing import override
@@ -100,6 +101,8 @@ from .gui_pyside6 import (
 )
 from .ananxw_aiagent import BaseAgentAction,BaseAgent,AgentEnvironment,SafetyFallbackAgent
 
+from mcp.types import Tool as McpTool
+from .ananxw_mcp import McpClient
 
 
 # 本模块，模块日志器
@@ -310,6 +313,53 @@ class AIConnectRunnable(QRunnable,QObject):
         self.updateUI.emit(str(newContent), str(self.uiId)) 
 
 
+class McpToolAgentAction(BaseAgentAction):
+    """MCP工具的Agent Action适配器"""
+    mcpClient: McpClient = Field(description="MCP客户端实例")
+    serverName: str = Field(description="服务器名称")
+    
+    def __init__(self, mcpClient: McpClient, serverName: str, tool:McpTool):
+        """
+        初始化MCP工具适配器
+        Args:
+            mcpClient: MCP客户端实例
+            serverName: 服务器名称
+            tool: MCP工具对象
+        """
+        super().__init__(
+            name=tool.name,
+            description=tool.description,
+            args_schema=tool.inputSchema,
+            mcpClient=mcpClient,
+            serverName=serverName
+        )
+
+    def _run(self, **kwargs) -> str:
+        """执行MCP工具调用
+        直接调用MCP客户端的调用方法，并同步等待结果
+        """
+        try:
+            # 使用asyncio同步执行异步调用
+            result = asyncio.get_event_loop().run_until_complete(
+                asyncio.wait_for(
+                    self.mcpClient.callTool(
+                        serverName=self.serverName,
+                        toolName=self.name,
+                        **kwargs
+                    ),
+                    timeout=10  # 10秒超时
+                )
+            )
+            return str(result)
+        except asyncio.TimeoutError:
+            return f"调用工具 {self.name} 超时"
+        except Exception as e:
+            return f"调用工具 {self.name} 失败: {str(e)}"
+
+    pass 
+
+
+
 @AAXW_JUMPIN_LOG_MGR.classLogger()
 class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
     "默认带有复合功能的Applet实现"
@@ -328,6 +378,7 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
 
         self.agentEnvironment:AgentEnvironment=None #type:ignore
         self.aaAgent:BaseAgent=None #type:ignore
+        self.mcpClient:McpClient = None 
         pass
     
     @override
@@ -355,11 +406,17 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
         self.currentHistoriedMemory:AAXWJumpinHistoriedMemory=None #type:ignore
 
         #
-        # 默认agent
+        # 默认agent @TODO 将AgentEnvironment 绑定到di容器里面去。并升级为agent容器。
+        #   并能关联各种agent的使用的资源，比如MCP的工具，记忆库等。
+        # 
         self.agentEnvironment=AgentEnvironment(runtimeType="pyside6")
+
+        # agent 使用的mcp client (model control protocol)
+        # @TODO 从统一配置中获取。
+        self.mcpClient=McpClient(configPath="./mcp.json")
         
         # 已临时处理 aaAgent初始化失败的方式。
-        ##  TODO 最好再增加1个可切换agent的界面功能，从失败转移的SafetyFallbackAgent到正常agent；
+        ##  @TODO 最好再增加1个可切换agent的界面功能，从失败转移的SafetyFallbackAgent到正常agent；
         try:
             self.aaAgent=self.agentEnvironment.createAgent("ANAN")
         except Exception as e:
@@ -384,6 +441,41 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
             renameAgentAction
         ])
 
+       
+        # 增加mcp tools:
+        # 同步获取工具列表
+        try:
+            # 这里先写死启动mcp server
+            asyncio.get_event_loop().run_until_complete(
+                asyncio.wait_for(
+                    self.mcpClient.startServer(serverName="echoserver"),
+                    timeout=5  # 5秒超时
+                )
+            )
+
+            self.AAXW_CLASS_LOGGER.warning("已启动mcp server:echoserver成功")
+
+            tools = asyncio.get_event_loop().run_until_complete(
+                asyncio.wait_for(
+                    self.mcpClient.listTools(serverName="echoserver"),
+                    timeout=5  # 5秒超时
+                )
+            )
+
+            self.AAXW_CLASS_LOGGER.warning(f"已获取tools: {tools}")
+            for tool in tools:
+                # 使用适配器类创建action
+                baseAction = McpToolAgentAction(
+                    mcpClient=self.mcpClient,
+                    serverName="echoserver",
+                    tool=tool
+                )
+                self.aaAgent.addAction(baseAction)
+        except asyncio.TimeoutError:
+            self.AAXW_CLASS_LOGGER.error("获取MCP工具列表超时")
+        except Exception as e:
+            self.AAXW_CLASS_LOGGER.error(f"获取MCP工具列表失败: {str(e)}\n堆栈信息: {traceback.format_exc()}")
+
         #列表展示面板
         self.memoriesListPanel: AAXWJumpinDefaultCompoApplet.MemoriesListPanel =None #type:ignore
         
@@ -398,6 +490,8 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
         self._initAllAIMemeoryListUI()
 
         pass
+    
+
 
     @override
     def onRemove(self):
@@ -1238,3 +1332,4 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
             self.callUpdateUI(str)
     
     pass 
+
