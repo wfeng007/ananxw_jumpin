@@ -9,7 +9,7 @@ import time
 from datetime import datetime
 import traceback
 from typing import Optional, List, Dict, Any, Union, cast, Type
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, create_model
 import asyncio
 
 try:
@@ -312,9 +312,11 @@ class AIConnectRunnable(QRunnable,QObject):
         # 最好强制类型转换。self.uiId:str 或 str(self.uiId)
         self.updateUI.emit(str(newContent), str(self.uiId)) 
 
-
+# pydantic 类型 注入属性日志器可能有问题。
 class McpToolAgentAction(BaseAgentAction):
     """MCP工具的Agent Action适配器"""
+
+    #
     mcpClient: McpClient = Field(description="MCP客户端实例")
     serverName: str = Field(description="服务器名称")
     
@@ -326,35 +328,132 @@ class McpToolAgentAction(BaseAgentAction):
             serverName: 服务器名称
             tool: MCP工具对象
         """
+        try:
+            # 创建动态的 pydantic model 作为参数模式
+            # 动态创建参数模式类    
+            args_schema=self._jsonSchemaToPydanticModel(tool.inputSchema)
+        
+            AAXW_JUMPIN_MODULE_LOGGER.info(
+                f"已初始化MCP工具适配器: {tool.name} \n{mcpClient} \n{serverName} \n{tool}")
+        except Exception as e:
+            AAXW_JUMPIN_MODULE_LOGGER.warning(
+                f"初始化MCP工具适配器异常，无法解析生成，args_schema。"
+                +f"args_schema将会设置为None，只能利用description作为工具描述。\n "
+                +f"异常信息: {str(e)} \n堆栈信息: {traceback.format_exc()}")
+
+            args_schema=None
+
+        ## 初始化； 
         super().__init__(
             name=tool.name,
             description=tool.description,
-            args_schema=tool.inputSchema,
+            args_schema=args_schema,
             mcpClient=mcpClient,
             serverName=serverName
+        )
+
+    ## 
+    # 当前应该还不支持嵌套
+    # cursor：
+    # 从 Pydantic 官方文档来看，他们推荐使用 datamodel-code-generator 
+    #   工具来实现 JSON Schema 到 Pydantic 模型的转换。这是一个独立的工具，
+    #   而不是 Pydantic 的内置功能。
+    # 但是，如果我们需要在运行时动态处理 JSON Schema，可以使用 Pydantic 的 TypeAdapter 类。
+    #   TypeAdapter 可以用来验证和序列化任意类型的数据，包括从 JSON Schema 生成的类型。
+    # 在 schema-first 项目中，我看到了一个有趣的实现方式，它使用 datamodel-codegen 
+    #   在构建时生成 Pydantic 模型，而不是运行时。
+    ##
+    def _jsonSchemaToPydanticModel(self,jsonSchema:dict)->Type[BaseModel]:
+        """将JSON Schema转换为Pydantic模型
+        
+        Args:
+            jsonSchema: JSON Schema 字典
+            
+        Returns:
+            生成的 Pydantic 模型类
+        """
+        # 类型映射
+        type_mapping = {
+            "string": str,
+            "integer": int,
+            "number": float,
+            "boolean": bool,
+            "array": list,
+            "object": dict,
+            "null": type(None)
+        }
+        
+        # 获取属性定义
+        properties = jsonSchema.get("properties", {})
+        required = jsonSchema.get("required", [])
+        
+        # 创建字段定义
+        fields = {}
+        for field_name, field_schema in properties.items():
+            # 获取字段类型
+            field_type = field_schema.get("type", "string")  # 默认为string
+            python_type = type_mapping.get(field_type, str)
+            
+            # 获取字段约束
+            field_info = {}
+            if "description" in field_schema:
+                field_info["description"] = field_schema["description"]
+            if "default" in field_schema:
+                field_info["default"] = field_schema["default"]
+            if "title" in field_schema:
+                field_info["title"] = field_schema["title"]
+                
+            # 添加验证约束
+            if "minimum" in field_schema:
+                field_info["ge"] = field_schema["minimum"]
+            if "maximum" in field_schema:
+                field_info["le"] = field_schema["maximum"]
+            if "minLength" in field_schema:
+                field_info["min_length"] = field_schema["minLength"]
+            if "maxLength" in field_schema:
+                field_info["max_length"] = field_schema["maxLength"]
+            if "pattern" in field_schema:
+                field_info["pattern"] = field_schema["pattern"]
+            
+            # 处理必填字段
+            if field_name in required:
+                field_info["required"] = True
+            
+            # 创建字段定义
+            fields[field_name] = (python_type, Field(**field_info))
+        
+        # 创建模型类名
+        model_name = jsonSchema.get("title", "DynamicModel")
+        
+        # 创建并返回模型类
+        return create_model(
+            model_name,
+            __doc__=jsonSchema.get("description", ""),
+            **fields
         )
 
     def _run(self, **kwargs) -> str:
         """执行MCP工具调用
         直接调用MCP客户端的调用方法，并同步等待结果
         """
+        AAXW_JUMPIN_MODULE_LOGGER.warning(f"执行MCP工具调用: server:{self.serverName} tool:{self.name} \n{kwargs}")
+        
         try:
-            # 使用asyncio同步执行异步调用
-            result = asyncio.get_event_loop().run_until_complete(
-                asyncio.wait_for(
-                    self.mcpClient.callTool(
-                        serverName=self.serverName,
-                        toolName=self.name,
-                        **kwargs
-                    ),
-                    timeout=10  # 10秒超时
-                )
+            # 使用同步方法调用工具
+            result = self.mcpClient.callTool(
+                serverName=self.serverName,
+                toolName=self.name,
+                args=kwargs,
+                timeout=10.0  # 10秒超时
             )
             return str(result)
-        except asyncio.TimeoutError:
-            return f"调用工具 {self.name} 超时"
+            
+        except TimeoutError:
+            AAXW_JUMPIN_MODULE_LOGGER.error(f"调用工具 server:{self.serverName} tool:{self.name} 超时")
+            return f"调用工具 server:{self.serverName} tool:{self.name} 超时"
         except Exception as e:
-            return f"调用工具 {self.name} 失败: {str(e)}"
+            AAXW_JUMPIN_MODULE_LOGGER.error(f"调用工具 server:{self.serverName} tool:{self.name} 失败: {str(e)} \n堆栈信息: {traceback.format_exc()}")
+            return f"调用工具 server:{self.serverName} tool:{self.name} 失败: {str(e)}"
 
     pass 
 
@@ -408,13 +507,26 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
         #
         # 默认agent @TODO 将AgentEnvironment 绑定到di容器里面去。并升级为agent容器。
         #   并能关联各种agent的使用的资源，比如MCP的工具，记忆库等。
-        # 
-        self.agentEnvironment=AgentEnvironment(runtimeType="pyside6")
 
-        # agent 使用的mcp client (model control protocol)
-        # @TODO 从统一配置中获取。
-        self.mcpClient=McpClient(configPath="./mcp.json")
+        # pyside6 的线程调用异步mcp client 会卡死？
+        # self.agentEnvironment=AgentEnvironment(runtimeType="pyside6")
+        #
+        self.agentEnvironment=AgentEnvironment(runtimeType="thread_pool")
         
+        try:
+            # agent 使用的mcp client (model control protocol)
+            # path 从统一配置中获取。
+            self.mcpClient=McpClient(configPath="./mcp.json")
+            
+            # 初始化MCP客户端
+            if not self.mcpClient.initialize(timeout=10.0):
+                self.AAXW_CLASS_LOGGER.warning("MCP客户端初始化失败,initialize()返回False。")
+                self.mcpClient=None
+        except Exception as e:
+            self.AAXW_CLASS_LOGGER.warning(
+                f"获取MCP初始化失败: {str(e)}\n 堆栈信息: {traceback.format_exc()}")
+
+       
         # 已临时处理 aaAgent初始化失败的方式。
         ##  @TODO 最好再增加1个可切换agent的界面功能，从失败转移的SafetyFallbackAgent到正常agent；
         try:
@@ -441,41 +553,36 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
             renameAgentAction
         ])
 
-       
-        # 增加mcp tools:
-        # 同步获取工具列表
-        try:
-            # 这里先写死启动mcp server
-            asyncio.get_event_loop().run_until_complete(
-                asyncio.wait_for(
-                    self.mcpClient.startServer(serverName="echoserver"),
-                    timeout=5  # 5秒超时
-                )
-            )
+        # 启动服务器mcp tools:
+        if self.mcpClient and "echoserver" in self.mcpClient.getConfiguredServers():
+            try:
+                # 启动MCP server
+                if not self.mcpClient.startServer(serverName="echoserver", timeout=5.0):
+                    self.AAXW_CLASS_LOGGER.warning("未正常启动与连接MCP server")
+                    raise RuntimeWarning("未正常启动与连接MCP server")
+                    
+                self.AAXW_CLASS_LOGGER.warning("已启动mcp server:echoserver成功")
 
-            self.AAXW_CLASS_LOGGER.warning("已启动mcp server:echoserver成功")
-
-            tools = asyncio.get_event_loop().run_until_complete(
-                asyncio.wait_for(
-                    self.mcpClient.listTools(serverName="echoserver"),
-                    timeout=5  # 5秒超时
-                )
-            )
-
-            self.AAXW_CLASS_LOGGER.warning(f"已获取tools: {tools}")
-            for tool in tools:
-                # 使用适配器类创建action
-                baseAction = McpToolAgentAction(
-                    mcpClient=self.mcpClient,
-                    serverName="echoserver",
-                    tool=tool
-                )
-                self.aaAgent.addAction(baseAction)
-        except asyncio.TimeoutError:
-            self.AAXW_CLASS_LOGGER.error("获取MCP工具列表超时")
-        except Exception as e:
-            self.AAXW_CLASS_LOGGER.error(f"获取MCP工具列表失败: {str(e)}\n堆栈信息: {traceback.format_exc()}")
-
+                # 获取工具列表
+                tools = self.mcpClient.listTools(serverName="echoserver", timeout=5.0)
+                self.AAXW_CLASS_LOGGER.warning(f"已获取tools: {tools}")
+                
+                for tool in tools:
+                    # 使用适配器类创建action
+                    baseAction = McpToolAgentAction(
+                        mcpClient=self.mcpClient,
+                        serverName="echoserver",
+                        tool=tool
+                    )
+                    self.aaAgent.addAction(baseAction)
+                    
+            except TimeoutError:
+                self.AAXW_CLASS_LOGGER.warning("启动MCPserver或获取MCP工具列表超时")
+            except Exception as e:
+                self.AAXW_CLASS_LOGGER.warning(f"启动MCPserver或获取MCP工具列表失败: {str(e)}\n堆栈信息: {traceback.format_exc()}")
+        else:
+            self.AAXW_CLASS_LOGGER.warning(
+                "MCP客户端未正常初始化或没有找到指定server配置，如：echoserver。" )
         #列表展示面板
         self.memoriesListPanel: AAXWJumpinDefaultCompoApplet.MemoriesListPanel =None #type:ignore
         
@@ -499,6 +606,9 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
             f"这是个默认Applet{self.__class__.__name__}只有关闭整体时才应该被移除释放。")
         self.aaAgent.stop()
         self.agentEnvironment.stopAll()
+        # 关闭MCP客户端
+        if self.mcpClient:
+            self.mcpClient.close(timeout=5.0)
         pass
 
 
@@ -1332,4 +1442,6 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
             self.callUpdateUI(str)
     
     pass 
+
+
 

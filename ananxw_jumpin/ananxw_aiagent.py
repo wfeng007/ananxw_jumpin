@@ -540,6 +540,7 @@ class SensingPerceivingThinkingActingProcess:
 3. 思考过程：解释你对当前情况的理解和处理计划；
 4. 具体调用：提供完整的工具调用信息，包括具体动作、操作对象和内容；
 5. 输出结构必须完整，字段必须有，内容可以根据字段情况为空字符串或None；
+6. 在可用的动作列表中有足够动作时，可进行多步运行；如:先用动作"对话历史读取",下一步"generateName"生成新名字，再下一步"对话历史重命名"进行重命名，这样的流程；
 
 # 约束-输出格式
 {format_instructions}
@@ -547,7 +548,7 @@ class SensingPerceivingThinkingActingProcess:
 # 补充示例：
 
 
-# 信息或事件输入，其中message为输入主干内容:
+# 信息或任务事件，其中"事件内容"中的内容为具体任务主干:
 {input_event}
 
 """
