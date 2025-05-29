@@ -13,6 +13,7 @@ from .backbone import (
     ConfigurableAIConnOrAgent
 )
 
+# @TODO 暂时没有用到。
 class JumpinAPI:
     """ANANXW Jumpin API层，集中管理所有核心服务"""
     

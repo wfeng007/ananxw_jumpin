@@ -16,8 +16,12 @@
 #
 ##
 # 
-#  MCP( Model Context Protocol) 实现
-#  MCP 客户端框架实现
+# MCP( Model Context Protocol) 实现
+# MCP 客户端框架实现  
+#   使用McpClient支持同步方法以及Future模式的异步方式处理对MCP服务端的访问；
+#   利用简单McpClientSession（也需要从McpClient获取）支持async 自定义持续while循环；
+#   
+#  @TODO 日志器与日志升级
 #  @TODO MCP 服务端框架实现
 #  
 

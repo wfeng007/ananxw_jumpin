@@ -262,11 +262,28 @@ class AgentActuator:
 
 class BaseAgent(ABC):
     """基础Agent接口"""
-    def __init__(self, name: str):
+    def __init__(self, name: str,
+                 lifeGoalOrRole:Optional[str]=None, 
+                 llm: Optional[ChatOpenAI] = None, 
+                 promptTemplate: Optional[PromptTemplate] = None):
         self.name = name
+        self.lifeGoalOrRole = lifeGoalOrRole  # 修复这里的赋值语法错误
+        
         self.stemQueue = queue.Queue()  # 主干回路队列
         self.isRunning = True
         self.actionActuator = AgentActuator()  # 添加动作执行器实例
+        
+        #
+        self.llm = llm  # 语言模型实例
+        self.promptTemplate = promptTemplate  # 提示模板
+
+    def setLLM(self, llm: ChatOpenAI):
+        """设置语言模型"""
+        self.llm = llm
+
+    def setPromptTemplate(self, promptTemplate: PromptTemplate):
+        """设置提示模板"""
+        self.promptTemplate = promptTemplate
 
     @abstractmethod
     def run(self):
@@ -432,6 +449,7 @@ class ThingMemory:
 # 修改 AgentState 定义
 class AgentSPTAState(BaseModel):
     """Agent状态定义"""
+    
     # 状态常量定义
     SENSING: ClassVar[str] = "SENSING"
     PERCEIVING: ClassVar[str] = "PERCEIVING"
@@ -439,9 +457,10 @@ class AgentSPTAState(BaseModel):
     ACTING: ClassVar[str] = "ACTING"
     END: ClassVar[str] = "END"
 
-    current_step: str = Field(default=START)  # Langgraph使用的状态
+    current_step: str = Field(default=START)  # Langgraph使用的状态 #必须有
+
     currentState: str = Field(default=SENSING, description="当前状态")
-    agent: BaseAgent = Field(description="当前Agent对象")
+    agent: "StateMachineAgent" = Field(description="当前Agent对象")  # 使用字符串引用避免循环导入
     currentActionNLRName: str = Field(default="", description="当前状态的action名称")
     nextActionNLRName: str = Field(default="", description="下一个状态的action名称线索")
     event: Optional[AgentSensoryEvent] = Field(default=None, description="当前正在处理的事件")
@@ -481,18 +500,41 @@ class ReplyUserAction(BaseAgentAction):
             print(f"[模拟] 回复用户: {content}")
             return f"已回复用户: {content}"
 
+
+class StateMachineProcessor(ABC):
+    """Agent处理器抽象基类"""
+    @abstractmethod
+    def createInitialState(self, agent: "StateMachineAgent") -> BaseModel:
+        """创建初始状态"""
+        pass
+    
+    @abstractmethod
+    def process(self, state: BaseModel) -> BaseModel:
+        """处理状态"""
+        pass
+
 @AAXW_AIAGENT_LOG_MGR.classLogger(level=logging.DEBUG)
-class SensingPerceivingThinkingActingProcess:
-    """感知-认知-思考-行动处理器"""
+class SPTAProcessor(StateMachineProcessor):
+    """感知-认知-思考-行动处理器; Sensing Perceiving Thinking Acting processor"""
     AAXW_CLASS_LOGGER:logging.Logger
     
     def __init__(self):
-        self.llm = ChatOpenAI(temperature=0, model="gpt-4o-mini")
-        # self.llm = ChatOpenAI(temperature=0,model="deepseek-chat")
-        # 使用 PerceivingOutput 的类方法
-        self.promptTemplate = self._createPrompt()
+        """初始化处理器"""
+        pass
+        
+    @override
+    def createInitialState(self, agent: "StateMachineAgent"):
+        return AgentSPTAState(
+            current_step=START,
+            currentState=AgentSPTAState.SENSING,
+            agent=agent,
+            thingMemory=ThingMemory(),
+            currentActionNLRName="",
+            nextActionNLRName="",
+            event=None
+        )
 
-
+    @override
     def process(self, state: AgentSPTAState) -> AgentSPTAState:
         """处理状态步骤，按照感知->认知->思考->行动的顺序执行"""
         try:
@@ -518,47 +560,6 @@ class SensingPerceivingThinkingActingProcess:
             state.current_step = state.END
         return state
     
-    def _createPrompt(self) -> PromptTemplate:
-        """创建提示模板"""
-        template = """# 角色与环境
-你是一个应用资源管理者。根据用户的信息、事件输入、前次思考执行情况，选择合适的动作来管理应用资源并回复。
-
-# 执行要求
-请先理解用户需求，然后规划动作执行计划。
-回复用户动作时，如有上次运行结果与内容，请将其作为复述内容的形式放入本次回复中。
-回复用户动作时且被要求提供对动作结果做分析或计划时，请将上次运行结果与内容进行理解分析，并将结论放入。没有，则忽略本规则。
-每次输入都有当前动作，但并不是每次信息都是有下一步动作的。
-下一步动作是根据当前信息与本次动作来预判的。
-
-# 可用的动作及其参数：
-{action_descriptions}
-
-# 约束-输出要求
-你需要规划以下内容：
-1. 当前动作：选择一个最适合当前情况的动作来执行；
-2. 下一步动作：预判下一步可能需要的动作，帮助连贯性处理；可以没有下一步动作，任务或Thing完成，无需发起新的INNER事件；
-3. 思考过程：解释你对当前情况的理解和处理计划；
-4. 具体调用：提供完整的工具调用信息，包括具体动作、操作对象和内容；
-5. 输出结构必须完整，字段必须有，内容可以根据字段情况为空字符串或None；
-6. 在可用的动作列表中有足够动作时，可进行多步运行；如:先用动作"对话历史读取",下一步"generateName"生成新名字，再下一步"对话历史重命名"进行重命名，这样的流程；
-
-# 约束-输出格式
-{format_instructions}
-
-# 补充示例：
-
-
-# 信息或任务事件，其中"事件内容"中的内容为具体任务主干:
-{input_event}
-
-"""
-        return PromptTemplate(
-            template=template,
-            input_variables=["action_descriptions", "input_event"],
-            # 使用 PerceivingOutput 的类方法获取格式说明
-            partial_variables={"format_instructions": PerceivingOutput.getFormatInstructions()}
-        )
-
     def onSensing(self, state: AgentSPTAState) -> AgentSPTAState:
         """感知状态处理"""
         try:
@@ -588,15 +589,22 @@ class SensingPerceivingThinkingActingProcess:
             state.currentState = AgentSPTAState.END
             return state
             
+        # 从agent获取资源
+        if not state.agent.llm or not state.agent.promptTemplate:
+            self.AAXW_CLASS_LOGGER.error("Agent未配置LLM或PromptTemplate")
+            state.currentState = AgentSPTAState.END
+            return state
+            
         # 生成提示并获取响应
-        prompt = self.promptTemplate.format(
+        prompt = state.agent.promptTemplate.format(
+            life_goal_or_role=state.agent.lifeGoalOrRole or "",
             action_descriptions=state.agent.actionActuator.getActionDescriptions(),
             input_event=state.event.toMarkdownStr()
         )
         
         self.AAXW_CLASS_LOGGER.debug(f"最终prompt:\n{prompt}\n")
         try:
-            response = self.llm.invoke(prompt)
+            response = state.agent.llm.invoke(prompt)
             # print(f"onPerceiving 直接输出: {response}")
             self.AAXW_CLASS_LOGGER.debug(
                 f"onPerceiving 直接输出: {response.content}",
@@ -667,16 +675,20 @@ class StateMachineAgent(BaseAgent):
     PROCESS = "process"
     
     def __init__(self, name: str, 
-                 processFunc: Callable[[AgentSPTAState], AgentSPTAState],
-                 runtimeIdleFunc: Optional[Callable[[], None]] = None):
+                 processor: StateMachineProcessor,
+                 lifeGoalOrRole: Optional[str]=None,
+                 runtimeIdleFunc: Optional[Callable[[], None]] = None,
+                 llm: Optional[ChatOpenAI] = None, 
+                 promptTemplate: Optional[PromptTemplate] = None):
         """
         初始化状态机Agent
-        :param name: Agent名称
-        :param processFunc: 处理状态的处理函数
-        :param runtimeIdleFunc: 运行时空闲处理函数，默认为None则使用内部实现
+        Args:
+            name: Agent名称
+            processor: 状态机处理器实例
+            runtimeIdleFunc: 运行时空闲处理函数，默认为None则使用内部实现
         """
-        super().__init__(name)
-        self.processFunc = processFunc
+        super().__init__(name=name,lifeGoalOrRole=lifeGoalOrRole,llm=llm, promptTemplate=promptTemplate)
+        self.processor = processor
         self.runtimeIdleFunc = runtimeIdleFunc if runtimeIdleFunc is not None else self._defaultRuntimeIdleFunc
         self.stateMachine:CompiledStateGraph = self._createStateMachine()
         self.isReqStop = False
@@ -686,9 +698,17 @@ class StateMachineAgent(BaseAgent):
         time.sleep(0.5)
 
     def _createStateMachine(self)->CompiledStateGraph:
-        """创建状态机"""
-        stateMachine = StateGraph(AgentSPTAState)
-        stateMachine.add_node(self.PROCESS, self.processFunc)
+        """
+        创建状态机
+        通过处理器的初始状态来确定状态类型，该类型必须包含 current_step 属性
+        """
+        # 获取一个初始状态实例来确定状态类型
+        initial_state = self.processor.createInitialState(self)
+        if not hasattr(initial_state, 'current_step'): # 这个是langgraph必须用
+            raise ValueError("状态类型必须包含 current_step 属性 (langgraph使用)")
+            
+        stateMachine = StateGraph(type(initial_state))
+        stateMachine.add_node(self.PROCESS, self.processor.process)
         stateMachine.add_edge(START, self.PROCESS)
         stateMachine.add_edge(self.PROCESS, END)
         return stateMachine.compile()
@@ -704,20 +724,14 @@ class StateMachineAgent(BaseAgent):
 
         while not self.isReqStop:
             try:
-                state = AgentSPTAState(
-                    current_step=START,
-                    currentState=AgentSPTAState.SENSING,
-                    agent=self,
-                    thingMemory=ThingMemory(),
-                    currentActionNLRName="",
-                    nextActionNLRName="",
-                    event=None
-                )
-                # print(f"run 当前状态: {state}")
+                state = self.processor.createInitialState(self)
                 self.stateMachine.invoke(state, config=RunnableConfig(recursion_limit=10))
-                self.runtimeIdleFunc()
+                # self.runtimeIdleFunc()
             except Exception as e:
                 self.AAXW_CLASS_LOGGER.error(f"运行时发生异常: {e} 但继续mainloop", exc_info=True)
+            finally:
+                #出错也idle
+                self.runtimeIdleFunc()
         self.AAXW_CLASS_LOGGER.info(f"{self.name} 已停止.")
 
 class AgentRuntime(ABC):
@@ -785,6 +799,53 @@ if PYSIDE6_AVAILABLE:
                 agent.stop()
             self.qtThreadPool.waitForDone()
 
+
+class PromptTemplateProvider:
+    """Prompt模板提供者，负责创建和管理prompt模板"""
+    
+    @staticmethod
+    def createDefaultPrompt() -> PromptTemplate:
+        """创建默认的提示模板"""
+        template = """# 使命与角色(life goal)
+你是一个综合能力很强的智能主体。根据用户的信息、事件输入、前次思考执行情况，选择合适的动作来执行以及回复用户。
+后续信息或任务事件中"事件内容"是本次具体任务。具体任务的执行时的偏向，需要围绕本"使命与角色"的上层目标来执行。
+你也会根据"用户要求的使命与角色"进行补充角色与使命的补充、增强与偏向。
+## 用户要求的使命与角色
+{life_goal_or_role}
+
+# 执行要求
+请先理解用户需求，然后规划动作执行计划。
+回复用户动作时，如有上次运行结果与内容，请将其作为复述内容的形式放入本次回复中。
+回复用户动作时且被要求提供对动作结果做分析或计划时，请将上次运行结果与内容进行理解分析，并将结论放入。没有，则忽略本规则。
+每次输入都有当前动作，但并不是每次信息都是有下一步动作的。
+下一步动作是根据当前信息与本次动作来预判的。
+
+# 可用的动作及其参数：
+{action_descriptions}
+
+# 约束-输出要求
+你需要规划以下内容：
+1. 当前动作：选择一个最适合当前情况的动作来执行；
+2. 下一步动作：预判下一步可能需要的动作，帮助连贯性处理；可以没有下一步动作，任务或Thing完成，无需发起新的INNER事件；
+3. 思考过程：解释你对当前情况的理解和处理计划；
+4. 具体调用：提供完整的工具调用信息，包括具体动作、操作对象和内容；
+5. 输出结构必须完整，字段必须有，内容可以根据字段情况为空字符串或None；
+6. 在可用的动作列表中有足够动作时，可进行多步运行；如:先用动作"对话历史读取",下一步"generateName"生成新名字，再下一步"对话历史重命名"进行重命名，这样的流程；
+
+# 约束-输出格式
+{format_instructions}
+
+# 补充示例：
+
+# 信息或任务事件，其中"事件内容"中的内容为具体任务主干:
+{input_event}
+"""
+        return PromptTemplate(
+            template=template,
+            input_variables=["life_goal_or_role","action_descriptions", "input_event"],
+            partial_variables={"format_instructions": PerceivingOutput.getFormatInstructions()}
+        )
+
 class AgentEnvironment:
     """Agent运行环境"""
     def __init__(self, runtimeType: str = "thread_pool"):
@@ -796,19 +857,56 @@ class AgentEnvironment:
             raise ValueError(f"不支持的运行时类型: {runtimeType}")
         self.agentDict = {}
 
-    def createAgent(self, name: str) -> BaseAgent:
-        """创建并启动一个Agent"""
-        processor = SensingPerceivingThinkingActingProcess()
+    def createAgent(self, name: str, 
+                    lifeGoalOrRole:str=None,
+                    processor: Optional[StateMachineProcessor] = None,
+                    llm: Optional[ChatOpenAI] = None,
+                    promptTemplate: Optional[PromptTemplate] = None) -> BaseAgent:
+        """
+        创建并启动一个Agent
         
+        Args:
+            name: Agent名称
+            processor: 可选的状态机处理器实例，如果不提供则使用默认的SPTA处理器
+            llm: 可选的语言模型实例，如果不提供则使用默认配置
+            promptTemplate: 可选的提示模板，如果不提供则使用默认模板
+            
+        Returns:
+            BaseAgent: 创建的Agent实例
+        """
+
+        if not lifeGoalOrRole:
+            lifeGoalOrRole="你是一个综合能力很强的智能主体，名字叫ANAN。根据已有天生能力处理具体任务。"
+
+        if processor is None:
+            processor = SPTAProcessor()
+
+
+        if llm is None:
+            llm = ChatOpenAI(temperature=0, model="gpt-4o-mini")
+
+        if promptTemplate is None:
+            promptTemplate = PromptTemplateProvider.createDefaultPrompt()
+
+
+
+        agent = StateMachineAgent(
+            name=name,
+            lifeGoalOrRole=lifeGoalOrRole,
+            processor=processor,
+            # llm=llm,
+            # promptTemplate=promptTemplate
+        )
+        
+        # 设置llm资源
+        agent.setLLM(llm)
+        agent.setPromptTemplate(promptTemplate)
+
+
         # 初始化并注入动作
         actions = [
             ReplyUserAction()
         ]
-
-        agent = StateMachineAgent(
-            name=name,
-            processFunc=processor.process
-        )
         agent.actionActuator.setActions(actions)
         self.agentDict[name] = agent
         self.runtime.submitAgent(agent)
@@ -909,7 +1007,44 @@ if __name__ == "__main__":
         """测试环境事件触发的Agent"""
         env = AgentEnvironment("thread_pool")
         try:
-            agent = env.createAgent("资源管理助手")
+            # 创建自定义的prompt模板（这里使用一个简化版的示例）
+            custom_template = """# 角色与环境
+你是一个专注于备忘录管理的AI助手。你的主要职责是帮助用户管理和操作备忘录。
+
+# 执行要求
+1. 仔细理解用户的备忘录相关需求
+2. 选择合适的动作来处理备忘录
+3. 给出清晰的执行反馈
+
+# 可用的动作及其参数：
+{action_descriptions}
+
+# 约束-输出格式
+{format_instructions}
+
+# 当前任务：
+{input_event}
+"""
+            custom_prompt = PromptTemplate(
+                template=custom_template,
+                input_variables=["action_descriptions", "input_event"],
+                partial_variables={"format_instructions": PerceivingOutput.getFormatInstructions()}
+            )
+            
+            # 创建自定义的LLM实例
+            custom_llm = ChatOpenAI(temperature=0, model="gpt-4o-mini")
+            
+            # 创建处理器实例
+            processor = SPTAProcessor()
+            
+            # 创建agent并设置处理器
+            agent = env.createAgent(
+                name="资源管理助手",
+                processor=processor,
+                llm=custom_llm,
+                promptTemplate=custom_prompt
+            )
+            
             # 增加备忘录的action
             agent.addActions([
                 MemoReadAction(),
@@ -919,7 +1054,6 @@ if __name__ == "__main__":
             time.sleep(1)
             
             # 发送测试消息
-            # agent.sendMessageToMe("请帮我读取名为'工作计划'的备忘录")
             agent.sendMessageToMe("请帮我将'工作计划'的备忘录改名，改名使用对备忘读取内容的小结。备忘录名字不能超过15个字符。改完请回复我一下。")
             
             time.sleep(60)  # 等待处理完成

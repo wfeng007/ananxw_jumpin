@@ -1,5 +1,28 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
+## License and Notice:
+# This file is part of ananxw_jumpin.
+# ananxw_jumpin is licensed under the Apache2.0(the License); you may not use 
+# this file except in compliance with the License. See LICENSE file for details.
+# For the full license text, see the LICENSE file in the root directory.
+# 
+# For more copyright, warranty disclaimer, and third - party component information,
+# see the NOTICE file in the root directory.
+##
+#
+# @Author:wfeng007 小王同学 wfeng007@163.com
+# @Date:2025-03-20 
+# @Last Modified by:wfeng007
+#
+##
+#
+# AAXWJumpinDefaultCompoApplet 默认的applet实现。
+# 左上角title为🐶OP的默认applet。
+# 进入界面后默认的的LLM对话与agent功能。
+# 
+#
+# 另外，提供了1个简单插件+空applet的例子实现。
+#
 """默认插件和Applet实现"""
 
 import logging
@@ -530,7 +553,9 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
         # 已临时处理 aaAgent初始化失败的方式。
         ##  @TODO 最好再增加1个可切换agent的界面功能，从失败转移的SafetyFallbackAgent到正常agent；
         try:
-            self.aaAgent=self.agentEnvironment.createAgent("ANAN")
+            self.aaAgent=self.agentEnvironment.createAgent(
+                name="ANAN",
+                lifeGoalOrRole="你是一个应用资源管理者。根据用户的信息、事件输入、前次思考执行情况，选择合适的动作来管理应用资源并回复。")
         except Exception as e:
             self.AAXW_CLASS_LOGGER.error(f"Agent初始化失败: {str(e)}\n{traceback.format_exc()}")
             self.aaAgent = SafetyFallbackAgent("ANAN_EMPTY")
