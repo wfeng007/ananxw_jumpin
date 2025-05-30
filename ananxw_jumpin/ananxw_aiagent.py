@@ -78,9 +78,13 @@ class AgentSensoryEvent:
     eventType: str = MESSAGE            # 事件类型标识
     source: str = "user"                # 事件来源
     timestamp: datetime = field(default_factory=datetime.now)
+    # 当前暂时 isSensoryReflex  只有MESSAGE类型使用，有对应action。
+    isSensoryReflex: bool = False       # 是否为感觉反射事件，True时是要求跳过perceiving直接执行action
 
     lastEvent: Optional['AgentSensoryEvent'] = field(default=None)  # 上一次事件
     lastResult: Optional[str] = field(default=None)  # 上一次执行结果
+    #TODO 当前暂时没想好 perceiving过程如何处理。 （1些细节，如果未被回调如何识别到？做动态代理做切面计数来实现？）
+    callback: Optional[Callable[[str], None]] = field(default=None)  # 流式回调函数
 
     
     def getEventType(self) -> str:
@@ -152,6 +156,7 @@ class BaseAgentAction(BaseTool):
     """基础动作类"""
     name: str
     description: str
+    is_sensory_reflex: bool = False  # 标记是否为感觉反射动作，不参与perception流程
     # output_schema: ClassVar[Type[BaseModel]] = None  # 子类用于定义输出模型
 
     def getSchemaDescription(self) -> str:
@@ -176,8 +181,10 @@ class AgentActuator:
     """动作执行器"""
     
     def __init__(self):
-        self.actions: List[BaseAgentAction] = []
-        self.actionDict: Dict[str, BaseAgentAction] = {}
+        self.perceivedActions: List[BaseAgentAction] = []  # 觉察到的动作，参与perception流程
+        self.sensoryReflexActions: List[BaseAgentAction] = []    # 感觉反射动作，不参与perception流程
+        self.perceivedActionDict: Dict[str, BaseAgentAction] = {}
+        self.sensoryReflexActionDict: Dict[str, BaseAgentAction] = {}
     
     def addAction(self, action: BaseAgentAction) -> bool:
         """添加单个动作
@@ -188,10 +195,18 @@ class AgentActuator:
         Returns:
             bool: 添加是否成功，如果动作名称已存在则返回False
         """
-        if action.name in self.actionDict:
-            return False
-        self.actions.append(action)
-        self.actionDict[action.name] = action
+        if action.is_sensory_reflex:
+            # 感觉反射动作
+            if action.name in self.sensoryReflexActionDict:
+                return False
+            self.sensoryReflexActions.append(action)
+            self.sensoryReflexActionDict[action.name] = action
+        else:
+            # 觉察到的动作
+            if action.name in self.perceivedActionDict:
+                return False
+            self.perceivedActions.append(action)
+            self.perceivedActionDict[action.name] = action
         return True
     
     def addActions(self, actions: List[BaseAgentAction]) -> List[str]:
@@ -218,12 +233,21 @@ class AgentActuator:
         Returns:
             bool: 移除是否成功，如果动作不存在则返回False
         """
-        if actionName not in self.actionDict:
-            return False
-        action = self.actionDict[actionName]
-        self.actions.remove(action)
-        del self.actionDict[actionName]
-        return True
+        # 尝试从觉察到的动作中移除
+        if actionName in self.perceivedActionDict:
+            action = self.perceivedActionDict[actionName]
+            self.perceivedActions.remove(action)
+            del self.perceivedActionDict[actionName]
+            return True
+        
+        # 尝试从感觉反射动作中移除
+        if actionName in self.sensoryReflexActionDict:
+            action = self.sensoryReflexActionDict[actionName]
+            self.sensoryReflexActions.remove(action)
+            del self.sensoryReflexActionDict[actionName]
+            return True
+        
+        return False
     
     def removeActions(self, actionNames: List[str]) -> List[str]:
         """移除多个动作
@@ -242,21 +266,31 @@ class AgentActuator:
     
     def setActions(self, actions: List[BaseAgentAction]):
         """设置动作列表（清空现有动作）"""
-        self.actions = []
-        self.actionDict = {}
+        self.perceivedActions = []
+        self.sensoryReflexActions = []
+        self.perceivedActionDict = {}
+        self.sensoryReflexActionDict = {}
         self.addActions(actions)
     
     def getActionDescriptions(self) -> str:
-        """获取动作描述列表，包含参数信息"""
+        """获取觉察到的动作描述列表，包含参数信息（只返回参与perception的动作）"""
         descriptions = []
-        for action in self.actions:
+        for action in self.perceivedActions:
             # 使用 BaseAction 中已实现的 getSchemaDescription 方法
             descriptions.append(action.getSchemaDescription())
         return "\n".join(descriptions)
     
     def getAction(self, name: str) -> Optional[BaseAgentAction]:
-        """获取指定名称的动作"""
-        return self.actionDict.get(name)
+        """获取指定名称的动作（从所有动作中查找）"""
+        return self.perceivedActionDict.get(name) or self.sensoryReflexActionDict.get(name)
+    
+    def getPerceivedAction(self, name: str) -> Optional[BaseAgentAction]:
+        """获取指定名称的觉察到的动作"""
+        return self.perceivedActionDict.get(name)
+    
+    def getSensoryReflexAction(self, name: str) -> Optional[BaseAgentAction]:
+        """获取指定名称的感觉反射动作"""
+        return self.sensoryReflexActionDict.get(name)
 
 
 
@@ -302,6 +336,19 @@ class BaseAgent(ABC):
             eventType=AgentSensoryEvent.MESSAGE,
             source="user"
         ))
+    
+    # @TODO 与其他感知事件的回调方式融合统一。
+    def senseMessageAndCallback(self, message: str, callback: Callable[[str], None]):
+        """感知（发送）消息到Agent,并通过回调反馈结果"""
+        print(f"\n[用户] -> {self.name}: {message}")
+        self.stemQueue.put(AgentSensoryEvent(
+            message=message,
+            eventType=AgentSensoryEvent.MESSAGE,
+            source="user",
+            callback=callback,
+            isSensoryReflex=True  # 标记为感觉反射事件，跳过perception直接执行
+        ))
+    
 
     def senseEnvironmentEvent(self, command: str, **params):
         """感知（发送）环境事件到Agent"""
@@ -501,6 +548,86 @@ class ReplyUserAction(BaseAgentAction):
             return f"已回复用户: {content}"
 
 
+class DirectReplyAction(BaseAgentAction):
+    """直接回复动作 - 支持流式回调的 LLM 回复"""
+    name: str = "直接回复"
+    description: str = "与LLM进行直接回复，支持流式响应"
+    is_sensory_reflex: bool = True  # 标记为感觉反射动作，不参与perception流程
+
+    # Pydantic 字段定义，exclude=True 表示不参与序列化
+    llm: Optional[Any] = Field(default=None, exclude=True, description="LLM实例")
+    agent_name: str = Field(default="ANAN", exclude=True, description="Agent名称")
+
+    class ArgumentSchema(BaseModel):
+        """直接回复的参数模型"""
+        message: str = Field(..., description="用户消息内容")
+        isStream: bool = Field(default=True, description="是否使用流式响应")
+        callback: Optional[Callable[[str], None]] = Field(default=None, description="流式响应回调函数")
+
+    args_schema: Type[BaseModel] = ArgumentSchema
+
+    #资源注入的初始化
+    def __init__(self, llm=None, agent_name: str = None, **kwargs):
+        # 调用父类的 __init__，传递 llm 和 agent_name 作为参数
+        super().__init__(
+            llm=llm,
+            agent_name=agent_name or "ANAN",
+            **kwargs
+        )
+
+    @override
+    def _run(self, message: str, isStream: bool = True, callback: Callable[[str], None] = None) -> str:
+        """执行直接回复"""
+        if not self.llm:
+            error_msg = "LLM实例未配置，无法执行直接回复"
+            if callback:
+                callback(f"\n\n[错误] {error_msg}")
+            return error_msg
+
+        try:
+            # 构建简单的回复提示
+            simple_prompt = f"""你是一个AI助手，名字是{self.agent_name}。
+请根据用户的消息进行友好、准确的回复。
+
+用户消息：{message}
+
+请回复："""
+            
+            if isStream and callback:
+                # 流式响应
+                full_response = ""
+                
+                try:
+                    # ChatOpenAI 的流式调用
+                    for chunk in self.llm.stream(simple_prompt):
+                        content = chunk.content if hasattr(chunk, 'content') else str(chunk)
+                        if content:
+                            full_response += content
+                            callback(content)
+                except Exception as stream_error:
+                    # 如果流式调用失败，尝试普通调用
+                    response = self.llm.invoke(simple_prompt)
+                    content = response.content if hasattr(response, 'content') else str(response)
+                    full_response = content
+                    if callback:
+                        callback(content)
+                
+                return full_response
+            else:
+                # 非流式响应
+                response = self.llm.invoke(simple_prompt)
+                result = response.content if hasattr(response, 'content') else str(response)
+                if callback:
+                    callback(result)
+                return result
+                
+        except Exception as e:
+            error_msg = f"LLM调用失败: {str(e)}"
+            if callback:
+                callback(f"\n\n[错误] {error_msg}")
+            return error_msg
+
+
 class StateMachineProcessor(ABC):
     """Agent处理器抽象基类"""
     @abstractmethod
@@ -571,6 +698,12 @@ class SPTAProcessor(StateMachineProcessor):
                 state.currentState = AgentSPTAState.END
                 return state
             
+            # 处理感觉反射事件 - 跳过perception和thinking，直接转到acting
+            if event.isSensoryReflex:
+                state.event = event  # 保存当前事件到状态
+                state.currentState = AgentSPTAState.ACTING
+                return state
+            
             # 增加对 INNER、ENV、MESSAGE 事件的统一处理
             if event.getEventType() in [AgentSensoryEvent.INNER, AgentSensoryEvent.ENV, AgentSensoryEvent.MESSAGE]:
                 state.event = event  # 保存当前事件到状态
@@ -634,8 +767,12 @@ class SPTAProcessor(StateMachineProcessor):
     
     def onActing(self, state: AgentSPTAState) -> AgentSPTAState:
         """行动状态处理"""
-        # 使用agent的actionActuator获取动作
-        # print(f"onActing 当前状态: {state}")
+        # 检查是否为感觉反射事件
+        if state.event and state.event.isSensoryReflex:
+            # 处理感觉反射事件 - 直接执行对应的感觉反射动作
+            return self._handleSensoryReflexEvent(state)
+        
+        # 处理常规事件 - 通过perception结果执行动作
         action = state.agent.actionActuator.getAction(state.currentActionNLRName)
         if action and state.perceivingOutput:
             try:
@@ -664,8 +801,62 @@ class SPTAProcessor(StateMachineProcessor):
             print(f"\n[{state.agent.name}] 无法执行动作: {state.currentActionNLRName}")
             state.currentState = AgentSPTAState.END
         
-        # print(f"onActing 当前状态结束")
         return state
+    
+    def _handleSensoryReflexEvent(self, state: AgentSPTAState) -> AgentSPTAState:
+        """处理感觉反射事件"""
+        try:
+            event = state.event
+            agent = state.agent
+            
+            # 根据事件类型查找对应的感觉反射动作
+            sensory_reflex_action = self._findSensoryReflexAction(event, agent)
+            
+            if sensory_reflex_action:
+                # 构建执行参数
+                invoke_params = {
+                    "message": event.message
+                }
+                
+                # 如果有回调，添加回调和流式参数
+                if event.callback:
+                    invoke_params["callback"] = event.callback
+                    invoke_params["isStream"] = True
+                
+                # 执行感觉反射动作
+                result = sensory_reflex_action.invoke(invoke_params)
+                print(f"\n[{agent.name}] 感觉反射执行: {result}")
+                
+            else:
+                error_msg = f"未找到对应的感觉反射动作处理事件: {event.eventType}"
+                print(f"\n[{agent.name}] {error_msg}")
+                if event.callback:
+                    event.callback(f"\n\n[错误] {error_msg}")
+            
+            state.currentState = AgentSPTAState.END
+            
+        except Exception as e:
+            self.AAXW_CLASS_LOGGER.error(f"处理感觉反射事件失败: {str(e)}", exc_info=True)
+            if state.event and state.event.callback:
+                state.event.callback(f"\n\n[错误] 处理感觉反射事件失败: {str(e)}")
+            state.currentState = AgentSPTAState.END
+        
+        return state
+    
+    def _findSensoryReflexAction(self, event: AgentSensoryEvent, agent: 'StateMachineAgent') -> Optional[BaseAgentAction]:
+        """根据事件查找对应的感觉反射动作"""
+        # 对于MESSAGE类型的感觉反射事件，查找直接回复动作
+        if event.eventType == AgentSensoryEvent.MESSAGE and event.callback:
+            # 获取或创建 DirectReplyAction
+            direct_reply_action = agent.actionActuator.getSensoryReflexAction("直接回复")
+            if not direct_reply_action:
+                # 如果没有找到，创建并添加一个
+                direct_reply_action = DirectReplyAction(llm=agent.llm, agent_name=agent.name)
+                agent.actionActuator.addAction(direct_reply_action)
+            return direct_reply_action
+        
+        # 可以在这里添加更多感觉反射事件类型的处理
+        return None
 
 @AAXW_AIAGENT_LOG_MGR.classLogger()
 class StateMachineAgent(BaseAgent):
@@ -1063,11 +1254,54 @@ if __name__ == "__main__":
         finally:
             env.stopAll()
     
+    def test_direct_reply():
+        """测试直接回复功能"""
+        env = AgentEnvironment("thread_pool")
+        try:
+            # 创建处理器实例
+            processor = SPTAProcessor()
+            
+            # 创建 agent
+            agent = env.createAgent(
+                name="直接回复助手",
+                processor=processor,
+                llm=ChatOpenAI(temperature=0, model="gpt-4o-mini")
+            )
+            
+            time.sleep(1)
+            
+            print("开始测试直接回复功能...")
+            
+            # 定义回调函数来处理流式响应
+            def response_callback(content: str):
+                print(content, end='', flush=True)
+            
+            # 发送直接回复消息
+            print(f"\n[用户] -> {agent.name}: 你好，请介绍一下你自己")
+            agent.senseMessageAndCallback("你好，请介绍一下你自己", response_callback)
+            
+            time.sleep(5)  # 等待响应完成
+            
+            print("\n" + "="*50)
+            
+            # 再测试一次
+            print(f"\n[用户] -> {agent.name}: 你能做什么？")
+            agent.senseMessageAndCallback("你能做什么？", response_callback)
+            
+            time.sleep(5)  # 等待响应完成
+            
+            print(f"\n测试完成")
+            
+        except KeyboardInterrupt:
+            AAXW_AIAGENT_MODULE_LOGGER.info("接收到中断信号，正在停止...")
+        finally:
+            env.stopAll()
+
     if not os.getenv("OPENAI_API_KEY"):
         AAXW_AIAGENT_MODULE_LOGGER.error("请在.env文件中设置OPENAI_API_KEY")
         raise ValueError("请在.env文件中设置OPENAI_API_KEY")
     
-    test_env_event()
+    test_direct_reply()
 
 
 
