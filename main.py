@@ -171,16 +171,15 @@ import ananxw_jumpin
 import ananxw_jumpin.ananxw_framework
 import ananxw_jumpin.backbone
 import ananxw_jumpin.gui_pyside6
-import ananxw_jumpin.default_plugins
+import ananxw_jumpin.default_applets_agents
 import ananxw_jumpin.builtin_plugins
-import ananxw_jumpin.builtin_plugins_debug
 
 # 导入本地包
 # from ananxw_jumpin.ananxw_framework import AAXWDependencyContainer
 from ananxw_jumpin.comm import AAXW_JUMPIN_LOG_MGR, AAXWJumpinDICUtilz
 from ananxw_jumpin.backbone import AAXWJumpinConfig,AAXWJumpinFileAIMemoryManager
 from ananxw_jumpin.gui_pyside6 import AAXWJumpinMainWindow
-from ananxw_jumpin.default_plugins import AAXWJumpinDefaultCompoApplet
+from ananxw_jumpin.default_applets_agents import AAXWJumpinDefaultCompoApplet
 from ananxw_jumpin.gui_pyside6 import AAXWJumpinTrayKit
 from ananxw_jumpin.gui_pyside6 import AAXWGlobalShortcut
 
@@ -214,18 +213,7 @@ if __name__ == "__main__":
         # traceback.print_exc()
     finally:
         pass
-
-    try:
-        # 这里使用了相对导入，但builtin_plugins做为自己模块增加包名的操作。
-        import ananxw_jumpin.builtin_plugins_debug
-    except Exception as e: 
-        AAXW_JUMPIN_MODULE_LOGGER.warning(
-            f"额外的ananxw_jumpin.builtin_plugin_debug未正常导入，不影响allin1f的单文件运行。{e}")
-        AAXW_JUMPIN_MODULE_LOGGER.warning(
-            f"错误堆栈信息: {str(e)}\n{traceback.format_exc()}")
-    finally:
-        pass
-
+    
 
     # all in one file main function.
     def main_allin1file():

@@ -20,7 +20,9 @@
 # 已实现 tools 的调用。
 # 已实现 基于lastEvent，lastResult的回路记忆模式。实现逐步推导处理的过程。
 # 提供了Pattern的定义，但未使用。
+# 提供了sensoryflex 的感觉-动作的直接链路来执行特定事件。
 
+# 
 #
 # TODO 日志打印调整；
 # 

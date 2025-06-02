@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 # import os
 # __package_name__ = os.path.basename(os.path.dirname(os.path.abspath(__file__)))
-__version__ = "0.10.0"
+__version__ = "0.11.0"
 __package_name__ = "ananxw_jumpin"
 
 # 导出主要的类和函数

@@ -538,7 +538,7 @@ class AAXWAbstractApplet(ABC):
     生命周期方法调用顺序：
     1. onAdd(): Applet被添加到管理器时调用
     2. onActivate(): Applet被激活为当前活动Applet时调用
-    3. onInactivate(): Applet不再是当前活动Applet时调用
+    3. onDeactivate(): Applet不再是当前活动Applet时调用
     4. onRemove(): Applet从管理器中移除时调用
     """
     
@@ -589,7 +589,7 @@ class AAXWAbstractApplet(ABC):
         pass
     
     @abstractmethod
-    def onInactivate(self):
+    def onDeactivate(self):
         """
         当Applet不再是当前活动Applet时的回调。
         建议实现：
@@ -627,7 +627,7 @@ class AAXWAppletManager:
             # 如果有已激活的Applet，先通知它将被切出
             if self.activatedAppletIndex != -1 and self.activatedAppletIndex < len(self.applets):
                 activated_applet = self.applets[self.activatedAppletIndex]
-                activated_applet.onInactivate()
+                activated_applet.onDeactivate()
 
             # 激活新的Applet
             new_applet = self.applets[index]
@@ -710,7 +710,7 @@ class AAXWAppletManager:
             
             # 如果要移除的是当前激活的Applet，先将其切换为非激活状态
             if index == self.activatedAppletIndex:
-                applet.onInactivate()
+                applet.onDeactivate()
                 self.activatedAppletIndex = -1
             # 如果移除的Applet在已激活的Applet之前，需要更新activatedAppletIndex
             elif index < self.activatedAppletIndex:

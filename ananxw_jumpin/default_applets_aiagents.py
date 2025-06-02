@@ -201,7 +201,7 @@ class AAXWJumpinDefaultSimpleApplet(AAXWAbstractApplet):
         pass
 
     @override
-    def onInactivate(self):
+    def onDeactivate(self):
         #清理工具组件引用；
         self.mainWindow.topToolsMessageWindow.removeCentralWidget()
         #
@@ -740,7 +740,7 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
         pass
 
     @override
-    def onInactivate(self):
+    def onDeactivate(self):
         #
         self.showingPanel.contentBlockStrategy=self.backupContentBlockStrategy
         self.backupContentBlockStrategy=None #type:ignore
@@ -748,8 +748,12 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
 
         #去除 槽函数
         self.mainWindow.inputPanel.funcButtonRight.clicked.disconnect(self.doInputCommitAction)
+
+        #？？？ 这是？
         # self.mainWindow.inputPanel.promptInputEdit.returnPressed.disconnect(self.doInputCommitAction)
-        
+        #清理工具组件引用；
+        # self.mainWindow.topToolsMessageWindow.removeCentralWidget()
+        # self.aiThread=None
         pass
     
     # ui-init
