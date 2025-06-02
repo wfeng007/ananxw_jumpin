@@ -171,7 +171,7 @@ import ananxw_jumpin
 import ananxw_jumpin.ananxw_framework
 import ananxw_jumpin.backbone
 import ananxw_jumpin.gui_pyside6
-import ananxw_jumpin.default_applets_agents
+import ananxw_jumpin.default_applets_aiagents
 import ananxw_jumpin.builtin_plugins
 
 # 导入本地包
@@ -179,7 +179,7 @@ import ananxw_jumpin.builtin_plugins
 from ananxw_jumpin.comm import AAXW_JUMPIN_LOG_MGR, AAXWJumpinDICUtilz
 from ananxw_jumpin.backbone import AAXWJumpinConfig,AAXWJumpinFileAIMemoryManager
 from ananxw_jumpin.gui_pyside6 import AAXWJumpinMainWindow
-from ananxw_jumpin.default_applets_agents import AAXWJumpinDefaultCompoApplet
+from ananxw_jumpin.default_applets_aiagents import AAXWJumpinDefaultCompoApplet
 from ananxw_jumpin.gui_pyside6 import AAXWJumpinTrayKit
 from ananxw_jumpin.gui_pyside6 import AAXWGlobalShortcut
 
