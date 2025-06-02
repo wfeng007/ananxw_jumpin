@@ -21,7 +21,7 @@
 # 已实现 基于lastEvent，lastResult的回路记忆模式。实现逐步推导处理的过程。
 # 提供了Pattern的定义，但未使用。
 # 提供了sensoryflex 的感觉-动作的直接链路来执行特定事件。
-
+#   提供了事件级联与跟踪机制，提供了入口事件保持。当做外部请求的缓存保持。
 # 
 #
 # TODO 日志打印调整；
@@ -54,6 +54,8 @@ try:
     from typing import override
 except ImportError:
     from typing_extensions import override
+import threading
+import traceback
 
 # from regex import P
 
@@ -82,17 +84,38 @@ class AgentSensoryEvent:
     timestamp: datetime = field(default_factory=datetime.now)
     # 当前暂时 isSensoryReflex  只有MESSAGE类型使用，有对应action。
     isSensoryReflex: bool = False       # 是否为感觉反射事件，True时是要求跳过perceiving直接执行action
+    # 入口事件完成标志，只对MESSAGE和ENV类型有意义
+    isCompleted: bool = field(default=False)  # 标记事件是否已完成处理
 
     lastEvent: Optional['AgentSensoryEvent'] = field(default=None)  # 上一次事件
     lastResult: Optional[str] = field(default=None)  # 上一次执行结果
+    # 入口事件，对外部请求的缓存引用
+    entryEvent: Optional['AgentSensoryEvent'] = field(default=None)  # 关联的入口事件（MESSAGE或ENV类型）
     #TODO 当前暂时没想好 perceiving过程如何处理。 （1些细节，如果未被回调如何识别到？做动态代理做切面计数来实现？）
     callback: Optional[Callable[[str], None]] = field(default=None)  # 流式回调函数
 
-    
+    def markCompleted(self):
+        """标记事件已完成处理"""
+        self.isCompleted = True
+
     def getEventType(self) -> str:
         """获取事件类型"""
         return self.eventType
     
+    def getEntryEvent(self) -> Optional['AgentSensoryEvent']:
+        """获取入口事件
+        
+        返回顺序：
+        1. 如果有保存的入口事件，返回该入口事件
+        2. 如果当前事件是入口事件类型（MESSAGE或ENV），返回自身
+        3. 否则返回None
+        """
+        if self.entryEvent is not None:
+            return self.entryEvent
+        if self.eventType in [self.MESSAGE, self.ENV]:
+            return self
+        return None
+
     #
     def toMarkdownStr(self) -> str:
         """返回markdown形式的字符串，使用 ## 作为标题"""
@@ -324,7 +347,7 @@ class BaseAgent(ABC):
     @abstractmethod
     def run(self):
         """运行Agent"""
-        pass
+        raise NotImplementedError("senseMessageAndCallback 方法需要在子类中实现")
 
     def sendMessageToMe(self, message: str):
         """发送消息到Agent"""
@@ -339,17 +362,23 @@ class BaseAgent(ABC):
             source="user"
         ))
     
-    # @TODO 与其他感知事件的回调方式融合统一。
+    #同步回调
+    @abstractmethod
     def senseMessageAndCallback(self, message: str, callback: Callable[[str], None]):
-        """感知（发送）消息到Agent,并通过回调反馈结果"""
+        """感知（发送）消息到Agent,并通过回调反馈结果
+        
+        注意：这个方法应该是同步的，即在方法返回时，callback应该已经被完整调用完毕。
+        子类在实现时必须确保这一点，以保证调用方能正确接收到完整的响应。
+        """
         print(f"\n[用户] -> {self.name}: {message}")
-        self.stemQueue.put(AgentSensoryEvent(
-            message=message,
-            eventType=AgentSensoryEvent.MESSAGE,
-            source="user",
-            callback=callback,
-            isSensoryReflex=True  # 标记为感觉反射事件，跳过perception直接执行
-        ))
+        # self.stemQueue.put(AgentSensoryEvent(
+        #     message=message,
+        #     eventType=AgentSensoryEvent.MESSAGE,
+        #     source="user",
+        #     callback=callback,
+        #     isSensoryReflex=True  # 标记为感觉反射事件，跳过perception直接执行
+        # ))
+        raise NotImplementedError("senseMessageAndCallback 方法需要在子类中实现")
     
 
     def senseEnvironmentEvent(self, command: str, **params):
@@ -785,22 +814,47 @@ class SPTAProcessor(StateMachineProcessor):
                 print(f"\n[{state.agent.name}] 思考: {state.perceivingOutput.thought}")
                 print(f"[{state.agent.name}] 执行: {result}")
                 
+                # 如果当前事件是内部事件, 则将该事件设置为完成
+                if state.event.eventType == AgentSensoryEvent.INNER:
+                    state.event.markCompleted()
+                
                 # 如果有下一步动作信息，将当前执行结果和下一步动作信息一起写入事件
                 if state.nextActionNLRName:
-                    state.agent.stemQueue.put(AgentSensoryEvent(
+                    # 创建新的内部事件
+                    new_event = AgentSensoryEvent(
                         message=f" 需要进行：{state.nextActionNLRName}",
                         eventType=AgentSensoryEvent.INNER,
                         source="self",
                         lastEvent=state.event,  # 保存当前事件作为下一个事件的上一个事件
-                        lastResult=result  # 保存当前执行结果
-                    ))
+                        lastResult=result,  # 保存当前执行结果
+                        # 关联入口事件：优先使用上一个事件的入口事件，如果没有则使用上一个事件本身（如果是入口事件的话）
+                        entryEvent=state.event.entryEvent or state.event.getEntryEvent()
+                    )
+                    state.agent.stemQueue.put(new_event)
+                else:
+                    # 如果没有下一步动作，标记入口事件为完成
+                    entry_event = state.event.entryEvent or state.event.getEntryEvent()
+                    if entry_event:
+                        entry_event.markCompleted()
                 
-                state.currentState = AgentSPTAState.END
+                
+        # @FIXME 之后需要把错误情况也回执给 入口事件？
             except Exception as e:
                 print(f"\n[{state.agent.name}] 执行出错: {str(e)}")
+                # 发生错误时也要标记入口事件为完成
+                entry_event = state.event.entryEvent or state.event.getEntryEvent()
+                if entry_event:
+                    entry_event.markCompleted()
+            finally:
+                #必然设置为结束
                 state.currentState = AgentSPTAState.END
         else:
             print(f"\n[{state.agent.name}] 无法执行动作: {state.currentActionNLRName}")
+            # 无法执行动作时也要标记入口事件为完成
+            entry_event = state.event.entryEvent or state.event.getEntryEvent()
+            if entry_event:
+                entry_event.markCompleted()
+                
             state.currentState = AgentSPTAState.END
         
         return state
@@ -829,18 +883,31 @@ class SPTAProcessor(StateMachineProcessor):
                 result = sensory_reflex_action.invoke(invoke_params)
                 print(f"\n[{agent.name}] 感觉反射执行: {result}")
                 
+                # 标记入口事件为完成
+                entry_event = event.entryEvent or event.getEntryEvent()
+                if entry_event:
+                    entry_event.markCompleted()
+                
             else:
                 error_msg = f"未找到对应的感觉反射动作处理事件: {event.eventType}"
                 print(f"\n[{agent.name}] {error_msg}")
                 if event.callback:
                     event.callback(f"\n\n[错误] {error_msg}")
-            
-            state.currentState = AgentSPTAState.END
+                # 错误时也要标记入口事件为完成
+                entry_event = event.entryEvent or event.getEntryEvent()
+                if entry_event:
+                    entry_event.markCompleted()
             
         except Exception as e:
             self.AAXW_CLASS_LOGGER.error(f"处理感觉反射事件失败: {str(e)}", exc_info=True)
             if state.event and state.event.callback:
                 state.event.callback(f"\n\n[错误] 处理感觉反射事件失败: {str(e)}")
+            # 异常时也要标记入口事件为完成
+            entry_event = event.entryEvent or event.getEntryEvent()
+            if entry_event:
+                entry_event.markCompleted()
+
+        finally:
             state.currentState = AgentSPTAState.END
         
         return state
@@ -860,13 +927,35 @@ class SPTAProcessor(StateMachineProcessor):
         # 可以在这里添加更多感觉反射事件类型的处理
         return None
 
+
+class CallbackWrapper:
+    """回调函数包装器，用于跟踪回调的执行情况"""
+    def __init__(self, callback: Callable[[str], None]):
+        self.callback = callback
+        self.call_count = 0
+        self.last_call_time = None
+        self.is_completed = False
+        self._lock = threading.Lock()
+
+    def __call__(self, content: str):
+        """执行回调并记录执行信息"""
+        with self._lock:
+            self.call_count += 1
+            self.last_call_time = time.time()
+            self.callback(content)
+
+    def mark_completed(self):
+        """标记回调执行完成"""
+        with self._lock:
+            self.is_completed = True
+
 @AAXW_AIAGENT_LOG_MGR.classLogger()
 class StateMachineAgent(BaseAgent):
     """提供基本状态机实现的Agent"""
     AAXW_CLASS_LOGGER:logging.Logger
 
     PROCESS = "process"
-    
+
     def __init__(self, name: str, 
                  processor: StateMachineProcessor,
                  lifeGoalOrRole: Optional[str]=None,
@@ -885,6 +974,48 @@ class StateMachineAgent(BaseAgent):
         self.runtimeIdleFunc = runtimeIdleFunc if runtimeIdleFunc is not None else self._defaultRuntimeIdleFunc
         self.stateMachine:CompiledStateGraph = self._createStateMachine()
         self.isReqStop = False
+
+    # @TODO 与其他感知事件的回调方式融合统一。
+    # @TODO 当前要求实现为同步，需要考虑同时提供可异步的方式。至少提供Future模式的异步方式。
+    #   比如用 afSenseMessageAndCallback -> from concurrent.futures.Future
+    #   当前只是简单的写入Queue是纯异步实现。
+    @override
+    def senseMessageAndCallback(self, message: str, callback: Callable[[str], None]):
+        """感知（发送）消息到Agent,并通过回调反馈结果
+        
+        注意：这个方法应该是同步的，即在方法返回时，callback应该已经被完整调用完毕。
+        子类在实现时必须确保这一点，以保证调用方能正确接收到完整的响应。
+        """
+        print(f"\n[用户] -> {self.name}: {message}")
+        
+        try:
+            # 创建事件并放入队列
+            event = AgentSensoryEvent(
+                message=message,
+                eventType=AgentSensoryEvent.MESSAGE,
+                source="user",
+                callback=callback,
+                isSensoryReflex=True  # 标记为感觉反射事件
+            )
+            self.stemQueue.put(event)
+            
+            # 等待事件完成
+            start_time = time.time()
+            while not event.isCompleted:
+                if time.time() - start_time > 30.0:  # 30秒超时
+                    error_msg = "等待事件处理完成超时"
+                    self.AAXW_CLASS_LOGGER.error(error_msg)
+                    callback(f"[错误] {error_msg}")
+                    return error_msg
+                time.sleep(0.1)  # 短暂休眠避免CPU占用
+            
+            return "已完成消息处理"
+            
+        except Exception as e:
+            error_msg = f"消息处理失败: {str(e)}"
+            self.AAXW_CLASS_LOGGER.error(f"{error_msg}\n{traceback.format_exc()}")
+            callback(f"[错误] {error_msg}")
+            return error_msg
         
     def _defaultRuntimeIdleFunc(self):
         """默认的运行时空闲处理函数"""
@@ -1143,6 +1274,13 @@ class SafetyFallbackAgent(BaseAgent):
     def senseEnvironmentEvent(self, command: str) -> None:
         """记录接收到的环境事件"""
         self.AAXW_CLASS_LOGGER.warning(f"安全故障转移Agent {self.name} 收到环境事件: {command}")
+
+    @override
+    def senseMessageAndCallback(self, message: str, callback: Callable[[str], None]):
+        """同步版本的消息感知与回调，返回友好的错误提示"""
+        self.AAXW_CLASS_LOGGER.warning(f"安全故障转移Agent {self.name} 收到消息: {message}")
+        error_msg = "Agent未能正确初始化，请检查LLM配置并确保所需服务可用。如需帮助，请查看日志获取详细信息。"
+        callback(error_msg)
 
     @override
     def addActions(self, actions: List[BaseAgentAction]) -> None:
