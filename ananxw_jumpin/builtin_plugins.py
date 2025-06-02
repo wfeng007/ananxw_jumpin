@@ -598,7 +598,7 @@ class AAXWJumpinOllamaSimpleApplet(AAXWAbstractApplet):
 
 
     @override
-    def onInactivate(self):
+    def onDeactivate(self):
 
         #
         self.showingPanel.contentBlockStrategy=self.backupContentBlockStrategy
@@ -1154,20 +1154,20 @@ class AAXWJumpinKBSApplet(AAXWAbstractApplet):
             f"Input: {self.mainWindow.inputPanel.promptInputEdit.text()}")
 
     @override
-    def onInactivate(self):
+    def onDeactivate(self):
         #
         self.showingPanel.contentBlockStrategy=self.backupContentBlockStrategy #type:ignore 
         self.backupContentBlockStrategy=None #type:ignore
 
         #去除 槽函数
         self.mainWindow.inputPanel.funcButtonRight.clicked.disconnect(self.doInputCommitAction)
+        # ??? 为何注释掉？
         # self.mainWindow.inputPanel.promptInputEdit.returnPressed.disconnect(self.doInputCommitAction)
         self.aiThread=None
 
         #清理工具组件引用；
         self.mainWindow.topToolsMessageWindow.removeCentralWidget() 
         #
-
         self.AAXW_CLASS_LOGGER.info(f"{self.name} Applet被停用")
         pass
 
@@ -1328,7 +1328,7 @@ class AAXWJumpinTopWinExpApplet(AAXWAbstractApplet):
         pass
 
     @override
-    def onInactivate(self):
+    def onDeactivate(self):
         #
         self.showingPanel.contentBlockStrategy=self.backupContentBlockStrategy #type:ignore 
         self.backupContentBlockStrategy=None #type:ignore

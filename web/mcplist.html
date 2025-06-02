@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MCP服务器配置管理</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f0f2f5;
+        }
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .toolbar {
+            background-color: #f8f9fa;
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+            border: 1px solid #dee2e6;
+        }
+        .toolbar button {
+            padding: 8px 16px;
+            background-color: #1a73e8;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            margin-right: 10px;
+        }
+        .toolbar button:hover {
+            background-color: #1557b0;
+        }
+        .toolbar button.save-button {
+            background-color: #28a745;
+        }
+        .toolbar button.save-button:hover {
+            background-color: #218838;
+        }
+        .card-list {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            padding: 10px;
+        }
+        .card {
+            background-color: white;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+            transition: transform 0.2s, box-shadow 0.2s;
+            margin-bottom: 4px;
+        }
+        .card:hover {
+            transform: translateX(4px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        }
+        .card h3 {
+            margin: 0 0 12px 0;
+            color: #1a73e8;
+            font-size: 18px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .card-content {
+            font-size: 14px;
+            color: #333;
+            margin-top: 12px;
+        }
+        .card-type {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 500;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+        }
+        .type-stdio {
+            background-color: #e8f0fe;
+            color: #1a73e8;
+        }
+        .type-sse {
+            background-color: #fef3e8;
+            color: #e8710a;
+        }
+        .card-field {
+            margin-bottom: 10px;
+            padding: 8px;
+            background-color: #f8f9fa;
+            border-radius: 4px;
+            line-height: 1.5;
+        }
+        .card-field:last-child {
+            margin-bottom: 0;
+        }
+        .card-field span {
+            font-weight: 500;
+            color: #666;
+            margin-right: 8px;
+            display: inline-block;
+            min-width: 60px;
+        }
+        #jsonViewer {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: rgba(0,0,0,0.5);
+            z-index: 1000;
+        }
+        #jsonContent {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            width: 80%;
+            height: 80%;
+            overflow: auto;
+        }
+        #jsonContent pre {
+            margin: 0;
+            white-space: pre-wrap;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            line-height: 1.5;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-radius: 4px;
+        }
+        #jsonEditor {
+            width: 100%;
+            height: calc(100% - 60px);
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            line-height: 1.5;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            resize: none;
+            margin-bottom: 10px;
+        }
+        .button-group {
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+            margin-top: 10px;
+        }
+        .success-message {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background-color: #28a745;
+            color: white;
+            padding: 10px 20px;
+            border-radius: 4px;
+            display: none;
+            animation: fadeInOut 2s ease-in-out;
+        }
+        .error-message {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background-color: #dc3545;
+            color: white;
+            padding: 10px 20px;
+            border-radius: 4px;
+            display: none;
+            animation: fadeInOut 2s ease-in-out;
+        }
+        @keyframes fadeInOut {
+            0% { opacity: 0; }
+            10% { opacity: 1; }
+            90% { opacity: 1; }
+            100% { opacity: 0; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="toolbar">
+            <button onclick="loadAndShowConfig()">编辑mcp.json配置</button>
+            <button onclick="loadMcpServers()">刷新服务器列表</button>
+        </div>
+        <div id="cardList" class="card-list">
+            <!-- 卡片将通过JavaScript动态添加 -->
+        </div>
+    </div>
+
+    <!-- JSON编辑器弹窗 -->
+    <div id="jsonViewer">
+        <div id="jsonContent">
+            <textarea id="jsonEditor" spellcheck="false"></textarea>
+            <div class="button-group">
+                <button class="save-button" onclick="saveConfig()">保存</button>
+                <button class="close-button" onclick="closeJsonViewer()">关闭</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 消息提示 -->
+    <div id="successMessage" class="success-message">保存成功！</div>
+    <div id="errorMessage" class="error-message">保存失败！</div>
+
+    <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+    <script>
+        let mcpHandler;
+
+        // 初始化WebChannel
+        new QWebChannel(qt.webChannelTransport, function(channel) {
+            mcpHandler = channel.objects.mcpHandler;
+            console.log("WebChannel initialized");
+            // 加载初始数据
+            loadMcpServers();
+        });
+
+        // 加载并显示MCP配置
+        async function loadAndShowConfig() {
+            try {
+                const configStr = await mcpHandler.loadConfig();
+                const config = JSON.parse(configStr);
+                displayJsonEditor(config);
+            } catch (error) {
+                console.error('加载配置文件失败:', error);
+                showError('加载配置文件失败');
+            }
+        }
+
+        // 显示JSON编辑器
+        function displayJsonEditor(data) {
+            const jsonViewer = document.getElementById('jsonViewer');
+            const jsonEditor = document.getElementById('jsonEditor');
+            jsonEditor.value = JSON.stringify(data, null, 2);
+            jsonViewer.style.display = 'block';
+        }
+
+        // 关闭JSON编辑器
+        function closeJsonViewer() {
+            document.getElementById('jsonViewer').style.display = 'none';
+        }
+
+        // 保存配置
+        async function saveConfig() {
+            try {
+                const jsonEditor = document.getElementById('jsonEditor');
+                const configStr = jsonEditor.value;
+                
+                // 验证JSON格式
+                JSON.parse(configStr);
+                
+                const success = await mcpHandler.saveConfig(configStr);
+                if (success) {
+                    showSuccess('保存成功');
+                    loadMcpServers(); // 重新加载服务器列表
+                    closeJsonViewer();
+                } else {
+                    showError('保存失败');
+                }
+            } catch (error) {
+                console.error('保存配置失败:', error);
+                showError('无效的JSON格式');
+            }
+        }
+
+        // 显示成功消息
+        function showSuccess(message) {
+            const successMsg = document.getElementById('successMessage');
+            successMsg.textContent = message;
+            successMsg.style.display = 'block';
+            setTimeout(() => {
+                successMsg.style.display = 'none';
+            }, 2000);
+        }
+
+        // 显示错误消息
+        function showError(message) {
+            const errorMsg = document.getElementById('errorMessage');
+            errorMsg.textContent = message;
+            errorMsg.style.display = 'block';
+            setTimeout(() => {
+                errorMsg.style.display = 'none';
+            }, 2000);
+        }
+
+        // 加载并显示MCP服务器列表
+        async function loadMcpServers() {
+            try {
+                const configStr = await mcpHandler.loadConfig();
+                const config = JSON.parse(configStr);
+                console.log('加载的配置:', config);
+
+                if (!config.mcpServers) {
+                    console.log('mcpServers不存在');
+                    document.getElementById('cardList').innerHTML = '<p>配置文件中没有mcpServers字段</p>';
+                    return;
+                }
+
+                console.log('服务器列表:', config.mcpServers);
+                displayMcpServers(config.mcpServers);
+            } catch (error) {
+                console.error('加载服务器列表失败:', error);
+                document.getElementById('cardList').innerHTML = '<p>加载服务器列表失败，请检查mcp.json是否存在</p>';
+            }
+        }
+
+        // 显示MCP服务器列表
+        function displayMcpServers(servers) {
+            console.log('开始显示服务器列表，数据:', servers);
+            const cardList = document.getElementById('cardList');
+            cardList.innerHTML = '';
+
+            if (typeof servers !== 'object' || servers === null) {
+                console.log('servers不是对象');
+                cardList.innerHTML = '<p>服务器配置格式错误</p>';
+                return;
+            }
+
+            const serverEntries = Object.entries(servers);
+            if (serverEntries.length === 0) {
+                console.log('servers对象为空');
+                cardList.innerHTML = '<p>没有找到服务器配置</p>';
+                return;
+            }
+
+            console.log(`开始处理 ${serverEntries.length} 个服务器配置`);
+            serverEntries.forEach(([name, server], index) => {
+                console.log(`处理第 ${index + 1} 个服务器:`, name, server);
+                const card = document.createElement('div');
+                card.className = 'card';
+                
+                const type = server.url ? 'sse' : 'stdio';
+                
+                card.innerHTML = `
+                    <h3>${name}</h3>
+                    <div class="card-type ${type === 'sse' ? 'type-sse' : 'type-stdio'}">
+                        ${type.toUpperCase()}
+                    </div>
+                    <div class="card-content">
+                        <div class="card-field">
+                            <span>命令：</span>${server.command || '无'}
+                        </div>
+                        <div class="card-field">
+                            <span>参数：</span>${Array.isArray(server.args) ? server.args.join(' ') : (server.args || '无')}
+                        </div>
+                        ${server.url ? `
+                        <div class="card-field">
+                            <span>URL：</span>${server.url}
+                        </div>
+                        ` : ''}
+                    </div>
+                `;
+                
+                cardList.appendChild(card);
+            });
+        }
+    </script>
+</body>
+</html> 

@@ -1,5 +1,28 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
+## License and Notice:
+# This file is part of ananxw_jumpin.
+# ananxw_jumpin is licensed under the Apache2.0(the License); you may not use 
+# this file except in compliance with the License. See LICENSE file for details.
+# For the full license text, see the LICENSE file in the root directory.
+# 
+# For more copyright, warranty disclaimer, and third - party component information,
+# see the NOTICE file in the root directory.
+##
+#
+# @Author:wfeng007 小王同学 wfeng007@163.com
+# @Date:2025-03-20 
+# @Last Modified by:wfeng007
+#
+##
+#
+# AAXWJumpinDefaultCompoApplet 默认的applet实现。
+# 左上角title为🐶OP的默认applet。
+# 进入界面后默认的的LLM对话与agent功能。
+# 
+#
+# 另外，提供了1个简单插件+空applet的例子实现。
+#
 """默认插件和Applet实现"""
 
 import logging
@@ -8,8 +31,9 @@ import re
 import time
 from datetime import datetime
 import traceback
-from typing import Optional, List, Dict, Any, Union, cast, Type
-from pydantic import BaseModel, Field
+from typing import Optional, List, Dict, Any, Union, cast, Type,ClassVar,Callable
+from pydantic import BaseModel, Field, create_model
+import asyncio
 
 try:
     from typing import override
@@ -21,64 +45,6 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QFrame, QToolBar
 )
-
-from langchain.prompts import PromptTemplate
-
-from .backbone import (
-    AAXWAbstractBasePlugin, 
-    AAXWAbstractApplet,
-    AAXWDependencyContainer,
-    AAXWJumpinConfig,
-    AAXWJumpinAppletManager,
-    AAXWJumpinHistoriedMemory,
-    AAXWJumpinFileAIMemoryManager,
-    AAXWAbstractAIConnOrAgent,
-
-)
-
-
-# pyside6 
-from PySide6.QtCore import (
-    Qt, QEvent, QObject, QThread, Signal, QTimer, QSize, QPoint,
-    QRegularExpression,QMutex,QRunnable,QThreadPool,Slot,
-)
-from PySide6.QtWidgets import (
-    QApplication, QSystemTrayIcon, QFrame, QWidget, QScrollArea,
-    QHBoxLayout, QVBoxLayout, QSizePolicy, QLineEdit, QPushButton,
-    QTextBrowser, QStyleOption, QMenu, QPlainTextEdit, QLabel,QToolBar,
-    QStackedWidget,QButtonGroup,
-)
-from PySide6.QtGui import (
-    QKeySequence, QShortcut, QTextDocument, QTextCursor, QMouseEvent,
-    QPainter, QIcon, QImage, QPixmap, QTextOption, QSyntaxHighlighter,
-    QTextCharFormat, QColor
-)
-
-from .ananxw_aiagent import BaseAgentAction,BaseAgent,AgentEnvironment
-
-from .comm import AAXW_JUMPIN_LOG_MGR
-# if TYPE_CHECKING:
-from .gui_pyside6 import (
-    AAXWContentBlockStrategy, CardWidget, MessageBoxBase,
-    AAXWJumpinMainWindow,AAXWJumpinCompoMarkdownContentStrategy,NavigationWidget,ScrollArea,
-    AAXWScrollPanel,AAXW_JUMPIN_QTSRR,QTimeoutMutexLocker,
-)
-
-
-
-from qfluentwidgets import FluentIcon as FIF
-from qfluentwidgets import (
-    NavigationInterface, NavigationItemPosition, NavigationAvatarWidget, NavigationTreeWidget,
-    NavigationPushButton, MessageBoxBase, SubtitleLabel, LineEdit, CaptionLabel, PushButton,
-    BodyLabel, TextWrap, CardWidget, StrongBodyLabel, PlainTextEdit, TextEdit, TextBrowser,
-    SegmentedWidget, ComboBox, CheckBox, FlowLayout, InfoBar, InfoBarPosition, EditableComboBox,
-    PillPushButton, PrimaryPushButton,
-    NavigationWidget, MessageBox, SettingCardGroup, SwitchSettingCard, FolderListSettingCard,
-    OptionsSettingCard, PushSettingCard, HyperlinkCard, PrimaryPushSettingCard, ScrollArea,
-    ComboBoxSettingCard, ExpandLayout, Theme, CustomColorSettingCard, RadioButton, IconWidget,
-    setTheme, setThemeColor, RangeSettingCard, isDarkTheme, ConfigItem, SettingCard, qrouter
-)
-
 
 # ai相关
 # openai客户端
@@ -100,6 +66,67 @@ from langchain.schema import (
         SystemMessage  # 等价于OpenAI接口中的system role
     )
 from langchain.memory import ConversationBufferMemory
+from langchain.prompts import PromptTemplate
+
+
+
+# pyside6 
+from PySide6.QtCore import (
+    Qt, QEvent, QObject, QThread, Signal, QTimer, QSize, QPoint,
+    QRegularExpression,QMutex,QRunnable,QThreadPool,Slot,
+)
+from PySide6.QtWidgets import (
+    QApplication, QSystemTrayIcon, QFrame, QWidget, QScrollArea,
+    QHBoxLayout, QVBoxLayout, QSizePolicy, QLineEdit, QPushButton,
+    QTextBrowser, QStyleOption, QMenu, QPlainTextEdit, QLabel,QToolBar,
+    QStackedWidget,QButtonGroup,
+)
+from PySide6.QtGui import (
+    QKeySequence, QShortcut, QTextDocument, QTextCursor, QMouseEvent,
+    QPainter, QIcon, QImage, QPixmap, QTextOption, QSyntaxHighlighter,
+    QTextCharFormat, QColor
+)
+
+# pyside6 - qfluentwidgetss
+from qfluentwidgets import FluentIcon as FIF
+from qfluentwidgets import (
+    NavigationInterface, NavigationItemPosition, NavigationAvatarWidget, NavigationTreeWidget,
+    NavigationPushButton, MessageBoxBase, SubtitleLabel, LineEdit, CaptionLabel, PushButton,
+    BodyLabel, TextWrap, CardWidget, StrongBodyLabel, PlainTextEdit, TextEdit, TextBrowser,
+    SegmentedWidget, ComboBox, CheckBox, FlowLayout, InfoBar, InfoBarPosition, EditableComboBox,
+    PillPushButton, PrimaryPushButton,
+    NavigationWidget, MessageBox, SettingCardGroup, SwitchSettingCard, FolderListSettingCard,
+    OptionsSettingCard, PushSettingCard, HyperlinkCard, PrimaryPushSettingCard, ScrollArea,
+    ComboBoxSettingCard, ExpandLayout, Theme, CustomColorSettingCard, RadioButton, IconWidget,
+    setTheme, setThemeColor, RangeSettingCard, isDarkTheme, ConfigItem, SettingCard, qrouter
+)
+
+
+# inner modules
+from .comm import AAXW_JUMPIN_LOG_MGR
+
+from .backbone import (
+    AAXWAbstractBasePlugin, 
+    AAXWAbstractApplet,
+    AAXWDependencyContainer,
+    AAXWJumpinConfig,
+    AAXWJumpinAppletManager,
+    AAXWJumpinHistoriedMemory,
+    AAXWJumpinFileAIMemoryManager,
+    AAXWAbstractAIConnOrAgent,
+
+)
+
+from .gui_pyside6 import (
+    AAXWContentBlockStrategy, CardWidget, MessageBoxBase,
+    AAXWJumpinMainWindow,AAXWJumpinCompoMarkdownContentStrategy,NavigationWidget,ScrollArea,
+    AAXWScrollPanel,AAXW_JUMPIN_QTSRR,QTimeoutMutexLocker,
+)
+from .ananxw_aiagent import BaseAgentAction,BaseAgent,AgentEnvironment,SafetyFallbackAgent
+
+from mcp.types import Tool as McpTool
+from .ananxw_mcp import McpClient
+
 
 # 本模块，模块日志器
 AAXW_JUMPIN_MODULE_LOGGER:logging.Logger=AAXW_JUMPIN_LOG_MGR.getModuleLogger(
@@ -174,7 +201,7 @@ class AAXWJumpinDefaultSimpleApplet(AAXWAbstractApplet):
         pass
 
     @override
-    def onInactivate(self):
+    def onDeactivate(self):
         #清理工具组件引用；
         self.mainWindow.topToolsMessageWindow.removeCentralWidget()
         #
@@ -309,11 +336,389 @@ class AIConnectRunnable(QRunnable,QObject):
         self.updateUI.emit(str(newContent), str(self.uiId)) 
 
 
+
+
+
+# pydantic 类型 注入属性日志器可能有问题。 ? 用ClassVar 尝试
+@AAXW_JUMPIN_LOG_MGR.classLogger()
+class McpToolAgentAction(BaseAgentAction):
+    """MCP工具的Agent Action适配器"""
+    AAXW_CLASS_LOGGER: ClassVar[logging.Logger]  # ClassVar 针对pydantic的base-model
+
+    #
+    mcpClient: McpClient = Field(description="MCP客户端实例")
+    serverName: str = Field(description="服务器名称")
+    
+    def __init__(self, mcpClient: McpClient, serverName: str, tool:McpTool):
+        """
+        初始化MCP工具适配器
+        Args:
+            mcpClient: MCP客户端实例
+            serverName: 服务器名称
+            tool: MCP工具对象
+        """
+        try:
+            # 创建动态的 pydantic model 作为参数模式
+            # 动态创建参数模式类    
+            args_schema=self._jsonSchemaToPydanticModel(tool.inputSchema)
+        
+            AAXW_JUMPIN_MODULE_LOGGER.info(
+                f"已初始化MCP工具适配器: {tool.name} \n{mcpClient} \n{serverName} \n{tool}")
+            self.AAXW_CLASS_LOGGER.warning( 
+                f"已初始化MCP工具适配器: {tool.name} \n{mcpClient} \n{serverName} \n{tool}")
+        except Exception as e:
+            AAXW_JUMPIN_MODULE_LOGGER.warning(
+                f"初始化MCP工具适配器异常，无法解析生成，args_schema。"
+                +f"args_schema将会设置为None，只能利用description作为工具描述。\n "
+                +f"异常信息: {str(e)} \n堆栈信息: {traceback.format_exc()}")
+
+            args_schema=None
+
+        ## 初始化； 
+        super().__init__(
+            name=tool.name,
+            description=tool.description,
+            args_schema=args_schema,
+            mcpClient=mcpClient,
+            serverName=serverName
+        )
+
+    ## 
+    # 当前应该还不支持嵌套
+    # cursor：
+    # 从 Pydantic 官方文档来看，他们推荐使用 datamodel-code-generator 
+    #   工具来实现 JSON Schema 到 Pydantic 模型的转换。这是一个独立的工具，
+    #   而不是 Pydantic 的内置功能。
+    # 但是，如果我们需要在运行时动态处理 JSON Schema，可以使用 Pydantic 的 TypeAdapter 类。
+    #   TypeAdapter 可以用来验证和序列化任意类型的数据，包括从 JSON Schema 生成的类型。
+    # 在 schema-first 项目中，我看到了一个有趣的实现方式，它使用 datamodel-codegen 
+    #   在构建时生成 Pydantic 模型，而不是运行时。
+    ##
+    def _jsonSchemaToPydanticModel(self,jsonSchema:dict)->Type[BaseModel]:
+        """将JSON Schema转换为Pydantic模型
+        
+        Args:
+            jsonSchema: JSON Schema 字典
+            
+        Returns:
+            生成的 Pydantic 模型类
+        """
+        # 类型映射
+        type_mapping = {
+            "string": str,
+            "integer": int,
+            "number": float,
+            "boolean": bool,
+            "array": list,
+            "object": dict,
+            "null": type(None)
+        }
+        
+        # 获取属性定义
+        properties = jsonSchema.get("properties", {})
+        required = jsonSchema.get("required", [])
+        
+        # 创建字段定义
+        fields = {}
+        for field_name, field_schema in properties.items():
+            # 获取字段类型
+            field_type = field_schema.get("type", "string")  # 默认为string
+            python_type = type_mapping.get(field_type, str)
+            
+            # 获取字段约束
+            field_info = {}
+            if "description" in field_schema:
+                field_info["description"] = field_schema["description"]
+            if "default" in field_schema:
+                field_info["default"] = field_schema["default"]
+            if "title" in field_schema:
+                field_info["title"] = field_schema["title"]
+                
+            # 添加验证约束
+            if "minimum" in field_schema:
+                field_info["ge"] = field_schema["minimum"]
+            if "maximum" in field_schema:
+                field_info["le"] = field_schema["maximum"]
+            if "minLength" in field_schema:
+                field_info["min_length"] = field_schema["minLength"]
+            if "maxLength" in field_schema:
+                field_info["max_length"] = field_schema["maxLength"]
+            if "pattern" in field_schema:
+                field_info["pattern"] = field_schema["pattern"]
+            
+            # 处理必填字段
+            if field_name in required:
+                field_info["required"] = True
+            
+            # 创建字段定义
+            fields[field_name] = (python_type, Field(**field_info))
+        
+        # 创建模型类名
+        model_name = jsonSchema.get("title", "DynamicModel")
+        
+        # 创建并返回模型类
+        return create_model(
+            model_name,
+            __doc__=jsonSchema.get("description", ""),
+            **fields
+        )
+
+    def _run(self, **kwargs) -> str:
+        """执行MCP工具调用
+        直接调用MCP客户端的调用方法，并同步等待结果
+        """
+        AAXW_JUMPIN_MODULE_LOGGER.warning(f"执行MCP工具调用: server:{self.serverName} tool:{self.name} \n{kwargs}")
+        
+        try:
+            # 使用同步方法调用工具
+            result = self.mcpClient.callTool(
+                serverName=self.serverName,
+                toolName=self.name,
+                args=kwargs,
+                timeout=10.0  # 10秒超时
+            )
+            return str(result)
+            
+        except TimeoutError:
+            AAXW_JUMPIN_MODULE_LOGGER.error(f"调用工具 server:{self.serverName} tool:{self.name} 超时")
+            return f"调用工具 server:{self.serverName} tool:{self.name} 超时"
+        except Exception as e:
+            AAXW_JUMPIN_MODULE_LOGGER.error(f"调用工具 server:{self.serverName} tool:{self.name} 失败: {str(e)} \n堆栈信息: {traceback.format_exc()}")
+            return f"调用工具 server:{self.serverName} tool:{self.name} 失败: {str(e)}"
+
+    pass 
+
+
+@AAXW_JUMPIN_LOG_MGR.classLogger()
+class AdaptedConnOrAgent(AAXWAbstractAIConnOrAgent):
+    """适配内部注入已有AAXWAbstractAIConnOrAgent 以及 aiagent 的已有类。
+    将基本requestXXX接口内部实现替换为aigent的对应message发送。
+    
+    这是一个代理模式实现，可以：
+    1. 包装现有的 AAXWAbstractAIConnOrAgent 实例
+    2. 包装 AI Agent 实例，将 requestAndCallback 调用适配为 Agent 的消息发送
+    3. 动态选择使用哪种内部实现
+    """
+    AAXW_CLASS_LOGGER: logging.Logger
+
+    def __init__(self, 
+                 connAgent: AAXWAbstractAIConnOrAgent,
+                 aiAgent: Optional[BaseAgent] = None,
+                 preferAgent: bool = True):
+        """
+        初始化适配器
+        
+        Args:
+            connAgent: AAXWAbstractAIConnOrAgent 实例
+            aiAgent: BaseAgent 实例
+            preferAgent: 是否优先使用 AI Agent，默认为 True
+        """
+        self.connAgent = connAgent
+        self.aiAgent = aiAgent
+        self.preferAgent = preferAgent
+        
+    def setConnAgent(self, connAgent: AAXWAbstractAIConnOrAgent):
+        """设置 AAXWAbstractAIConnOrAgent 实例"""
+        self.connAgent = connAgent
+        
+    def setAiAgent(self, aiAgent: BaseAgent):
+        """设置 AI Agent 实例"""
+        self.aiAgent = aiAgent
+        
+    def setPreferAgent(self, preferAgent: bool):
+        """设置是否优先使用 AI Agent"""
+        self.preferAgent = preferAgent
+
+    @override
+    def requestAndCallback(self, 
+                          prompt: str, 
+                          func: Callable[[str], None], 
+                          isStream: bool = True):
+        """
+        发送请求并通过回调处理响应
+        
+        根据配置和可用性，选择使用 AI Agent 或 ConnAgent 来处理请求
+        """
+        # 优先级判断：如果设置为优先使用 Agent 且 Agent 可用
+        if self.preferAgent and self.aiAgent is not None:
+            try:
+                self._useAgentRequest(prompt, func, isStream)
+                return
+            except Exception as e:
+                self.AAXW_CLASS_LOGGER.warning(
+                    f"使用 AI Agent 处理请求失败，回退到 ConnAgent: {str(e)}")
+                
+        # 使用 ConnAgent 处理请求
+        if self.connAgent is not None:
+            try:
+                self._useConnAgentRequest(prompt, func, isStream)
+                return
+            except Exception as e:
+                self.AAXW_CLASS_LOGGER.error(f"ConnAgent 处理请求失败: {str(e)}")
+                # 如果 ConnAgent 失败且之前没有尝试过 Agent，尝试使用 Agent
+                if not self.preferAgent and self.aiAgent is not None:
+                    try:
+                        self._useAgentRequest(prompt, func, isStream)
+                        return
+                    except Exception as agent_e:
+                        self.AAXW_CLASS_LOGGER.error(f"Agent 备用处理也失败: {str(agent_e)}")
+                        
+        # 如果所有方式都失败，返回错误信息
+        error_msg = "适配器中没有可用的处理实例（ConnAgent 或 AI Agent）"
+        self.AAXW_CLASS_LOGGER.error(error_msg)
+        func(f"\n\n[错误] {error_msg}")
+
+    def _useConnAgentRequest(self, 
+                            prompt: str, 
+                            func: Callable[[str], None], 
+                            isStream: bool):
+        """使用 ConnAgent 处理请求"""
+        self.AAXW_CLASS_LOGGER.debug("使用 ConnAgent 处理请求")
+        self.connAgent.requestAndCallback(prompt, func, isStream)
+
+    def _useAgentRequest(self, 
+                        prompt: str, 
+                        func: Callable[[str], None], 
+                        isStream: bool):
+        """使用 AI Agent 处理请求"""
+        self.AAXW_CLASS_LOGGER.debug("使用 AI Agent 处理请求")
+        
+        # 检查 Agent 是否有感觉反射能力（直接回复功能）
+        if hasattr(self.aiAgent, 'senseMessageAndCallback'):
+            # 现在 Agent 的 senseMessageAndCallback 已经是同步的了
+            self.aiAgent.senseMessageAndCallback(prompt, func)
+        else:
+            # 降级为普通消息发送（不支持回调）
+            self.AAXW_CLASS_LOGGER.warning(
+                "AI Agent 不支持回调机制，使用普通消息发送")
+            self.aiAgent.sendMessageToMe(prompt)
+            # 发送一个提示消息给回调函数
+            func("已将消息发送给 AI Agent，请查看 Agent 的其他输出渠道获取响应。")
+
+    @override
+    def embedding(self, prompt: str):
+        """
+        获取文本嵌入
+        
+        优先使用 ConnAgent，因为 AI Agent 通常不提供嵌入功能
+        """
+        if self.connAgent is not None:
+            try:
+                return self.connAgent.embedding(prompt)
+            except Exception as e:
+                self.AAXW_CLASS_LOGGER.error(f"ConnAgent embedding 失败: {str(e)}")
+                
+        # AI Agent 通常不提供嵌入功能，返回 None
+        self.AAXW_CLASS_LOGGER.warning("没有可用的嵌入实现")
+        return None
+
+    @override
+    def edit(self, prompt: str, instruction: str):
+        """
+        文本编辑功能
+        
+        优先使用 ConnAgent，如果不可用则尝试通过 Agent 进行编辑
+        """
+        if self.connAgent is not None:
+            try:
+                return self.connAgent.edit(prompt, instruction)
+            except Exception as e:
+                self.AAXW_CLASS_LOGGER.warning(
+                    f"ConnAgent edit 失败，尝试使用 AI Agent: {str(e)}")
+                
+        # 使用 AI Agent 进行编辑（通过消息发送）
+        if self.aiAgent is not None:
+            try:
+                edit_message = f"请根据以下指令编辑文本：\n指令：{instruction}\n原文本：{prompt}"
+                
+                # 如果支持回调，使用同步方式获取结果
+                if hasattr(self.aiAgent, 'senseMessageAndCallback'):
+                    result = []
+                    
+                    def collect_result(content: str):
+                        result.append(content)
+                    
+                    self.aiAgent.senseMessageAndCallback(edit_message, collect_result)
+                    
+                    # 简单等待结果（实际应用中可能需要更复杂的同步机制）
+                    import time
+                    time.sleep(1)  # 等待处理完成
+                    
+                    return ''.join(result) if result else "AI Agent 编辑处理中，请稍后查看结果"
+                else:
+                    # 不支持回调的情况
+                    self.aiAgent.sendMessageToMe(edit_message)
+                    return "已将编辑请求发送给 AI Agent，请查看 Agent 的其他输出渠道获取结果"
+                    
+            except Exception as e:
+                self.AAXW_CLASS_LOGGER.error(f"AI Agent edit 失败: {str(e)}")
+                
+        error_msg = "没有可用的编辑实现"
+        self.AAXW_CLASS_LOGGER.error(error_msg)
+        return f"[错误] {error_msg}"
+
+    def getStatus(self) -> Dict[str, Any]:
+        """获取适配器状态信息"""
+        return {
+            "connAgent_available": self.connAgent is not None,
+            "aiAgent_available": self.aiAgent is not None,
+            "prefer_agent": self.preferAgent,
+            "connAgent_type": type(self.connAgent).__name__ if self.connAgent else None,
+            "aiAgent_type": type(self.aiAgent).__name__ if self.aiAgent else None,
+            "aiAgent_supports_callback": (
+                hasattr(self.aiAgent, 'senseMessageAndCallback') 
+                if self.aiAgent else False
+            )
+        }
+
+    @classmethod
+    def createWithConnAgent(cls, connAgent: AAXWAbstractAIConnOrAgent) -> 'AdaptedConnOrAgent':
+        """
+        创建只使用 ConnAgent 的适配器实例
+        
+        Args:
+            connAgent: AAXWAbstractAIConnOrAgent 实例
+            
+        Returns:
+            配置好的 AdaptedConnOrAgent 实例
+        """
+        return cls(connAgent=connAgent, aiAgent=None, preferAgent=False)
+    
+    @classmethod
+    def createWithAiAgent(cls, aiAgent: BaseAgent) -> 'AdaptedConnOrAgent':
+        """
+        创建只使用 AI Agent 的适配器实例
+        
+        Args:
+            aiAgent: BaseAgent 实例
+            
+        Returns:
+            配置好的 AdaptedConnOrAgent 实例
+        """
+        return cls(connAgent=None, aiAgent=aiAgent, preferAgent=True)
+    
+    @classmethod
+    def createHybrid(cls, 
+                    connAgent: AAXWAbstractAIConnOrAgent, 
+                    aiAgent: BaseAgent,
+                    preferAgent: bool = True) -> 'AdaptedConnOrAgent':
+        """
+        创建混合模式的适配器实例，同时包含 ConnAgent 和 AI Agent
+        
+        Args:
+            connAgent: AAXWAbstractAIConnOrAgent 实例
+            aiAgent: BaseAgent 实例
+            preferAgent: 是否优先使用 AI Agent
+            
+        Returns:
+            配置好的 AdaptedConnOrAgent 实例
+        """
+        return cls(connAgent=connAgent, aiAgent=aiAgent, preferAgent=preferAgent)
+
 @AAXW_JUMPIN_LOG_MGR.classLogger()
 class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
     "默认带有复合功能的Applet实现"
     AAXW_CLASS_LOGGER:logging.Logger
-
 
     def __init__(self):
         self.appletManager:AAXWJumpinAppletManager=None #type:ignore
@@ -328,6 +733,7 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
 
         self.agentEnvironment:AgentEnvironment=None #type:ignore
         self.aaAgent:BaseAgent=None #type:ignore
+        self.mcpClient:McpClient = None 
         pass
     
     @override
@@ -344,9 +750,10 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
 
         # self.simpleAIConnOrAgent:AAXWSimpleAIConnOrAgent=self.dependencyContainer.getAANode(
         #     "simpleAIConnOrAgent")
+
+        # 是不是应该反过来，复杂agent实现适配简单的conn？
         self.simpleAIConnOrAgent:AAXWAbstractAIConnOrAgent=self.dependencyContainer.getAANode(
             "configurableAIConnOrAgent")
-        
         # 
 
         self.jumpinAIMemoryManager:AAXWJumpinFileAIMemoryManager=self.dependencyContainer.getAANode(
@@ -355,9 +762,48 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
         self.currentHistoriedMemory:AAXWJumpinHistoriedMemory=None #type:ignore
 
         #
-        # 默认agent
-        self.agentEnvironment=AgentEnvironment(runtimeType="pyside6")
-        self.aaAgent=self.agentEnvironment.createAgent("ANAN")
+        # 默认agent @TODO 将AgentEnvironment 绑定到di容器里面去。并升级为agent容器。
+        #   并能关联各种agent的使用的资源，比如MCP的工具，记忆库等。
+
+        # pyside6 的线程调用异步mcp client 会卡死？
+        # self.agentEnvironment=AgentEnvironment(runtimeType="pyside6")
+        #
+        self.agentEnvironment=AgentEnvironment(runtimeType="thread_pool")
+        
+        try:
+            # agent 使用的mcp client (model control protocol)
+            # path 从统一配置中获取。
+            self.mcpClient=McpClient(configPath="./mcp.json")
+            
+            # 初始化MCP客户端
+            if not self.mcpClient.initialize(timeout=10.0):
+                self.AAXW_CLASS_LOGGER.warning("MCP客户端初始化失败,initialize()返回False。")
+                self.mcpClient=None
+        except Exception as e:
+            self.AAXW_CLASS_LOGGER.warning(
+                f"获取MCP初始化失败: {str(e)}\n 堆栈信息: {traceback.format_exc()}")
+
+       
+        # 已临时处理 aaAgent初始化失败的方式。
+        ##  @TODO 最好再增加1个可切换agent的界面功能，从失败转移的SafetyFallbackAgent到正常agent；
+        try:
+            self.aaAgent=self.agentEnvironment.createAgent(
+                name="ANAN",
+                lifeGoalOrRole="你是一个综合管家以及应用资源管理者。根据用户的信息、事件输入、前次思考执行情况，选择合适的动作来管理应用资源并回复。")
+            #同时注入适配用的conn
+            self.simpleAIConnOrAgent=AdaptedConnOrAgent(
+                connAgent=self.simpleAIConnOrAgent,
+                aiAgent=self.aaAgent)
+            
+        except Exception as e:
+            self.AAXW_CLASS_LOGGER.error(f"Agent初始化失败: {str(e)}\n{traceback.format_exc()}")
+            self.aaAgent = SafetyFallbackAgent("ANAN_EMPTY")
+            self.AAXW_CLASS_LOGGER.warning("已使用空Agent实现作为备用")
+        
+        if self.aaAgent is None:
+            self.aaAgent = SafetyFallbackAgent("ANAN_EMPTY")
+            self.AAXW_CLASS_LOGGER.warning("aaAgent is None,已使用空Agent实现作为备用")
+        
         # 创建并配置Agent Action
         renameAgentAction = self.ChatHisRenameAgentAction(compoApplet=self)
         # 连接重命名信号到槽函数
@@ -369,10 +815,38 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
         self.aaAgent.addActions([
             self.ChatHisReadAgentAction(aiMemoryManager=self.jumpinAIMemoryManager),
             renameAgentAction
-        ]
-        )
-        #aaAgent 创建后就启动状态。 
+        ])
 
+        # 启动服务器mcp tools:
+        if self.mcpClient and "echoserver" in self.mcpClient.getConfiguredServers():
+            try:
+                # 启动MCP server
+                if not self.mcpClient.startServer(serverName="echoserver", timeout=5.0):
+                    self.AAXW_CLASS_LOGGER.warning("未正常启动与连接MCP server")
+                    raise RuntimeWarning("未正常启动与连接MCP server")
+                    
+                self.AAXW_CLASS_LOGGER.warning("已启动mcp server:echoserver成功")
+
+                # 获取工具列表
+                tools = self.mcpClient.listTools(serverName="echoserver", timeout=5.0)
+                self.AAXW_CLASS_LOGGER.warning(f"已获取tools: {tools}")
+                
+                for tool in tools:
+                    # 使用适配器类创建action
+                    baseAction = McpToolAgentAction(
+                        mcpClient=self.mcpClient,
+                        serverName="echoserver",
+                        tool=tool
+                    )
+                    self.aaAgent.addAction(baseAction)
+                    
+            except TimeoutError:
+                self.AAXW_CLASS_LOGGER.warning("启动MCPserver或获取MCP工具列表超时")
+            except Exception as e:
+                self.AAXW_CLASS_LOGGER.warning(f"启动MCPserver或获取MCP工具列表失败: {str(e)}\n堆栈信息: {traceback.format_exc()}")
+        else:
+            self.AAXW_CLASS_LOGGER.warning(
+                "MCP客户端未正常初始化或没有找到指定server配置，如：echoserver。" )
         #列表展示面板
         self.memoriesListPanel: AAXWJumpinDefaultCompoApplet.MemoriesListPanel =None #type:ignore
         
@@ -387,6 +861,8 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
         self._initAllAIMemeoryListUI()
 
         pass
+    
+
 
     @override
     def onRemove(self):
@@ -394,6 +870,9 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
             f"这是个默认Applet{self.__class__.__name__}只有关闭整体时才应该被移除释放。")
         self.aaAgent.stop()
         self.agentEnvironment.stopAll()
+        # 关闭MCP客户端
+        if self.mcpClient:
+            self.mcpClient.close(timeout=5.0)
         pass
 
 
@@ -500,7 +979,7 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
         pass
 
     @override
-    def onInactivate(self):
+    def onDeactivate(self):
         #
         self.showingPanel.contentBlockStrategy=self.backupContentBlockStrategy
         self.backupContentBlockStrategy=None #type:ignore
@@ -508,8 +987,12 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
 
         #去除 槽函数
         self.mainWindow.inputPanel.funcButtonRight.clicked.disconnect(self.doInputCommitAction)
+
+        #？？？ 这是？
         # self.mainWindow.inputPanel.promptInputEdit.returnPressed.disconnect(self.doInputCommitAction)
-        
+        #清理工具组件引用；
+        # self.mainWindow.topToolsMessageWindow.removeCentralWidget()
+        # self.aiThread=None
         pass
     
     # ui-init
@@ -1119,11 +1602,15 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
                             self.addRowContentSignal.emit("", rowId,"ai",
                                 AAXWScrollPanel.ROW_CONTENT_OWNER_TYPE_OTHERS)  # 发送占位符
                             QThread.msleep(50)  # 模拟延迟
+                            
+                            # ai要求把以下部分删除？为啥？？？
                             ai_content = msg.content
                             ai_content = str(ai_content)
                             for chunk in ai_content.splitlines(keepends=True):
                                 self.appendContentSignal.emit(chunk, rowId)  # 通过信号更新AI消息
                                 # self.msleep(100)
+                            # 以上ai要求删除？
+
                         QThread.msleep(50)  # 模拟延迟
 
     @AAXW_JUMPIN_LOG_MGR.classLogger()
@@ -1185,7 +1672,7 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
 
                     #如果是steaming则内部是循环调用onRespone
                     #TODO 如果服务卡顿一直不返回，有时候需要提供强制终端的手段；
-                    self.llmagent.requestAndCallback(prompted, self.onResponse)
+                    self.llmagent.requestAndCallback(prompt=prompted, func=self.onResponse)
                 except Exception as e:
                     import traceback
                     self.AAXW_CLASS_LOGGER.error(f"An exception occurred: {str(e)}", exc_info=True)
@@ -1193,6 +1680,8 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
                     exec_e=e
                 finally:
                     #onfinish
+                    self.AAXW_CLASS_LOGGER.warning(
+                        f"ai_message 准备入库,exec_e:{exec_e} ,wholeResponse:{self.wholeResponse}")
                     if exec_e is None and self.wholeResponse: #没有异常才写入库
                         ai_message = AIMessage(content=self.wholeResponse)
                         self.hMemo.save(ai_message)
@@ -1227,3 +1716,6 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
             self.callUpdateUI(str)
     
     pass 
+
+
+

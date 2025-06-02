@@ -1,0 +1,25 @@
+{
+  "mcpServers": {
+    "hot news3": {
+      "command": "cmd",
+      "args": [
+        "/c",
+        "npx.cmd",
+        "-y",
+        "@wopal/mcp-server-hotnews",
+        "--config",
+        "\"{}\""
+      ]
+    },
+    "todolist": {
+      "command": "cmd",
+      "args": [
+        "/c",
+        "conda activate mcplab && python D:/home/A11code_workspace/labs_python/mcptodoserver/todolist.py"
+      ]
+    },
+    "echoserver": {
+      "url": "http://localhost:8000/sse"
+    }
+  }
+}

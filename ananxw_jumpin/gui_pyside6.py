@@ -1,5 +1,23 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
+## License and Notice:
+# This file is part of ananxw_jumpin.
+# ananxw_jumpin is licensed under the Apache2.0(the License); you may not use 
+# this file except in compliance with the License. See LICENSE file for details.
+# For the full license text, see the LICENSE file in the root directory.
+# 
+# For more copyright, warranty disclaimer, and third - party component information,
+# see the NOTICE file in the root directory.
+##
+#
+# @Author:wfeng007 小王同学 wfeng007@163.com
+# @Date:2025-02-19
+# @Last Modified by:wfeng007
+#
+##
+# gui 组件模块，pyside6实现。
+#
+##
 """GUI组件模块"""
 
 import os
@@ -55,6 +73,7 @@ from .backbone import (
     AAXWJumpinHistoriedMemory, AAXWJumpinFileAIMemoryManager,
     AAXWAbstractAIConnOrAgent, AAXWJumpinAppletManager, ConfigurableAIConnOrAgent
 )
+from .gui_webview_pyside6 import AAXWJumpinWebViewWindow
 
 # 模块日志器
 # 本模块，模块日志器
@@ -2033,10 +2052,20 @@ class AAXWJumpinSettingPanel(ScrollArea):
             content=self.jumpinConfig.appWorkDir,
         )
 
+        # 添加WebView卡片
+        self.webviewCard = PrimaryPushSettingCard(
+            icon=FIF.GLOBE,
+            title='WebView',
+            content="打开WebView界面进行配置",
+            text='打开WebView'
+        )
+        self.webviewCard.clicked.connect(self.__onWebViewCardClicked)
+
         # 添加到基本设置组
         self.basicSettingGroup.addSettingCard(self.appNameCard)
         self.basicSettingGroup.addSettingCard(self.versionCard)
         self.basicSettingGroup.addSettingCard(self.workDirCard)
+        self.basicSettingGroup.addSettingCard(self.webviewCard)
         
         # 创建LLM模型配置表单
         self.llmProviderForm = LLMProviderForm(
@@ -2113,6 +2142,17 @@ class AAXWJumpinSettingPanel(ScrollArea):
         """连接信号和槽"""
         # 在此处添加需要的信号连接
         pass
+
+    def __onWebViewCardClicked(self):
+        """WebView卡片点击事件处理"""
+        # 获取主窗口引用
+        mainWindow = self.window()
+        if isinstance(mainWindow, AAXWJumpinMainWindow):
+            if mainWindow.webviewWindow.isVisible():
+                mainWindow.webviewWindow.hide()
+            else:
+                mainWindow.webviewWindow.show()
+                mainWindow.webviewWindow.raise_()  # 确保窗口在最前面
 
 class JumpinNavigationWidget(NavigationPushButton):
     """简单的导航组件，区分左右键点击"""
@@ -2339,7 +2379,11 @@ class AAXWJumpinMainWindow(AAXWFramelessWindow):
         
         self.inputPanel.promptInputEdit.setFocus()
 
+        # 初始化WebView窗口
+        self.webviewWindow = AAXWJumpinWebViewWindow()
+
         self.installAppHotKey()
+
 
         # 转容器关联；
         self.jumpinConfig:AAXWJumpinConfig = None #type:ignore
@@ -2593,6 +2637,9 @@ class AAXWJumpinMainWindow(AAXWFramelessWindow):
     
     # 关闭窗口方法
     def closeWindow(self):
+        #
+        self.webviewWindow.close()
+        #
         self.close()
 
     #
@@ -2668,7 +2715,6 @@ class AAXWJumpinTrayKit(QSystemTrayIcon):
     def __init__(self, main_window:AAXWJumpinMainWindow):
         super().__init__()
         
-        
         self.setToolTip("AAXW Jumpin!")
         
         # self.setIcon(QIcon("icon.png"))
@@ -2678,9 +2724,11 @@ class AAXWJumpinTrayKit(QSystemTrayIcon):
         
         self.menu = QMenu()
         self.show_main_action = self.menu.addAction("切换展示主界面(ALT+Z)")
+        self.webview_action = self.menu.addAction("打开WebView")  # 添加WebView菜单项
         self.close_main_action = self.menu.addAction("关闭ANANXW(ALT+C)")
         self.setContextMenu(self.menu)
         self.show_main_action.triggered.connect(self.toggleHiddenMainWindow)
+        self.webview_action.triggered.connect(self.toggleWebView)  # 连接WebView切换事件
         self.close_main_action.triggered.connect(self.closeMainWindow)
         
         # 添加打开指定目录的菜单选项
@@ -2689,7 +2737,17 @@ class AAXWJumpinTrayKit(QSystemTrayIcon):
         self.AAXW_CLASS_LOGGER.info("托盘菜单已初始化!")
         
         self.mainWindow:AAXWJumpinMainWindow = main_window
+
+        self.webviewWindow:AAXWJumpinWebViewWindow = main_window.webviewWindow
         
+
+    def toggleWebView(self):
+        """切换WebView窗口的显示状态"""
+        if self.webviewWindow.isVisible():
+            self.webviewWindow.hide()
+        else:
+            self.webviewWindow.show()
+            self.webviewWindow.raise_()  # 确保窗口在最前面
     
     def toggleHiddenMainWindow(self):
         self.mainWindow.toggleHidden()
