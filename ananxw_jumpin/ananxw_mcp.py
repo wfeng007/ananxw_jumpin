@@ -174,7 +174,7 @@ class McpClientSession:
 class McpClient:
     """统一的MCP客户端实现"""
     
-    def __init__(self, configPath: str= "mcp.json", configContentDict: Optional[Dict[str, Any]] = None):
+    def __init__(self, configPath: str= "./mcp.json", configContentDict: Optional[Dict[str, Any]] = None):
         """
         初始化MCP客户端
         
@@ -182,7 +182,7 @@ class McpClient:
             configPath: 配置文件路径,如果为None且configContentDict也为None,则使用默认路径"mcp.json"
             configContentDict: 配置内容字典,如果提供则优先使用此配置
         """
-        self.configPath = configPath
+        self.configPath = configPath or "./mcp.json"
         self.mcpClientSessions: Dict[str, McpClientSession] = {}
         self.exitStack = AsyncExitStack()
         self._unified_client_loop: Optional[asyncio.AbstractEventLoop] = None  # 统一的客户端事件循环

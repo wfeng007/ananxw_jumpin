@@ -928,26 +928,27 @@ class SPTAProcessor(StateMachineProcessor):
         return None
 
 
-class CallbackWrapper:
-    """回调函数包装器，用于跟踪回调的执行情况"""
-    def __init__(self, callback: Callable[[str], None]):
-        self.callback = callback
-        self.call_count = 0
-        self.last_call_time = None
-        self.is_completed = False
-        self._lock = threading.Lock()
+# 暂没有用到，直接用event作为包装了。实际上为了跟踪之后可以加。
+# class CallbackWrapper:
+#     """回调函数包装器，用于跟踪回调的执行情况"""
+#     def __init__(self, callback: Callable[[str], None]):
+#         self.callback = callback
+#         self.call_count = 0
+#         self.last_call_time = None
+#         self.is_completed = False
+#         self._lock = threading.Lock()
 
-    def __call__(self, content: str):
-        """执行回调并记录执行信息"""
-        with self._lock:
-            self.call_count += 1
-            self.last_call_time = time.time()
-            self.callback(content)
+#     def __call__(self, content: str):
+#         """执行回调并记录执行信息"""
+#         with self._lock:
+#             self.call_count += 1
+#             self.last_call_time = time.time()
+#             self.callback(content)
 
-    def mark_completed(self):
-        """标记回调执行完成"""
-        with self._lock:
-            self.is_completed = True
+#     def mark_completed(self):
+#         """标记回调执行完成"""
+#         with self._lock:
+#             self.is_completed = True
 
 @AAXW_AIAGENT_LOG_MGR.classLogger()
 class StateMachineAgent(BaseAgent):
