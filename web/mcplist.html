@@ -190,6 +190,87 @@
             90% { opacity: 1; }
             100% { opacity: 0; }
         }
+
+        /* 开关控件样式 */
+        .switch {
+            position: relative;
+            display: inline-block;
+            width: 50px;
+            height: 24px;
+        }
+
+        .switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #ccc;
+            transition: .4s;
+            border-radius: 24px;
+        }
+
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 16px;
+            width: 16px;
+            left: 4px;
+            bottom: 4px;
+            background-color: white;
+            transition: .4s;
+            border-radius: 50%;
+        }
+
+        input:checked + .slider {
+            background-color: #28a745;
+        }
+
+        input:checked + .slider:before {
+            transform: translateX(26px);
+        }
+
+        /* 状态指示灯样式 */
+        .status-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-left: 8px;
+        }
+
+        .status-running {
+            background-color: #28a745;
+            box-shadow: 0 0 8px #28a745;
+        }
+
+        .status-starting {
+            background-color: #ffc107;
+            box-shadow: 0 0 8px #ffc107;
+        }
+
+        .status-error {
+            background-color: #dc3545;
+            box-shadow: 0 0 8px #dc3545;
+        }
+
+        .status-stopped {
+            background-color: #6c757d;
+            box-shadow: 0 0 8px #6c757d;
+        }
+
+        .card-controls {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
     </style>
 </head>
 <body>
@@ -347,7 +428,16 @@
                 const type = server.url ? 'sse' : 'stdio';
                 
                 card.innerHTML = `
-                    <h3>${name}</h3>
+                    <h3>
+                        ${name}
+                        <div class="card-controls">
+                            <div class="status-indicator status-stopped" id="status-${name}"></div>
+                            <label class="switch">
+                                <input type="checkbox" onchange="toggleServer('${name}', this.checked)" id="switch-${name}">
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                    </h3>
                     <div class="card-type ${type === 'sse' ? 'type-sse' : 'type-stdio'}">
                         ${type.toUpperCase()}
                     </div>
@@ -368,6 +458,57 @@
                 
                 cardList.appendChild(card);
             });
+        }
+
+        // 服务器控制相关方法
+        function toggleServer(serverName, isChecked) {
+            console.log(`切换服务器 ${serverName} 状态为: ${isChecked ? '开启' : '关闭'}`);
+            if (isChecked) {
+                startServer(serverName);
+            } else {
+                stopServer(serverName);
+            }
+        }
+
+        function startServer(serverName) {
+            console.log(`开始启动服务器: ${serverName}`);
+            updateServerStatus(serverName, 'starting');
+            // TODO: 实际的启动逻辑
+        }
+
+        function stopServer(serverName) {
+            console.log(`开始停止服务器: ${serverName}`);
+            updateServerStatus(serverName, 'stopped');
+            // TODO: 实际的停止逻辑
+        }
+
+        function updateServerStatus(serverName, status) {
+            const statusIndicator = document.getElementById(`status-${serverName}`);
+            if (!statusIndicator) return;
+
+            // 移除所有状态类
+            statusIndicator.classList.remove(
+                'status-running',
+                'status-starting',
+                'status-error',
+                'status-stopped'
+            );
+
+            // 添加新状态类
+            switch (status) {
+                case 'running':
+                    statusIndicator.classList.add('status-running');
+                    break;
+                case 'starting':
+                    statusIndicator.classList.add('status-starting');
+                    break;
+                case 'error':
+                    statusIndicator.classList.add('status-error');
+                    break;
+                case 'stopped':
+                    statusIndicator.classList.add('status-stopped');
+                    break;
+            }
         }
     </script>
 </body>

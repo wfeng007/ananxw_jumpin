@@ -36,6 +36,7 @@ from pydantic import BaseModel, Field, create_model
 import asyncio
 
 import yaml
+import os
 
 try:
     from typing import override
@@ -338,283 +339,10 @@ class AIConnectRunnable(QRunnable,QObject):
         self.updateUI.emit(str(newContent), str(self.uiId)) 
         
 
-@AAXW_JUMPIN_LOG_MGR.classLogger()
-class McpClientManager:
-    """MCP客户端管理器
-    
-    用于管理MCP客户端的配置和连接。主要功能：
-    1. 读取yaml配置文件
-    2. 管理MCP客户端连接
-    3. 根据配置管理客户端会话的启停
-    4. 初始化并注册会话工具
-    """
-    AAXW_CLASS_LOGGER: logging.Logger
-
-    def __init__(self, managerConfigPath: str = "./aaxw_jumpin_mcp_config.yaml"):
-        """初始化MCP客户端管理器
-        
-        Args:
-            managerConfigPath: yaml配置文件路径
-        """
-        self.managerConfigPath = managerConfigPath
-        self.config: Dict[str, Any] = {}
-        self.mcpClient: Optional[McpClient] = None
-        
-        # 加载配置
-        self._loadConfig()
-        
-    def _loadConfig(self):
-        """加载yaml配置文件"""
-        try:
-            with open(self.managerConfigPath, 'r', encoding='utf-8') as f:
-                self.config = yaml.safe_load(f)
-                    
-            self.AAXW_CLASS_LOGGER.info(f"已加载MCP配置: {self.config}")
-            
-        except Exception as e:
-            self.AAXW_CLASS_LOGGER.error(
-                f"加载MCP配置文件失败: {str(e)}\n{traceback.format_exc()}")
-            self.config = {}
-            
-    def initialize(self) -> bool:
-        """初始化MCP客户端并根据配置启动会话
-        
-        Returns:
-            bool: 是否成功初始化
-        """
-        try:
-            # 获取McpClient配置路径
-            mcpConfigPath = self.config.get('configPath', './mcp.json')
-            
-            # 创建并初始化McpClient
-            self.mcpClient = McpClient(configPath=mcpConfigPath)
-            if not self.mcpClient.initialize(timeout=10.0):
-                self.AAXW_CLASS_LOGGER.error("MCP客户端初始化失败")
-                return False
-                
-            # 根据配置启动会话
-            if 'clientSessions' in self.config:
-                for sessionName, sessionConfig in self.config['clientSessions'].items():
-                    if sessionConfig.get('auto_start', False):
-                        try:
-                            # 直接使用mcpClient启动会话，不修改配置
-                            self.mcpClient.startServer(serverName=sessionName, timeout=5.0)
-                        except Exception as e:
-                            self.AAXW_CLASS_LOGGER.error(
-                                f"启动客户端会话 {sessionName} 失败: {str(e)}")
-                            # 继续处理其他会话
-                            continue
-                        
-            return True
-            
-        except Exception as e:
-            self.AAXW_CLASS_LOGGER.error(
-                f"初始化MCP管理器失败: {str(e)}\n{traceback.format_exc()}")
-            return False
-
-    def setSessionAutoStartOnly(self, sessionName: str, autoStart: bool = True) -> bool:
-        """设置客户端会话自动启动配置
-        
-        Args:
-            sessionName: 会话名称
-            autoStart: 是否自动启动
-            
-        Returns:
-            bool: 是否成功设置
-        """
-        try:
-            if 'clientSessions' not in self.config:
-                self.config['clientSessions'] = {}
-            
-            if sessionName not in self.config['clientSessions']:
-                self.config['clientSessions'][sessionName] = {}
-                
-            self.config['clientSessions'][sessionName]['auto_start'] = autoStart
-            
-            # 保存配置到文件
-            with open(self.managerConfigPath, 'w', encoding='utf-8') as f:
-                yaml.dump(self.config, f, allow_unicode=True)
-                
-            return True
-            
-        except Exception as e:
-            self.AAXW_CLASS_LOGGER.error(
-                f"设置客户端会话 {sessionName} 自动启动配置失败: {str(e)}")
-            return False
-
-    def setSessionAutoStart(self, sessionName: str, 
-                        setAutoStart: Optional[bool] = None,
-                        doStartStop: Optional[bool] = None) -> bool:
-        """统一的客户端会话控制方法，可以同时控制会话的运行状态和自动启动配置
-        
-        Args:
-            sessionName: 会话名称
-            setAutoStart: 设置自动启动状态
-                - True: 设置为自动启动
-                - False: 取消自动启动
-                - None: 不修改自动启动配置
-            doStartStop: 控制会话运行状态
-                - True: 启动会话
-                - False: 停止会话
-                - None: 不改变会话运行状态
-            
-        Returns:
-            bool: 操作是否全部成功
-        """
-        if self.mcpClient is None:
-            self.AAXW_CLASS_LOGGER.error("MCP客户端未初始化")
-            return False
-
-        success = True
-        
-        try:
-            # 处理会话运行状态
-            if doStartStop is not None:
-                try:
-                    if doStartStop:
-                        # 启动会话
-                        if not self.mcpClient.startServer(serverName=sessionName, timeout=5.0):
-                            self.AAXW_CLASS_LOGGER.error(f"启动客户端会话 {sessionName} 失败")
-                            success = False
-                    else:
-                        # 停止会话
-                        if not self.mcpClient.stopServer(serverName=sessionName, timeout=5.0):
-                            self.AAXW_CLASS_LOGGER.error(f"停止客户端会话 {sessionName} 失败")
-                            success = False
-                except Exception as e:
-                    self.AAXW_CLASS_LOGGER.error(
-                        f"{'启动' if doStartStop else '停止'}客户端会话 {sessionName} 时发生错误: {str(e)}")
-                    success = False
-
-            # 处理自动启动配置
-            if setAutoStart is not None:
-                try:
-                    if not self.setSessionAutoStartOnly(sessionName, setAutoStart):
-                        self.AAXW_CLASS_LOGGER.error(
-                            f"{'设置' if setAutoStart else '取消'}客户端会话 {sessionName} 自动启动配置失败")
-                        success = False
-                except Exception as e:
-                    self.AAXW_CLASS_LOGGER.error(
-                        f"修改客户端会话 {sessionName} 自动启动配置时发生错误: {str(e)}")
-                    success = False
-
-            # 记录操作结果
-            if success:
-                self.AAXW_CLASS_LOGGER.info(
-                    f"客户端会话 {sessionName} 控制操作成功完成 "
-                    f"[运行状态: {'启动' if doStartStop else '停止' if doStartStop is not None else '不变'}, "
-                    f"自动启动: {'开启' if setAutoStart else '关闭' if setAutoStart is not None else '不变'}]")
-            
-            return success
-            
-        except Exception as e:
-            self.AAXW_CLASS_LOGGER.error(
-                f"控制客户端会话 {sessionName} 时发生错误: {str(e)}\n{traceback.format_exc()}")
-            return False
-
-    def isSessionAutoStart(self, sessionName: str) -> bool:
-        """检查客户端会话是否配置为自动启动
-        
-        Args:
-            sessionName: 会话名称
-            
-        Returns:
-            bool: 是否配置为自动启动
-        """
-        return self.config.get('clientSessions', {}).get(sessionName, {}).get('auto_start', False)
-
-    def getSessionConfig(self, sessionName: str) -> Optional[Dict[str, Any]]:
-        """获取客户端会话配置
-        
-        Args:
-            sessionName: 会话名称
-            
-        Returns:
-            Optional[Dict[str, Any]]: 会话配置
-        """
-        return self.config.get('clientSessions', {}).get(sessionName)
-        
-    def getMcpClient(self) -> Optional[McpClient]:
-        """获取MCP客户端实例
-        
-        Returns:
-            Optional[McpClient]: MCP客户端实例
-        """
-        return self.mcpClient
-
-    def initializeSessionTools(self, aaAgent: BaseAgent) -> None:
-        """初始化所有运行中客户端会话的工具并注册到Agent
-        
-        Args:
-            aaAgent: 要注册工具的Agent实例
-        """
-        if self.mcpClient is None:
-            self.AAXW_CLASS_LOGGER.error("MCP客户端未初始化，无法初始化工具")
-            return
-
-        try:
-            # 获取所有已配置的会话
-            configuredSessions = self.mcpClient.getConfiguredServers()
-            self.AAXW_CLASS_LOGGER.info(f"已配置的客户端会话列表: {configuredSessions}")
-            
-            # 遍历所有已配置的会话
-            for sessionName in configuredSessions:
-                try:
-                    # 检查会话是否运行
-                    if not self.mcpClient.isServerRunning(serverName=sessionName):
-                        self.AAXW_CLASS_LOGGER.info(f"客户端会话 {sessionName} 未运行，跳过工具处理")
-                        continue
-
-                    # 获取工具列表
-                    tools = self.mcpClient.listTools(serverName=sessionName, timeout=5.0)
-                    self.AAXW_CLASS_LOGGER.info(f"已获取客户端会话 {sessionName} 的tools: {tools}")
-                    
-                    # 为每个工具创建action
-                    for tool in tools:
-                        try:
-                            baseAction = McpToolAgentAction(
-                                mcpClient=self.mcpClient,
-                                serverName=sessionName,
-                                tool=tool
-                            )
-                            aaAgent.addAction(baseAction)
-                            self.AAXW_CLASS_LOGGER.info(
-                                f"已为客户端会话 {sessionName} 添加工具 {tool.name}")
-                        except Exception as tool_e:
-                            self.AAXW_CLASS_LOGGER.error(
-                                f"为客户端会话 {sessionName} 添加工具 {tool.name} 时发生错误: "
-                                + f"{str(tool_e)}\n{traceback.format_exc()}")
-                            continue
-                            
-                except Exception as e:
-                    self.AAXW_CLASS_LOGGER.error(
-                        f"处理客户端会话 {sessionName} 的工具时发生错误: {str(e)}\n{traceback.format_exc()}")
-                    continue
-                        
-        except Exception as e:
-            self.AAXW_CLASS_LOGGER.error(
-                f"初始化客户端会话工具时发生错误: {str(e)}\n{traceback.format_exc()}")
-
-    def close(self):
-        """关闭管理器，停止所有客户端会话
-        注意：此方法只关闭会话，不修改自动启动配置
-        """
-        if self.mcpClient is not None:
-            try:
-                # 直接关闭客户端，它会处理所有会话的关闭
-                self.mcpClient.close(timeout=5.0)
-            except Exception as e:
-                self.AAXW_CLASS_LOGGER.error(f"关闭MCP客户端时发生错误: {str(e)}")
-            finally:
-                self.mcpClient = None
-
-
-
-
 
 # pydantic 类型 注入属性日志器可能有问题。 ? 用ClassVar 尝试
 @AAXW_JUMPIN_LOG_MGR.classLogger()
-class McpToolAgentAction(BaseAgentAction):
+class AAXWMcpToolAgentAction(BaseAgentAction):
     """MCP工具的Agent Action适配器"""
     AAXW_CLASS_LOGGER: ClassVar[logging.Logger]  # ClassVar 针对pydantic的base-model
 
@@ -760,6 +488,305 @@ class McpToolAgentAction(BaseAgentAction):
             return f"调用工具 server:{self.serverName} tool:{self.name} 失败: {str(e)}"
 
     pass 
+
+
+
+@AAXW_JUMPIN_LOG_MGR.classLogger()
+class AAXWMcpClientManager:
+    """MCP客户端管理器
+    
+    用于管理MCP客户端的配置和连接。主要功能：
+    1. 读取yaml配置文件，如果配置文件不存在则使用默认配置
+    2. 管理MCP客户端连接
+    3. 根据配置管理客户端会话的启停
+    4. 初始化并注册会话工具
+    """
+    AAXW_CLASS_LOGGER: logging.Logger
+
+    # 默认配置
+    DEFAULT_CONFIG = {
+        'configPath': './mcp.json',
+        'clientSessions': {}  # 默认没有自动启动的会话
+    }
+
+    def __init__(self, managerConfigPath: str = "./aaxw_mcp_client_manager.yaml"):
+        """初始化MCP客户端管理器
+        
+        Args:
+            managerConfigPath: yaml配置文件路径
+        """
+        self.managerConfigPath = managerConfigPath
+        self.config: Dict[str, Any] = self.DEFAULT_CONFIG.copy()  # 初始化为默认配置的副本
+        self.mcpClient: Optional[McpClient] = None
+        
+        # 加载配置，如果失败则保持默认配置
+        self._loadConfig()
+        
+    def _loadConfig(self):
+        """加载yaml配置文件
+        如果文件不存在或读取失败，保持默认配置
+        如果文件存在但部分配置缺失，使用默认配置补充
+        """
+        try:
+            if not os.path.exists(self.managerConfigPath):
+                self.AAXW_CLASS_LOGGER.warning(
+                    f"配置文件 {self.managerConfigPath} 不存在，将使用默认配置")
+                return
+
+            with open(self.managerConfigPath, 'r', encoding='utf-8') as f:
+                loaded_config = yaml.safe_load(f) or {}
+                
+            # 使用默认配置补充缺失的配置项
+            self.config['configPath'] = loaded_config.get('configPath', self.DEFAULT_CONFIG['configPath'])
+            self.config['clientSessions'] = loaded_config.get('clientSessions', {})
+                    
+            self.AAXW_CLASS_LOGGER.info(f"已加载MCP配置: {self.config}")
+            
+        except Exception as e:
+            self.AAXW_CLASS_LOGGER.warning(
+                f"加载MCP配置文件失败: {str(e)}\n{traceback.format_exc()}\n"
+                f"将使用默认配置继续运行")
+            
+    def initialize(self) -> bool:
+        """初始化MCP客户端并根据配置启动会话
+        
+        Returns:
+            bool: 是否成功初始化
+        """
+        try:
+            # 获取McpClient配置路径
+            mcpConfigPath = self.config['configPath']  # 一定存在，因为有默认值
+            
+            # 创建并初始化McpClient
+            self.mcpClient = McpClient(configPath=mcpConfigPath)
+            if not self.mcpClient.initialize(timeout=10.0):
+                self.AAXW_CLASS_LOGGER.error("MCP客户端初始化失败")
+                return False
+                
+            # 根据配置启动会话
+            # clientSessions一定存在，因为有默认值（空字典）
+            for sessionName, sessionConfig in self.config['clientSessions'].items():
+                if sessionConfig.get('auto_start', False):
+                    try:
+                        # 直接使用mcpClient启动会话，不修改配置
+                        self.mcpClient.startServer(serverName=sessionName, timeout=5.0)
+                    except Exception as e:
+                        self.AAXW_CLASS_LOGGER.error(
+                            f"启动客户端会话 {sessionName} 失败: {str(e)}")
+                        # 继续处理其他会话
+                        continue
+                        
+            return True
+            
+        except Exception as e:
+            self.AAXW_CLASS_LOGGER.error(
+                f"初始化MCP管理器失败: {str(e)}\n{traceback.format_exc()}")
+            return False
+
+    def setSessionAutoStartOnly(self, sessionName: str, autoStart: bool = True) -> bool:
+        """设置客户端会话自动启动配置
+        
+        Args:
+            sessionName: 会话名称
+            autoStart: 是否自动启动
+            
+        Returns:
+            bool: 是否成功设置
+        """
+        try:
+            # clientSessions一定存在，因为有默认值
+            if sessionName not in self.config['clientSessions']:
+                self.config['clientSessions'][sessionName] = {}
+                
+            self.config['clientSessions'][sessionName]['auto_start'] = autoStart
+            
+            # 保存配置到文件
+            try:
+                with open(self.managerConfigPath, 'w', encoding='utf-8') as f:
+                    yaml.dump(self.config, f, allow_unicode=True)
+            except Exception as save_e:
+                self.AAXW_CLASS_LOGGER.error(
+                    f"保存配置到文件失败: {str(save_e)}\n"
+                    f"配置更改将在内存中保持到程序结束")
+                
+            return True
+            
+        except Exception as e:
+            self.AAXW_CLASS_LOGGER.error(
+                f"设置客户端会话 {sessionName} 自动启动配置失败: {str(e)}")
+            return False
+
+    def setSessionAutoStart(self, sessionName: str, 
+                        setAutoStart: Optional[bool] = None,
+                        doStartStop: Optional[bool] = None) -> bool:
+        """统一的客户端会话控制方法，可以同时控制会话的运行状态和自动启动配置
+        
+        Args:
+            sessionName: 会话名称
+            setAutoStart: 设置自动启动状态
+                - True: 设置为自动启动
+                - False: 取消自动启动
+                - None: 不修改自动启动配置
+            doStartStop: 控制会话运行状态
+                - True: 启动会话
+                - False: 停止会话
+                - None: 不改变会话运行状态
+            
+        Returns:
+            bool: 操作是否全部成功
+        """
+        if self.mcpClient is None:
+            self.AAXW_CLASS_LOGGER.error("MCP客户端未初始化")
+            return False
+
+        success = True
+        
+        try:
+            # 处理会话运行状态
+            if doStartStop is not None:
+                try:
+                    if doStartStop:
+                        # 启动会话
+                        if not self.mcpClient.startServer(serverName=sessionName, timeout=5.0):
+                            self.AAXW_CLASS_LOGGER.error(f"启动客户端会话 {sessionName} 失败")
+                            success = False
+                    else:
+                        # 停止会话
+                        if not self.mcpClient.stopServer(serverName=sessionName, timeout=5.0):
+                            self.AAXW_CLASS_LOGGER.error(f"停止客户端会话 {sessionName} 失败")
+                            success = False
+                except Exception as e:
+                    self.AAXW_CLASS_LOGGER.error(
+                        f"{'启动' if doStartStop else '停止'}客户端会话 {sessionName} 时发生错误: {str(e)}")
+                    success = False
+
+            # 处理自动启动配置
+            if setAutoStart is not None:
+                try:
+                    if not self.setSessionAutoStartOnly(sessionName, setAutoStart):
+                        self.AAXW_CLASS_LOGGER.error(
+                            f"{'设置' if setAutoStart else '取消'}客户端会话 {sessionName} 自动启动配置失败")
+                        success = False
+                except Exception as e:
+                    self.AAXW_CLASS_LOGGER.error(
+                        f"修改客户端会话 {sessionName} 自动启动配置时发生错误: {str(e)}")
+                    success = False
+
+            # 记录操作结果
+            if success:
+                self.AAXW_CLASS_LOGGER.info(
+                    f"客户端会话 {sessionName} 控制操作成功完成 "
+                    f"[运行状态: {'启动' if doStartStop else '停止' if doStartStop is not None else '不变'}, "
+                    f"自动启动: {'开启' if setAutoStart else '关闭' if setAutoStart is not None else '不变'}]")
+            
+            return success
+            
+        except Exception as e:
+            self.AAXW_CLASS_LOGGER.error(
+                f"控制客户端会话 {sessionName} 时发生错误: {str(e)}\n{traceback.format_exc()}")
+            return False
+
+    def isSessionAutoStart(self, sessionName: str) -> bool:
+        """检查客户端会话是否配置为自动启动
+        
+        Args:
+            sessionName: 会话名称
+            
+        Returns:
+            bool: 是否配置为自动启动
+        """
+        return self.config.get('clientSessions', {}).get(sessionName, {}).get('auto_start', False)
+
+    def getSessionConfig(self, sessionName: str) -> Optional[Dict[str, Any]]:
+        """获取客户端会话配置
+        
+        Args:
+            sessionName: 会话名称
+            
+        Returns:
+            Optional[Dict[str, Any]]: 会话配置
+        """
+        return self.config.get('clientSessions', {}).get(sessionName)
+        
+    def getMcpClient(self) -> Optional[McpClient]:
+        """获取MCP客户端实例
+        
+        Returns:
+            Optional[McpClient]: MCP客户端实例
+        """
+        return self.mcpClient
+
+    # @TODO 这个应该放到agent里面吧？而不是mcp? 或者部分抽到app中？
+    def initializeSessionTools(self, aaAgent: BaseAgent) -> None:
+        """初始化所有运行中客户端会话的工具并注册到Agent
+        
+        Args:
+            aaAgent: 要注册工具的Agent实例
+        """
+        if self.mcpClient is None:
+            self.AAXW_CLASS_LOGGER.error("MCP客户端未初始化，无法初始化工具")
+            return
+
+        try:
+            # 获取所有已配置的会话
+            configuredSessions = self.mcpClient.getConfiguredServers()
+            self.AAXW_CLASS_LOGGER.info(f"已配置的客户端会话列表: {configuredSessions}")
+            
+            # 遍历所有已配置的会话
+            for sessionName in configuredSessions:
+                try:
+                    # 检查会话是否运行
+                    if not self.mcpClient.isServerRunning(serverName=sessionName):
+                        self.AAXW_CLASS_LOGGER.info(f"客户端会话 {sessionName} 未运行，跳过工具处理")
+                        continue
+
+                    # 获取工具列表
+                    tools = self.mcpClient.listTools(serverName=sessionName, timeout=5.0)
+                    self.AAXW_CLASS_LOGGER.info(f"已获取客户端会话 {sessionName} 的tools: {tools}")
+                    
+                    # 为每个工具创建action
+                    for tool in tools:
+                        try:
+                            baseAction = AAXWMcpToolAgentAction(
+                                mcpClient=self.mcpClient,
+                                serverName=sessionName,
+                                tool=tool
+                            )
+                            aaAgent.addAction(baseAction)
+                            self.AAXW_CLASS_LOGGER.info(
+                                f"已为客户端会话 {sessionName} 添加工具 {tool.name}")
+                        except Exception as tool_e:
+                            self.AAXW_CLASS_LOGGER.error(
+                                f"为客户端会话 {sessionName} 添加工具 {tool.name} 时发生错误: "
+                                + f"{str(tool_e)}\n{traceback.format_exc()}")
+                            continue
+                            
+                except Exception as e:
+                    self.AAXW_CLASS_LOGGER.error(
+                        f"处理客户端会话 {sessionName} 的工具时发生错误: {str(e)}\n{traceback.format_exc()}")
+                    continue
+                        
+        except Exception as e:
+            self.AAXW_CLASS_LOGGER.error(
+                f"初始化客户端会话工具时发生错误: {str(e)}\n{traceback.format_exc()}")
+
+    def close(self):
+        """关闭管理器，停止所有客户端会话
+        注意：此方法只关闭会话，不修改自动启动配置
+        """
+        if self.mcpClient is not None:
+            try:
+                # 直接关闭客户端，它会处理所有会话的关闭
+                self.mcpClient.close(timeout=5.0)
+            except Exception as e:
+                self.AAXW_CLASS_LOGGER.error(f"关闭MCP客户端时发生错误: {str(e)}")
+            finally:
+                self.mcpClient = None
+
+
+
+
+
 
 
 @AAXW_JUMPIN_LOG_MGR.classLogger()
@@ -1007,7 +1034,7 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
         self.agentEnvironment:AgentEnvironment=None #type:ignore
         self.aaAgent:BaseAgent=None #type:ignore
         self.mcpClient:McpClient = None 
-        self.mcpClientManager:McpClientManager = None  # 修改变量名
+        self.mcpClientManager:AAXWMcpClientManager = None  # 修改变量名
         pass
     
     @override
@@ -1046,7 +1073,7 @@ class AAXWJumpinDefaultCompoApplet(AAXWAbstractApplet):
         
         try:
             # 初始化MCP客户端管理器
-            self.mcpClientManager = McpClientManager()
+            self.mcpClientManager = AAXWMcpClientManager()
             if not self.mcpClientManager.initialize():
                 self.AAXW_CLASS_LOGGER.warning("MCP客户端管理器初始化失败")
                 self.mcpClientManager = None
