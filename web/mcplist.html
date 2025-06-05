@@ -457,59 +457,161 @@
                 `;
                 
                 cardList.appendChild(card);
+                
+                // 初始化服务器状态
+                initializeServerState(name);
             });
         }
 
-        // 服务器控制相关方法
-        function toggleServer(serverName, isChecked) {
-            console.log(`切换服务器 ${serverName} 状态为: ${isChecked ? '开启' : '关闭'}`);
-            if (isChecked) {
-                startServer(serverName);
-            } else {
-                stopServer(serverName);
+        // 初始化服务器状态
+        async function initializeServerState(serverName) {
+            try {
+                // 获取自动启动状态
+                const isAutoStart = await mcpHandler.isServerAutoStart(serverName);
+                const switchElement = document.getElementById(`switch-${serverName}`);
+                if (switchElement) {
+                    switchElement.checked = isAutoStart;
+                }
+                
+                // 只对配置了自动启动的服务器进行状态监控
+                if (isAutoStart) {
+                    startStatusMonitoring(serverName);
+                } else {
+                    // 未配置自动启动的服务器，显示为stopped状态
+                    const statusIndicator = document.getElementById(`status-${serverName}`);
+                    if (statusIndicator) {
+                        statusIndicator.classList.remove(
+                            'status-running',
+                            'status-starting',
+                            'status-error',
+                            'status-stopped'
+                        );
+                        statusIndicator.classList.add('status-stopped');
+                    }
+                }
+            } catch (error) {
+                console.error(`初始化服务器 ${serverName} 状态失败:`, error);
             }
         }
 
-        function startServer(serverName) {
-            console.log(`开始启动服务器: ${serverName}`);
-            updateServerStatus(serverName, 'starting');
-            // TODO: 实际的启动逻辑
+        // 状态监控定时器Map
+        const statusMonitors = new Map();
+
+        // 开始状态监控
+        function startStatusMonitoring(serverName) {
+            // 如果已经存在监控，先清除
+            if (statusMonitors.has(serverName)) {
+                clearInterval(statusMonitors.get(serverName));
+            }
+            
+            // 立即更新一次状态
+            updateServerStatus(serverName);
+            
+            // 设置定时器，每15秒更新一次状态
+            console.log(`[${new Date().toLocaleString()}] 开始监控服务器状态: ${serverName}`);
+            const timerId = setInterval(() => {
+                console.log(`[${new Date().toLocaleString()}] 定时检查服务器状态: ${serverName}`);
+                updateServerStatus(serverName);
+            }, 15000);
+            statusMonitors.set(serverName, timerId);
         }
 
-        function stopServer(serverName) {
-            console.log(`开始停止服务器: ${serverName}`);
-            updateServerStatus(serverName, 'stopped');
-            // TODO: 实际的停止逻辑
-        }
-
-        function updateServerStatus(serverName, status) {
-            const statusIndicator = document.getElementById(`status-${serverName}`);
-            if (!statusIndicator) return;
-
-            // 移除所有状态类
-            statusIndicator.classList.remove(
-                'status-running',
-                'status-starting',
-                'status-error',
-                'status-stopped'
-            );
-
-            // 添加新状态类
-            switch (status) {
-                case 'running':
-                    statusIndicator.classList.add('status-running');
-                    break;
-                case 'starting':
-                    statusIndicator.classList.add('status-starting');
-                    break;
-                case 'error':
-                    statusIndicator.classList.add('status-error');
-                    break;
-                case 'stopped':
-                    statusIndicator.classList.add('status-stopped');
-                    break;
+        // 停止状态监控
+        function stopStatusMonitoring(serverName) {
+            if (statusMonitors.has(serverName)) {
+                console.log(`[${new Date().toLocaleString()}] 停止监控服务器状态: ${serverName}`);
+                clearInterval(statusMonitors.get(serverName));
+                statusMonitors.delete(serverName);
             }
         }
+
+        // 更新服务器状态显示
+        async function updateServerStatus(serverName) {
+            try {
+                console.log(`[${new Date().toLocaleString()}] 请求服务器状态: ${serverName}`);
+                const status = await mcpHandler.getServerStatus(serverName);
+                console.log(`[${new Date().toLocaleString()}] 收到服务器状态: ${serverName} = ${status}`);
+                const statusIndicator = document.getElementById(`status-${serverName}`);
+                if (!statusIndicator) return;
+
+                // 移除所有状态类
+                statusIndicator.classList.remove(
+                    'status-running',
+                    'status-starting',
+                    'status-error',
+                    'status-stopped'
+                );
+
+                // 添加新状态类
+                statusIndicator.classList.add(`status-${status}`);
+            } catch (error) {
+                console.error(`更新服务器 ${serverName} 状态失败:`, error);
+            }
+        }
+
+        // 切换服务器状态
+        async function toggleServer(serverName, isChecked) {
+            try {
+                console.log(`切换服务器 ${serverName} 状态为: ${isChecked ? '开启' : '关闭'}`);
+                
+                // 禁用开关，防止重复操作
+                const switchElement = document.getElementById(`switch-${serverName}`);
+                if (switchElement) {
+                    switchElement.disabled = true;
+                }
+                
+                // 立即更新状态为starting或stopped
+                const statusIndicator = document.getElementById(`status-${serverName}`);
+                if (statusIndicator) {
+                    statusIndicator.classList.remove(
+                        'status-running',
+                        'status-starting',
+                        'status-error',
+                        'status-stopped'
+                    );
+                    statusIndicator.classList.add(isChecked ? 'status-starting' : 'status-stopped');
+                }
+                
+                // 调用后端切换状态
+                const success = await mcpHandler.toggleServer(serverName, isChecked);
+                if (!success) {
+                    console.error(`切换服务器 ${serverName} 状态失败`);
+                    showError(`切换服务器 ${serverName} 状态失败`);
+                    // 恢复开关状态
+                    if (switchElement) {
+                        switchElement.checked = !isChecked;
+                    }
+                } else {
+                    // 切换成功后，根据新状态决定是否开启监控
+                    if (isChecked) {
+                        startStatusMonitoring(serverName);
+                    } else {
+                        stopStatusMonitoring(serverName);
+                    }
+                }
+                
+                // 重新启用开关
+                if (switchElement) {
+                    switchElement.disabled = false;
+                }
+            } catch (error) {
+                console.error(`切换服务器 ${serverName} 状态时发生错误:`, error);
+                showError(`切换服务器 ${serverName} 状态失败: ${error.message}`);
+                // 出错时也要重新启用开关
+                const switchElement = document.getElementById(`switch-${serverName}`);
+                if (switchElement) {
+                    switchElement.disabled = false;
+                    switchElement.checked = !isChecked;
+                }
+            }
+        }
+
+        // 页面卸载时清理所有监控器
+        window.addEventListener('unload', () => {
+            for (const serverName of statusMonitors.keys()) {
+                stopStatusMonitoring(serverName);
+            }
+        });
     </script>
 </body>
 </html> 

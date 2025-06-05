@@ -2380,7 +2380,9 @@ class AAXWJumpinMainWindow(AAXWFramelessWindow):
         self.inputPanel.promptInputEdit.setFocus()
 
         # 初始化WebView窗口
-        self.webviewWindow = AAXWJumpinWebViewWindow()
+        # self.webviewWindow = AAXWJumpinWebViewWindow()
+        # 创建 WebView 窗口
+        self.webviewWindow = None
 
         self.installAppHotKey()
 
@@ -2388,6 +2390,16 @@ class AAXWJumpinMainWindow(AAXWFramelessWindow):
         # 转容器关联；
         self.jumpinConfig:AAXWJumpinConfig = None #type:ignore
         self.diContainer:AAXWDependencyContainer = None #type:ignore
+
+    #@FIXME 临时增加1个在DefaultCompoApplet初始化后，初始化WebView窗口的方法
+    # 这个其实有问题，依赖结构应该更好才对，有些逻辑应该移入框架而不是applet
+    # 这样保证界面初始化在更合理的位置。
+    def initAppResAfterDefaultCompoApplet(self):
+        """
+        在默认组件Applet初始化后，初始化WebView窗口
+        """
+        self.webviewWindow = AAXWJumpinWebViewWindow(workDir=None)# workdir 用默认的
+        self.webviewWindow.setMainWindow(self)  # 设置主窗  口引用
 
     def initContentLayout(self):
         self.contentHBoxLayout.setSpacing(0)

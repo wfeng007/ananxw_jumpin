@@ -22,15 +22,33 @@
 #
 ##
 
+import sys
+import os
+import logging
+import json
+from typing import TYPE_CHECKING, Optional
+
 from PySide6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QTextEdit, QSplitter, 
     QToolBar, QPushButton, QHBoxLayout, QLineEdit, QSizePolicy)
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEngineSettings, QWebEnginePage, QWebEngineProfile
 from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtCore import QUrl, Qt, Slot, QObject
-import sys
-import os
-import json
+
+
+# 检查解决循环导入问题
+if TYPE_CHECKING:
+    from .gui_pyside6 import AAXWJumpinMainWindow
+
+if TYPE_CHECKING:
+    # AAXWMcpClientManager 暂时在 default_applets_aiagents 中实现
+    from .default_applets_aiagents import AAXWMcpClientManager
+
+from .comm import AAXW_JUMPIN_LOG_MGR
+# 模块日志器
+# 本模块，模块日志器
+AAXW_JUMPIN_MODULE_LOGGER:logging.Logger=AAXW_JUMPIN_LOG_MGR.getModuleLogger(
+    module=sys.modules[__name__])
 
 class MCPConfigHandler(QObject):
     """MCP配置处理器，处理与前端的交互"""
@@ -39,6 +57,95 @@ class MCPConfigHandler(QObject):
         super().__init__()
         self.workDir = workDir if workDir else os.path.dirname(os.path.abspath(sys.argv[0]))
         self.configPath = os.path.join(self.workDir, "mcp.json")
+        self.mcpClientManager = None
+
+    def setMcpClientManager(self, manager: 'AAXWMcpClientManager'):
+        """设置MCP客户端管理器"""
+        self.mcpClientManager = manager
+
+    @Slot(str, bool, result=bool)
+    def toggleServer(self, serverName: str, isChecked: bool) -> bool:
+        """切换服务器状态
+        
+        Args:
+            serverName: 服务器名称
+            isChecked: 是否开启
+            
+        Returns:
+            bool: 操作是否成功
+        """
+        if not self.mcpClientManager:
+            print("MCP客户端管理器未初始化")
+            return False
+            
+        try:
+            return self.mcpClientManager.setSessionAutoStart(
+                sessionName=serverName,
+                setAutoStart=isChecked,
+                doStartStop=isChecked
+            )
+        except Exception as e:
+            print(f"切换服务器状态失败: {str(e)}")
+            return False
+
+    @Slot(str, result=str)
+    def getServerStatus(self, serverName: str) -> str:
+        """获取服务器状态
+        
+        Args:
+            serverName: 服务器名称
+            
+        Returns:
+            str: 服务器状态
+                - "running": 运行中
+                - "error": 错误（配置了自动启动但未能正常运行）
+                - "stopped": 已停止（未配置自动启动或手动停止）
+        """
+        AAXW_JUMPIN_MODULE_LOGGER.debug(f"[{serverName}] 开始检查服务器状态")
+        
+        if not self.mcpClientManager or not self.mcpClientManager.getMcpClient():
+            AAXW_JUMPIN_MODULE_LOGGER.error(f"[{serverName}] MCP客户端管理器未初始化")
+            return "error"
+            
+        try:
+            # 先检查是否配置为自动启动
+            isAutoStart = self.mcpClientManager.isSessionAutoStart(serverName)
+            AAXW_JUMPIN_MODULE_LOGGER.debug(f"[{serverName}] 自动启动状态: {isAutoStart}")
+            
+            if not isAutoStart:
+                return "stopped"  # 未配置自动启动，直接返回stopped状态
+                
+            mcpClient = self.mcpClientManager.getMcpClient()
+            try:
+                # 使用 sendPing 方法来检测服务器是否在线
+                if mcpClient.sendPing(serverName, timeout=1.0):
+                    AAXW_JUMPIN_MODULE_LOGGER.info(f"[{serverName}] 服务器运行中，ping成功")
+                    return "running"
+                AAXW_JUMPIN_MODULE_LOGGER.error(f"[{serverName}] 服务器配置了自动启动但ping失败")
+                return "error"  # 配置了自动启动但ping失败
+            except Exception as e:
+                if "is not running" in str(e):
+                    AAXW_JUMPIN_MODULE_LOGGER.error(f"[{serverName}] 服务器配置了自动启动但未运行: {e}")
+                    return "error"  # 配置了自动启动但服务器未运行
+                raise  # 其他错误继续抛出
+        except Exception as e:
+            AAXW_JUMPIN_MODULE_LOGGER.error(f"[{serverName}] 获取服务器状态失败: {e}")
+            return "error"
+
+    @Slot(str, result=bool)
+    def isServerAutoStart(self, serverName: str) -> bool:
+        """检查服务器是否配置为自动启动
+        
+        Args:
+            serverName: 服务器名称
+            
+        Returns:
+            bool: 是否配置为自动启动
+        """
+        if not self.mcpClientManager:
+            return False
+            
+        return self.mcpClientManager.isSessionAutoStart(serverName)
 
     @Slot(result=str)
     def loadConfig(self):
@@ -104,7 +211,11 @@ class AAXWWebEnginePage(QWebEnginePage):
             except Exception as e:
                 print(f"输出消息时发生错误: {e}")  # 调试输出
 
+@AAXW_JUMPIN_LOG_MGR.classLogger()
 class AAXWJumpinWebViewWindow(QWidget):
+    """内置webview的浏览器gui窗口。"""
+    AAXW_CLASS_LOGGER: logging.Logger
+
     def __init__(self, workDir=None, parent=None):
         super().__init__(parent)
         self.workDir = workDir if workDir else os.path.dirname(os.path.abspath(sys.argv[0]))
@@ -113,6 +224,7 @@ class AAXWJumpinWebViewWindow(QWidget):
         # self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.WindowStaysOnTopHint)
         self._mainAppClosed = False  # 标记主应用是否已关闭
         self._altPressed = False  # 添加Alt键状态跟踪
+        self._mainWindow: 'AAXWJumpinMainWindow' = None  # 保存主窗口引用
 
         # 创建主布局
         layout = QVBoxLayout(self)
@@ -237,6 +349,7 @@ class AAXWJumpinWebViewWindow(QWidget):
         # 设置WebChannel @TODO 之后迁移到应用初始化的配置阶段
         self.channel = QWebChannel()
         self.mcpHandler = MCPConfigHandler(self.workDir)
+        # mcpClientManager 将在 setMainWindow 中设置
         self.channel.registerObject("mcpHandler", self.mcpHandler)
         self.browser.page().setWebChannel(self.channel)
         
@@ -254,6 +367,61 @@ class AAXWJumpinWebViewWindow(QWidget):
 
         # 安装事件过滤器
         self.installEventFilter(self)
+
+    def setMainWindow(self, mainWindow: 'AAXWJumpinMainWindow'):
+        """设置主窗口引用"""
+        self._mainWindow = mainWindow
+        
+        # 设置主窗口引用后，重新尝试获取并设置 mcpClientManager
+        mcpClientManager = self._getMcpClientManager()
+        if mcpClientManager:
+            self.mcpHandler.setMcpClientManager(mcpClientManager)
+            self.AAXW_CLASS_LOGGER.info("[系统] MCP客户端管理器初始化成功")
+        else:
+            self.AAXW_CLASS_LOGGER.error("[错误] 未能获取到MCP客户端管理器，部分功能可能不可用")
+
+    def _getMcpClientManager(self) -> Optional['AAXWMcpClientManager']:
+        """获取MCP客户端管理器
+        
+        通过DI容器获取appletManager，然后获取默认applet实例，从而获取其中的mcpClientManager
+        """
+        try:
+            if not self._mainWindow:
+                self.AAXW_CLASS_LOGGER.error("主窗口引用未设置")
+                return None
+                
+            # 获取主窗口中的DI容器
+            diContainer = getattr(self._mainWindow, 'diContainer', None)
+            if not diContainer:
+                self.AAXW_CLASS_LOGGER.error("未找到DI容器")
+                return None
+            
+            # 从DI容器获取appletManager
+            appletManager = diContainer.getAANode('jumpinAppletManager')
+            if not appletManager:
+                self.AAXW_CLASS_LOGGER.error("未找到appletManager")
+                return None
+            self.AAXW_CLASS_LOGGER.debug("已找到appletManager")
+            
+            # 获取默认applet实例
+            defaultApplet = appletManager.getApplet('jumpinDefaultCompoApplet')[0]
+            if not defaultApplet:
+                self.AAXW_CLASS_LOGGER.error("未找到默认applet")
+                return None
+            self.AAXW_CLASS_LOGGER.debug("已找到jumpinDefaultCompoApplet")
+                
+            # 获取mcpClientManager
+            mcpClientManager = getattr(defaultApplet, 'mcpClientManager', None)
+            if not mcpClientManager:
+                self.AAXW_CLASS_LOGGER.error("未找到MCP客户端管理器")
+                return None
+            self.AAXW_CLASS_LOGGER.info("未找到MCP客户端管理器")
+                
+            return mcpClientManager
+            
+        except Exception as e:
+            self.AAXW_CLASS_LOGGER.error(f"获取MCP客户端管理器失败: {str(e)}")
+            return None
 
     def setMainAppClosed(self, closed=True):
         """设置主应用关闭状态"""

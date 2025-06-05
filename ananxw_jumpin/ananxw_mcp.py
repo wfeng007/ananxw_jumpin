@@ -31,7 +31,7 @@ import asyncio
 import os
 import threading
 import traceback
-# import concurrent.futures
+import contextlib
 from concurrent.futures import TimeoutError, Future
 from typing import Dict, Any, Optional, Tuple, List
 from contextlib import AsyncExitStack
@@ -39,15 +39,36 @@ from mcp import ClientSession, StdioServerParameters, types
 from mcp.client.stdio import stdio_client
 from mcp.client.sse import sse_client
 import logging
+import anyio
+import time
+import uuid
 
-# 配置日志
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# 调试使用添加父目录到 Python 路径
+# if __name__ == "__main__":
+#     # 获取当前文件的目录
+#     current_dir = os.path.dirname(os.path.abspath(__file__))
+#     # 获取 ananxw_jumpin 目录
+#     project_dir = os.path.dirname(current_dir)
+#     if project_dir not in sys.path:
+#         sys.path.insert(0, project_dir)
+# from ananxw_jumpin.comm import AAXW_JUMPIN_LOG_MGR
+    
+# 现在可以导入了
+from .comm import AAXW_JUMPIN_LOG_MGR
 
+# 模块日志器
+# 本模块，模块日志器
+AAXW_JUMPIN_MODULE_LOGGER:logging.Logger=AAXW_JUMPIN_LOG_MGR.getModuleLogger(
+    module=sys.modules[__name__])
+
+
+@AAXW_JUMPIN_LOG_MGR.classLogger()
 class McpClientSession:
     """表示MCP客户端中的一个服务器会话，管理与目标服务器的通信。
     适配了sse与stdio的实现。
+    支持异步上下文管理。
     """
+    AAXW_CLASS_LOGGER: logging.Logger
     
     def __init__(self, targetServerName: str, targetServerConfig: Dict[str, Any], mcpClient: 'McpClient'):
         self.targetServerName = targetServerName
@@ -58,7 +79,15 @@ class McpClientSession:
         self.transportType: Optional[str] = None
         self.availableTools: List[Dict[str, Any]] = []
         self._initialized = threading.Event()
-        self.exitStack = AsyncExitStack()
+        self._parent_stack: Optional[AsyncExitStack] = None
+        
+    async def __aenter__(self):
+        """异步上下文管理器入口"""
+        return self
+        
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """异步上下文管理器退出"""
+        await self.aClose()
         
     def __str__(self):
         return f"Session(target={self.targetServerName}, transport={self.transportType or 'not_connected'}, connected={self.mcpSession is not None})"
@@ -87,11 +116,11 @@ class McpClientSession:
             args=config.get("args", []),
             env={"PATH": os.getenv("PATH", "")}
         )
-        return await self.exitStack.enter_async_context(stdio_client(server_params))
+        return await self._parent_stack.enter_async_context(stdio_client(server_params))
 
     async def _createSseTransport(self, config: Dict[str, Any]) -> Tuple[Any, Any]:
         """创建SSE传输"""
-        return await self.exitStack.enter_async_context(
+        return await self._parent_stack.enter_async_context(
             sse_client(
                 url=config["url"],
                 headers={"Accept": "text/event-stream"},
@@ -100,9 +129,11 @@ class McpClientSession:
             )
         )
 
-    async def aInitialize(self):
+    async def aInitialize(self, parent_stack: AsyncExitStack):
         """异步初始化会话连接"""
         try:
+            self._parent_stack = parent_stack  # 保存父级stack引用
+            
             if "command" in self.targetServerConfig:
                 self.transportType = "stdio"
                 self.transportInstance = await self._createStdioTransport(self.targetServerConfig)
@@ -113,7 +144,7 @@ class McpClientSession:
                 raise ValueError(f"Invalid server configuration for {self.targetServerName}")
 
             readStream, writeStream = self.transportInstance
-            self.mcpSession = await self.exitStack.enter_async_context(
+            self.mcpSession = await self._parent_stack.enter_async_context(
                 ClientSession(readStream, writeStream)
             )
             await self.mcpSession.initialize()
@@ -121,27 +152,32 @@ class McpClientSession:
             self.availableTools = (await self.mcpSession.list_tools()).tools
             self._initialized.set()
             
-            logger.info(f"Connected to server: {self}")
-            logger.info("Available tools:")
+            self.AAXW_CLASS_LOGGER.info(f"Connected to server: {self}")
+            self.AAXW_CLASS_LOGGER.info("Available tools:")
             for tool in self.availableTools:
-                logger.info(f"- {tool.name}: {tool.description}")
+                self.AAXW_CLASS_LOGGER.info(f"- {tool.name}: {tool.description}")
                 
         except Exception as e:
-            logger.error(f"Error initializing server {self.targetServerName}: {e}")
+            self.AAXW_CLASS_LOGGER.error(f"Error initializing server {self.targetServerName}: {e}\n{traceback.format_exc()}")
             raise
 
     async def aClose(self):
         """异步关闭会话连接"""
         try:
-            if self.mcpSession:
-                self.mcpSession = None
-            if self.transportInstance:
-                self.transportInstance = None
-            await self.exitStack.aclose()
-            self._initialized.clear()
+            # 让 exitStack 处理所有资源的清理
+            # 因为所有资源(mcpSession和transport)都是通过exitStack.enter_async_context创建的
+            # 所以只需要关闭exitStack即可,它会按照FILO顺序清理所有资源
+            if self._parent_stack:
+                await self._parent_stack.aclose()
         except Exception as e:
-            logger.error(f"Error closing server {self.targetServerName}: {e}")
+            self.AAXW_CLASS_LOGGER.error(f"Error closing server {self.targetServerName}: {e}\n{traceback.format_exc()}")
             raise
+        finally:
+            # 清理所有引用
+            self.mcpSession = None
+            self.transportInstance = None
+            self._initialized.clear()
+            self._parent_stack = None
 
     async def aListTools(self) -> List[types.Tool]:
         """异步获取工具列表"""
@@ -156,7 +192,7 @@ class McpClientSession:
             raise ValueError(f"Server {self.targetServerName} is not running")
         return await self.mcpSession.call_tool(toolName, args)
 
-    async def aPing(self) -> bool:
+    async def aPing(self):
         """异步发送ping请求到目标服务器
         
         Returns:
@@ -165,14 +201,17 @@ class McpClientSession:
         if not self.mcpSession:
             raise ValueError(f"Server {self.targetServerName} is not running")
         try:
-            await self.mcpSession.ping()
+            # send_ping 返回 EmptyResult 没有意义不处理。
+            await self.mcpSession.send_ping()
             return True
         except Exception as e:
-            logger.error(f"Error pinging server {self.targetServerName}: {e}")
+            self.AAXW_CLASS_LOGGER.error(f"Error pinging server {self.targetServerName}: {e}\n{traceback.format_exc()}")
             return False
 
+@AAXW_JUMPIN_LOG_MGR.classLogger(level=logging.DEBUG)
 class McpClient:
     """统一的MCP客户端实现"""
+    AAXW_CLASS_LOGGER: logging.Logger
     
     def __init__(self, configPath: str= "./mcp.json", configContentDict: Optional[Dict[str, Any]] = None):
         """
@@ -188,12 +227,125 @@ class McpClient:
         self._unified_client_loop: Optional[asyncio.AbstractEventLoop] = None  # 统一的客户端事件循环
         self._loop_thread: Optional[threading.Thread] = None  # 事件循环的后台线程
         self._initialized = threading.Event()
-        
+        self._main_task: Optional[asyncio.Task] = None  # 主任务
+        self._operation_queue: Optional[asyncio.Queue] = None  # 操作队列
+
         # 优先使用传入的配置内容
         if configContentDict is not None:
             self.config = configContentDict
         else:
             self.config = self._loadConfig()
+            
+    async def _main_loop_context(self):
+        """使用 AsyncExitStack 管理所有资源的主循环"""
+        async with self.exitStack as main_stack:
+            while True:
+                try:
+                    operation = await self._operation_queue.get()
+                    operation_type = operation["type"]
+                    operation_future = operation.get("future")  # 从操作中获取 Future
+                    
+                    try:
+                        if operation_type == "start_server":
+                            server_name = operation["server_name"]
+                            config = operation["config"]
+                            
+                            # 创建新的会话
+                            session = McpClientSession(server_name, config, self)
+                            # 将会话添加到主 exitStack
+                            await main_stack.enter_async_context(session)
+                            # 初始化会话
+                            await session.aInitialize(main_stack)
+                            # 保存会话引用
+                            self.mcpClientSessions[server_name] = session
+                            
+                            if operation_future:
+                                operation_future.set_result(True)
+                            
+                        elif operation_type == "stop_server":
+                            server_name = operation["server_name"]
+                            if server_name in self.mcpClientSessions:
+                                session = self.mcpClientSessions[server_name]
+                                # 在同一个task中清理资源
+                                await session.aClose()
+                                del self.mcpClientSessions[server_name]
+                                
+                                if operation_future:
+                                    operation_future.set_result(True)
+                            
+                        elif operation_type == "shutdown":
+                            # 按FILO顺序清理所有会话
+                            server_names = list(self.mcpClientSessions.keys())
+                            for name in reversed(server_names):
+                                session = self.mcpClientSessions[name]
+                                await session.aClose()
+                                del self.mcpClientSessions[name]
+                            break
+                            
+                    except Exception as e:
+                        self.AAXW_CLASS_LOGGER.error(
+                            f"Error in operation {operation_type}: {e}\n{traceback.format_exc()}"
+                        )
+                        if operation_future:
+                            operation_future.set_exception(e)
+                    finally:
+                        self._operation_queue.task_done()  # 标记任务完成
+                        
+                except Exception as e:
+                    self.AAXW_CLASS_LOGGER.error(
+                        f"Error in main loop: {e}\n{traceback.format_exc()}"
+                    )
+
+    def afStartServer(self, serverName: str) -> Future:
+        """异步启动服务器，返回Future"""
+        if not self._unified_client_loop:
+            raise RuntimeError("Client not initialized")
+            
+        if serverName not in self.config["mcpServers"]:
+            raise ValueError(f"Server {serverName} not found in config")
+
+        # 创建Future对象
+        future = self._unified_client_loop.create_future()
+        
+        async def _start_server():
+            # 创建操作事件，直接包含future
+            operation = {
+                "type": "start_server",
+                "server_name": serverName,
+                "config": self.config["mcpServers"][serverName],
+                "future": future  # 直接将future作为事件的一部分
+            }
+            await self._operation_queue.put(operation)
+            return await future
+
+        return self._run_coro_and_get_future(_start_server())
+
+    def afStopServer(self, serverName: str) -> Future:
+        """异步停止服务器，返回Future"""
+        if not self._unified_client_loop:
+            raise RuntimeError("Client not initialized")
+
+        # 创建Future对象
+        future = self._unified_client_loop.create_future()
+        
+        async def _stop_server():
+            # 创建操作事件，直接包含future
+            operation = {
+                "type": "stop_server",
+                "server_name": serverName,
+                "future": future  # 直接将future作为事件的一部分
+            }
+            await self._operation_queue.put(operation)
+            return await future
+
+        return self._run_coro_and_get_future(_stop_server())
+
+    def _run_event_loop(self):
+        """在后台运行事件循环"""
+        asyncio.set_event_loop(self._unified_client_loop)
+        # 创建主循环任务
+        self._main_task = self._unified_client_loop.create_task(self._main_loop_context())
+        self._unified_client_loop.run_forever()
 
     def _loadConfig(self) -> Dict[str, Any]:
         """加载配置文件"""
@@ -201,13 +353,8 @@ class McpClient:
             with open(self.configPath, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except Exception as e:
-            logger.error(f"Error loading config file: {e}")
+            self.AAXW_CLASS_LOGGER.error(f"Error loading config file: {e}\n{traceback.format_exc()}")
             return {}
-
-    def _run_event_loop(self):
-        """在后台运行事件循环"""
-        asyncio.set_event_loop(self._unified_client_loop)
-        self._unified_client_loop.run_forever()
 
     def _run_coro_and_get_future(self, coro) -> Future:
         """在统一事件循环中执行协程并返回Future对象
@@ -227,6 +374,12 @@ class McpClient:
             raise RuntimeError("Client not initialized")
         return asyncio.run_coroutine_threadsafe(coro, self._unified_client_loop)
 
+    async def _init_client_task(self):
+        """初始化客户端主任务"""
+        self._main_task = asyncio.current_task()
+        await self.exitStack.__aenter__()
+        self._initialized.set()
+
     def initialize(self, timeout: float = 10.0) -> bool:
         """同步初始化客户端
         
@@ -240,141 +393,119 @@ class McpClient:
             # 创建新的事件循环
             self._unified_client_loop = asyncio.new_event_loop()
             
+            # 创建操作队列
+            self._operation_queue = asyncio.Queue()
+            
             # 启动事件循环的后台线程
             self._loop_thread = threading.Thread(target=self._run_event_loop)
             self._loop_thread.daemon = True
             self._loop_thread.start()
             
-            future = self._run_coro_and_get_future(self.exitStack.__aenter__())
+            # 初始化主任务
+            future = self._run_coro_and_get_future(self._init_client_task())
             future.result(timeout=timeout)
-            self._initialized.set()
             return True
             
         except Exception as e:
-            logger.error(f"Error during initialization: {e}")
-            logger.error(traceback.format_exc())
+            self.AAXW_CLASS_LOGGER.error(f"Error during initialization: {e}\n{traceback.format_exc()}")
             if self._unified_client_loop:
                 self._unified_client_loop.call_soon_threadsafe(self._unified_client_loop.stop)
             return False
 
-    def close(self, timeout: float = 5.0):
-        """同步关闭客户端
-        
-        Args:
-            timeout: 关闭超时时间(秒)
-        """
+    async def aClose(self):
+        """异步关闭客户端，停止所有服务器并清理资源"""
         try:
-            if not self._unified_client_loop:
-                return
-                
-            future = self._run_coro_and_get_future(self.aClose())
-            future.result(timeout=timeout)
+            self.AAXW_CLASS_LOGGER.info("开始关闭客户端...")
             
-            self._unified_client_loop.call_soon_threadsafe(self._unified_client_loop.stop)
-            if self._loop_thread:
-                self._loop_thread.join(timeout=timeout)
+            # 发送关闭信号
+            if self._operation_queue:
+                self.AAXW_CLASS_LOGGER.debug("发送shutdown信号到操作队列")
+                await self._operation_queue.put({"type": "shutdown"})
+            
+            # 等待主任务完成
+            if self._main_task:
+                self.AAXW_CLASS_LOGGER.debug("等待主任务完成...")
+                try:
+                    await asyncio.wait_for(self._main_task, timeout=5.0)
+                    self.AAXW_CLASS_LOGGER.debug("主任务已完成")
+                except asyncio.TimeoutError:
+                    self.AAXW_CLASS_LOGGER.warning("等待主任务超时")
+                except Exception as e:
+                    self.AAXW_CLASS_LOGGER.error(f"等待主任务时发生错误: {e}")
+
+            # 关闭事件循环
+            if self._unified_client_loop and self._unified_client_loop.is_running():
+                self.AAXW_CLASS_LOGGER.debug("准备停止事件循环...")
                 
+                # 使用 call_soon_threadsafe 确保在正确的线程中停止循环
+                self._unified_client_loop.call_soon_threadsafe(self._unified_client_loop.stop)
+                
+                # 只有在非当前线程时才尝试join
+                current_thread = threading.current_thread()
+                if self._loop_thread and self._loop_thread.is_alive() and current_thread != self._loop_thread:
+                    self.AAXW_CLASS_LOGGER.debug("等待事件循环线程结束...")
+                    try:
+                        self._loop_thread.join(timeout=3.0)
+                        self.AAXW_CLASS_LOGGER.debug("事件循环线程已结束")
+                    except Exception as e:
+                        self.AAXW_CLASS_LOGGER.warning(f"等待事件循环线程时发生错误: {e}")
+
+            #
+            # Windows Proactor 事件循环的特殊处理
+            # 否则会卡主；
+            if sys.platform == 'win32' and isinstance(self._unified_client_loop, asyncio.ProactorEventLoop):
+                self.AAXW_CLASS_LOGGER.debug("Windows Proactor事件循环特殊处理...")
+                with contextlib.suppress(ValueError, RuntimeError):
+                    self._unified_client_loop.close()
+
         except Exception as e:
-            logger.error(f"Error during close: {e}")
-            logger.error(traceback.format_exc())
+            self.AAXW_CLASS_LOGGER.error(f"关闭客户端时发生错误: {e}\n{traceback.format_exc()}")
+            raise
         finally:
+            self.AAXW_CLASS_LOGGER.debug("清理资源引用...")
+            # 清理所有引用
             self._initialized.clear()
+            self._main_task = None
             self._unified_client_loop = None
             self._loop_thread = None
+            self._operation_queue = None
+            self.mcpClientSessions.clear()
+            self.AAXW_CLASS_LOGGER.info("客户端关闭完成")
 
-    async def aClose(self):
-        """异步关闭客户端"""
+    def close(self):
+        """同步关闭客户端"""
         try:
-            for serverName in list(self.mcpClientSessions.keys()):
-                await self.aStopServer(serverName)
-            await self.exitStack.aclose()
+            future = self._run_coro_and_get_future(self.aClose())
+            future.result(timeout=10.0)  # 增加超时时间
+        except TimeoutError:
+            self.AAXW_CLASS_LOGGER.warning("Timeout during synchronous close")
         except Exception as e:
-            logger.error(f"Error during async close: {e}")
+            self.AAXW_CLASS_LOGGER.error(f"Error during synchronous close: {e}\n{traceback.format_exc()}")
             raise
 
     def startServer(self, serverName: str, timeout: float = 5.0) -> bool:
-        """同步启动服务器
-        
-        Args:
-            serverName: 服务器名称
-            timeout: 启动超时时间(秒)
-            
-        Returns:
-            bool: 是否启动成功
-        """
+        """同步启动服务器"""
         if not self._initialized.is_set():
             raise RuntimeError("Client not initialized")
             
         try:
             future = self.afStartServer(serverName)
-            future.result(timeout=timeout)
-            return True
+            return future.result(timeout=timeout)
         except Exception as e:
-            logger.error(f"Error starting server {serverName}: {e}")
+            self.AAXW_CLASS_LOGGER.error(f"Error starting server {serverName}: {e}\n{traceback.format_exc()}")
             return False
 
-    def afStartServer(self, serverName: str) -> Future:
-        """异步启动服务器，返回Future
-        
-        Args:
-            serverName: 服务器名称
-            
-        Returns:
-            Future: 异步操作的Future对象
-        """
-        if not self._unified_client_loop:
-            raise RuntimeError("Client not initialized")
-            
-        if serverName not in self.config["mcpServers"]:
-            raise ValueError(f"Server {serverName} not found in config")
-
-        serverConfig = self.config["mcpServers"][serverName]
-        serverSession = McpClientSession(serverName, serverConfig, self)
-        self.mcpClientSessions[serverName] = serverSession
-        return self._run_coro_and_get_future(serverSession.aInitialize())
-
     def stopServer(self, serverName: str, timeout: float = 5.0) -> bool:
-        """同步停止服务器
-        
-        Args:
-            serverName: 服务器名称
-            timeout: 停止超时时间(秒)
-            
-        Returns:
-            bool: 是否停止成功
-        """
+        """同步停止服务器"""
         if not self._initialized.is_set():
             raise RuntimeError("Client not initialized")
             
         try:
             future = self.afStopServer(serverName)
-            future.result(timeout=timeout)
-            return True
+            return future.result(timeout=timeout)
         except Exception as e:
-            logger.error(f"Error stopping server {serverName}: {e}")
+            self.AAXW_CLASS_LOGGER.error(f"Error stopping server {serverName}: {e}\n{traceback.format_exc()}")
             return False
-
-    def afStopServer(self, serverName: str) -> Future:
-        """异步停止服务器，返回Future
-        
-        Args:
-            serverName: 服务器名称
-            
-        Returns:
-            Future: 异步操作的Future对象
-        """
-        if not self._unified_client_loop:
-            raise RuntimeError("Client not initialized")
-            
-        serverSession = self.mcpClientSessions.get(serverName)
-        if not serverSession:
-            raise ValueError(f"Server {serverName} is not running")
-            
-        async def _stop_server():
-            await serverSession.aClose()
-            del self.mcpClientSessions[serverName]
-                
-        return self._run_coro_and_get_future(_stop_server())
 
     def stopAllServers(self, timeout: float = 5.0) -> bool:
         """同步停止所有服务器
@@ -389,27 +520,17 @@ class McpClient:
             raise RuntimeError("Client not initialized")
             
         try:
-            future = self.afStopAllServers()
-            future.result(timeout=timeout)
+            # 获取服务器名称列表并反转，确保最后创建的先关闭
+            server_names = list(self.mcpClientSessions.keys())
+            server_names.reverse()
+            
+            for serverName in server_names:
+                if not self.stopServer(serverName, timeout=timeout):
+                    return False
             return True
         except Exception as e:
-            logger.error(f"Error stopping all servers: {e}")
+            self.AAXW_CLASS_LOGGER.error(f"Error stopping all servers: {e}\n{traceback.format_exc()}")
             return False
-
-    def afStopAllServers(self) -> Future:
-        """异步停止所有服务器，返回Future
-        
-        Returns:
-            Future: 异步操作的Future对象
-        """
-        if not self._unified_client_loop:
-            raise RuntimeError("Client not initialized")
-            
-        async def _stop_all_servers():
-            for serverName in list(self.mcpClientSessions.keys()):
-                await self.afStopServer(serverName)
-                
-        return self._run_coro_and_get_future(_stop_all_servers())
 
     def listTools(self, serverName: str, timeout: float = 5.0) -> List[types.Tool]:
         """同步获取服务器工具列表
@@ -505,7 +626,7 @@ class McpClient:
             future = self.afSendPing(serverName)
             return future.result(timeout=timeout)
         except Exception as e:
-            logger.error(f"Error sending ping to server {serverName}: {e}")
+            self.AAXW_CLASS_LOGGER.error(f"Error sending ping to server {serverName}: {e}\n{traceback.format_exc()}")
             return False
 
     def afSendPing(self, serverName: str) -> Future:
@@ -544,9 +665,13 @@ async def cmdInteractServerMonitor(client: McpClient, serverName: str):
                 print(f"[心跳检测] {serverName} ping 成功")
             except Exception as e:
                 print(f"[心跳检测] {serverName} ping 失败: {e}")
+                client.AAXW_CLASS_LOGGER.error(f"Error in server monitor ping: {e}\n{traceback.format_exc()}")
             await asyncio.sleep(3)
     except asyncio.CancelledError:
         print(f"停止监控服务器 {serverName}")
+    except Exception as e:
+        print(f"监控服务器出错: {e}")
+        client.AAXW_CLASS_LOGGER.error(f"Error in server monitor: {e}\n{traceback.format_exc()}")
 
 async def cmdInteract(client: McpClient):
     """命令行交互界面"""
@@ -587,7 +712,7 @@ async def cmdInteract(client: McpClient):
                     serverConfig = client.config["mcpServers"][serverName]
                     session = McpClientSession(serverName, serverConfig, client)
                     client.mcpClientSessions[serverName] = session
-                    await session.aInitialize()
+                    await session.aInitialize(client.exitStack)
                     print(f"Server {serverName} started successfully")
                 
                 elif choice == "3":
@@ -658,6 +783,7 @@ async def cmdInteract(client: McpClient):
                 
             except Exception as e:
                 print(f"Error: {e}")
+                client.AAXW_CLASS_LOGGER.error(f"Error in command execution: {e}\n{traceback.format_exc()}")
     finally:
         # 确保关闭客户端
         client.close()
@@ -698,7 +824,7 @@ if __name__ == "__main__":
             print("\nReceived keyboard interrupt, shutting down...")
         except Exception as e:
             print(f"\nError: {e}")
-            logger.error(f"Error in main: {e}", exc_info=True)
+            AAXW_JUMPIN_MODULE_LOGGER.error(f"Error in main: {e}\n{traceback.format_exc()}")
         finally:
             # 确保关闭所有资源
             if client:
@@ -707,8 +833,61 @@ if __name__ == "__main__":
                         session = client.mcpClientSessions[serverName]
                         await session.aClose()
                     except Exception as e:
-                        logger.error(f"Error closing session {serverName}: {e}")
+                        AAXW_JUMPIN_MODULE_LOGGER.error(f"Error closing session {serverName}: {e}\n{traceback.format_exc()}")
                 client.close()
             print("Program terminated.")
 
-    asyncio.run(main())
+    # asyncio.run(main())
+
+    # 设置日志级别
+    # logging.basicConfig(level=logging.DEBUG)
+    logging.basicConfig(level=logging.INFO)
+    AAXW_JUMPIN_MODULE_LOGGER.setLevel(logging.DEBUG)
+    try:
+        # 1. 创建客户端并初始化
+        AAXW_JUMPIN_MODULE_LOGGER.info("Creating MCP client...")
+        client = McpClient("./mcp.json")
+        if not client.initialize():
+            AAXW_JUMPIN_MODULE_LOGGER.error("Failed to initialize client")
+            exit(1)
+        
+        # 2. 获取所有配置的服务器
+        servers = client.getConfiguredServers()
+        AAXW_JUMPIN_MODULE_LOGGER.info(f"Configured servers: {servers}")
+        
+        # 3. 测试第一个服务器
+        test_server = servers[2]
+        AAXW_JUMPIN_MODULE_LOGGER.info(f"Testing server: {test_server}")
+        
+        try:
+            # 4. 启动服务器
+            AAXW_JUMPIN_MODULE_LOGGER.info(f"Starting server {test_server}...")
+            if not client.startServer(test_server):
+                AAXW_JUMPIN_MODULE_LOGGER.error(f"Failed to start server {test_server}")
+            AAXW_JUMPIN_MODULE_LOGGER.info(f"Server {test_server} started successfully")
+            
+            # 5. 获取工具列表
+            time.sleep(2)
+            AAXW_JUMPIN_MODULE_LOGGER.info(f"Listing tools for server {test_server}...")
+            tools = client.listTools(test_server)
+            AAXW_JUMPIN_MODULE_LOGGER.info(f"Available tools: {tools}")
+            
+            # 6. 等待3秒
+            AAXW_JUMPIN_MODULE_LOGGER.info("Waiting for 3 seconds...")
+            time.sleep(3)
+            
+            # 7. 停止服务器
+            AAXW_JUMPIN_MODULE_LOGGER.info(f"Stopping server {test_server}...")
+            if not client.stopServer(test_server):
+                AAXW_JUMPIN_MODULE_LOGGER.error(f"Failed to stop server {test_server}")
+            AAXW_JUMPIN_MODULE_LOGGER.info(f"Server {test_server} stopped successfully")
+            
+        finally:
+            # 8. 关闭客户端
+            AAXW_JUMPIN_MODULE_LOGGER.info("Closing client...")
+            client.close()
+            AAXW_JUMPIN_MODULE_LOGGER.info("Client closed")
+            
+    except Exception as e:
+        AAXW_JUMPIN_MODULE_LOGGER.error(f"Test failed with error: {e}", exc_info=True)
+        exit(1)

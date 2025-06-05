@@ -251,6 +251,9 @@ if __name__ == "__main__":
             defaultCompoApplet=AAXWJumpinDefaultCompoApplet()
             appletManager.addApplet(defaultCompoApplet)
             appletManager.activateApplet(0) #激活默认applet
+            
+            #初始化界面需要依赖DefaultCompoApplet的部分： @FIXME 需要改进
+            mainWindow.initAppResAfterDefaultCompoApplet()
 
             #检测内置插件 
             pluginManager.detectBuiltinPlugins() 
