@@ -121,7 +121,7 @@ class MCPConfigHandler(QObject):
                 if mcpClient.sendPing(serverName, timeout=1.0):
                     AAXW_JUMPIN_MODULE_LOGGER.info(f"[{serverName}] 服务器运行中，ping成功")
                     return "running"
-                AAXW_JUMPIN_MODULE_LOGGER.error(f"[{serverName}] 服务器配置了自动启动但ping失败")
+                AAXW_JUMPIN_MODULE_LOGGER.warning(f"[{serverName}] 服务器配置了自动启动但ping失败")
                 return "error"  # 配置了自动启动但ping失败
             except Exception as e:
                 if "is not running" in str(e):

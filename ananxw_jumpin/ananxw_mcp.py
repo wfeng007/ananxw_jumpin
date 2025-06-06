@@ -62,7 +62,7 @@ AAXW_JUMPIN_MODULE_LOGGER:logging.Logger=AAXW_JUMPIN_LOG_MGR.getModuleLogger(
     module=sys.modules[__name__])
 
 
-@AAXW_JUMPIN_LOG_MGR.classLogger()
+@AAXW_JUMPIN_LOG_MGR.classLogger(level=logging.DEBUG)
 class McpClientSession:
     """表示MCP客户端中的一个服务器会话，管理与目标服务器的通信。
     适配了sse与stdio的实现。
@@ -178,28 +178,32 @@ class McpClientSession:
                     readStream, writeStream = self.transportInstance
                     if hasattr(readStream, 'aclose'):
                         await readStream.aclose()
-                    elif hasattr(readStream, 'close'):
-                        await readStream.close()
-                    else:
+                        self.AAXW_CLASS_LOGGER.debug("关闭readStream实例(aclose)")
+                    if hasattr(readStream, 'close'):
+                        readStream.close()
+                        self.AAXW_CLASS_LOGGER.debug("关闭readStream实例(close)")
+                    if not hasattr(readStream, 'aclose') and not hasattr(readStream, 'close'):
                         self.AAXW_CLASS_LOGGER.warning("readStream传输实例没有close/aclose方法")
                         
                     if hasattr(writeStream, 'aclose'):
                         await writeStream.aclose()
-                    elif hasattr(writeStream, 'close'):
-                        await writeStream.close()
-                    else:
+                        self.AAXW_CLASS_LOGGER.debug("关闭writeStream实例(aclose)")
+                    if hasattr(writeStream, 'close'):
+                        writeStream.close()
+                        self.AAXW_CLASS_LOGGER.debug("关闭writeStream实例(close)")
+                    if not hasattr(writeStream, 'aclose') and not hasattr(writeStream, 'close'):
                         self.AAXW_CLASS_LOGGER.warning("writeStream传输实例没有close/aclose方法")
                         
                 elif hasattr(self.transportInstance, 'aclose'):
-                    self.AAXW_CLASS_LOGGER.debug("关闭单一传输实例(aclose)")
                     await self.transportInstance.aclose()
+                    self.AAXW_CLASS_LOGGER.debug("关闭单一传输实例(aclose)")
                 elif hasattr(self.transportInstance, 'close'):
-                    self.AAXW_CLASS_LOGGER.debug("关闭单一传输实例(close)")
                     await self.transportInstance.close()
+                    self.AAXW_CLASS_LOGGER.debug("关闭单一传输实例(close)")
                 else:
                     self.AAXW_CLASS_LOGGER.warning("transportInstance 没有close/aclose方法")
                 
-                self.AAXW_CLASS_LOGGER.debug(f"传输实例关闭完成: {self.targetServerName}")
+                self.AAXW_CLASS_LOGGER.info(f"传输实例关闭完成: {self.targetServerName}")
         except Exception as e:
             self.AAXW_CLASS_LOGGER.error(f"Error closing server {self.targetServerName}: {e}\n{traceback.format_exc()}")
             raise
@@ -677,8 +681,14 @@ class McpClient:
         try:
             future = self.afSendPing(serverName)
             return future.result(timeout=timeout)
+        except ResourceWarning as rw:
+            self.AAXW_CLASS_LOGGER.warning(f"Failed sending ping to server {serverName} , ResourceWarning:{rw}") 
+            return False
+        except anyio.ClosedResourceError as cre:
+            self.AAXW_CLASS_LOGGER.warning(f"Failed sending ping to server {serverName} , ClosedResourceError:{cre}") 
+            return False
         except Exception as e:
-            self.AAXW_CLASS_LOGGER.error(f"Error sending ping to server {serverName}: {e}\n{traceback.format_exc()}")
+            self.AAXW_CLASS_LOGGER.warning(f"Error sending ping to server {serverName}: {e}\n{traceback.format_exc()}")
             return False
 
     def afSendPing(self, serverName: str) -> Future:
@@ -695,7 +705,7 @@ class McpClient:
             
         session = self.mcpClientSessions.get(serverName)
         if not session:
-            raise ValueError(f"Server {serverName} is not running")
+            raise ResourceWarning(f"Server {serverName} is not running")
             
         return self._run_coro_and_get_future(session.aPing())
 
@@ -839,6 +849,7 @@ async def cmdInteract(client: McpClient):
     finally:
         # 确保关闭客户端
         client.close()
+
 
 if __name__ == "__main__":
     import argparse
