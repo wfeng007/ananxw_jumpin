@@ -162,22 +162,54 @@ class McpClientSession:
             raise
 
     async def aClose(self):
-        """异步关闭会话连接"""
+        """异步关闭会话连接
+        
+        注意：
+        1. 只关闭 transport 层资源（readStream, writeStream）
+        2. mcpSession 由 ExitStack 管理，不在这里直接关闭
+        3. 清理引用防止内存泄漏
+        """
         try:
-            # 让 exitStack 处理所有资源的清理
-            # 因为所有资源(mcpSession和transport)都是通过exitStack.enter_async_context创建的
-            # 所以只需要关闭exitStack即可,它会按照FILO顺序清理所有资源
-            if self._parent_stack:
-                await self._parent_stack.aclose()
+            # mcpSession 由 ExitStack 管理，这里不直接关闭
+            # 只关闭 transport 层资源
+            if self.transportInstance:
+                self.AAXW_CLASS_LOGGER.debug(f"正在关闭传输实例: {self.transportInstance}")
+                if isinstance(self.transportInstance, tuple):
+                    readStream, writeStream = self.transportInstance
+                    if hasattr(readStream, 'aclose'):
+                        await readStream.aclose()
+                    elif hasattr(readStream, 'close'):
+                        await readStream.close()
+                    else:
+                        self.AAXW_CLASS_LOGGER.warning("readStream传输实例没有close/aclose方法")
+                        
+                    if hasattr(writeStream, 'aclose'):
+                        await writeStream.aclose()
+                    elif hasattr(writeStream, 'close'):
+                        await writeStream.close()
+                    else:
+                        self.AAXW_CLASS_LOGGER.warning("writeStream传输实例没有close/aclose方法")
+                        
+                elif hasattr(self.transportInstance, 'aclose'):
+                    self.AAXW_CLASS_LOGGER.debug("关闭单一传输实例(aclose)")
+                    await self.transportInstance.aclose()
+                elif hasattr(self.transportInstance, 'close'):
+                    self.AAXW_CLASS_LOGGER.debug("关闭单一传输实例(close)")
+                    await self.transportInstance.close()
+                else:
+                    self.AAXW_CLASS_LOGGER.warning("transportInstance 没有close/aclose方法")
+                
+                self.AAXW_CLASS_LOGGER.debug(f"传输实例关闭完成: {self.targetServerName}")
         except Exception as e:
             self.AAXW_CLASS_LOGGER.error(f"Error closing server {self.targetServerName}: {e}\n{traceback.format_exc()}")
             raise
         finally:
             # 清理所有引用
-            self.mcpSession = None
+            self.mcpSession = None  # 由 ExitStack 管理清理
             self.transportInstance = None
             self._initialized.clear()
-            self._parent_stack = None
+            # 不清除 parent_stack 的引用，因为它是共享资源
+            # self._parent_stack = None
 
     async def aListTools(self) -> List[types.Tool]:
         """异步获取工具列表"""
@@ -235,7 +267,11 @@ class McpClient:
             self.config = configContentDict
         else:
             self.config = self._loadConfig()
-            
+    
+    # mcp底层的逻辑导致暂时只能用这种循环处理start stop在同一个协程task中处理对应动作
+    #   否则就会报错。对于部分实现如stdio，start，stop并不是类似jdbc的数据连轻量或后台有pool化实现。
+    #   无法兼容用成统一的 单方法中完成start stop。但sse的底层实现又用了 async context manager方式。
+    #   很难介入管理生命周期资源，又要在同一个协程task中处理对应动作。
     async def _main_loop_context(self):
         """使用 AsyncExitStack 管理所有资源的主循环"""
         async with self.exitStack as main_stack:
@@ -422,6 +458,17 @@ class McpClient:
                 self.AAXW_CLASS_LOGGER.debug("发送shutdown信号到操作队列")
                 await self._operation_queue.put({"type": "shutdown"})
             
+            # 先关闭所有session的资源
+            server_names = list(self.mcpClientSessions.keys())
+            for name in reversed(server_names):
+                try:
+                    session = self.mcpClientSessions[name]
+                    await session.aClose()
+                except Exception as e:
+                    self.AAXW_CLASS_LOGGER.error(f"Error closing session {name}: {e}")
+                finally:
+                    del self.mcpClientSessions[name]
+            
             # 等待主任务完成
             if self._main_task:
                 self.AAXW_CLASS_LOGGER.debug("等待主任务完成...")
@@ -432,6 +479,11 @@ class McpClient:
                     self.AAXW_CLASS_LOGGER.warning("等待主任务超时")
                 except Exception as e:
                     self.AAXW_CLASS_LOGGER.error(f"等待主任务时发生错误: {e}")
+
+            # 最后关闭 ExitStack
+            if self.exitStack:
+                self.AAXW_CLASS_LOGGER.debug("关闭 ExitStack...")
+                await self.exitStack.aclose()
 
             # 关闭事件循环
             if self._unified_client_loop and self._unified_client_loop.is_running():
