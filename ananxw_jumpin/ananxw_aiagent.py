@@ -766,7 +766,7 @@ class SPTAProcessor(StateMachineProcessor):
         
         自动化规则：
         1. 对于MESSAGE类型事件：
-           - 如果消息长度小于5个字符，采用直接模式（ACTING）
+           - 如果消息长度小于30个字符，采用直接模式（ACTING）
            - 否则进入完整感知流程（PERCEIVING）
         2. 其他类型事件默认进入完整感知流程
         """
@@ -774,13 +774,13 @@ class SPTAProcessor(StateMachineProcessor):
         
         # 对于MESSAGE类型事件，根据消息长度决定处理模式
         if event.getEventType() == AgentSensoryEvent.MESSAGE:
-            if len(event.message.strip()) < 5:  # 去除空白字符后判断长度
+            if len(event.message.strip()) < 30:  # 去除空白字符后判断长度
                 self.AAXW_CLASS_LOGGER.debug(
-                    f"消息长度小于5个字符，（直接）进入行动状态模式: {event.message}")
+                    f"消息长度小于30个字符，（直接）进入行动状态模式: {event.message}")
                 state.currentState = AgentSPTAState.ACTING
             else:
                 self.AAXW_CLASS_LOGGER.debug(
-                    f"消息长度大于等于5个字符，进入知觉状态模式: {event.message}")
+                    f"消息长度大于等于30个字符，进入知觉状态模式: {event.message}")
                 state.currentState = AgentSPTAState.PERCEIVING
         else:
             # 其他类型事件使用完整感知流程
@@ -851,10 +851,15 @@ class SPTAProcessor(StateMachineProcessor):
             action = state.agent.actionActuator.getAction(state.currentActionNLRName)
             if action and state.perceivingOutput:
                 try:
+                    # 获取入口事件（如果当前事件没有关联的入口事件，则当前事件就是入口事件）
+                    entry_event = state.event.entryEvent or state.event.getEntryEvent()
+                    entry_callback = entry_event.callback if entry_event else None
+                    
                     # 检查是否需要特殊处理ReplyUserAction
                     if (isinstance(action, ReplyUserAction) and 
-                        state.event.getEventType() == AgentSensoryEvent.MESSAGE and 
-                        state.event.callback):
+                        entry_event and 
+                        entry_event.getEventType() == AgentSensoryEvent.MESSAGE and 
+                        entry_callback):
                         
                         # 获取或创建直接回复动作
                         direct_reply_action = state.agent.actionActuator.getSensoryReflexAction("直接回复")
@@ -866,10 +871,11 @@ class SPTAProcessor(StateMachineProcessor):
                             state.agent.actionActuator.addAction(direct_reply_action)
                         
                         # 使用直接回复动作处理
-                        # TODO: 后续可以将perceiving的结果内容加入到message中
+                        # @TODO: 后续可以将perceiving的结果内容加入到message中;
+                        # 而不是简单的给个入口信息。
                         result = direct_reply_action.invoke({
-                            "message": state.event.message,
-                            "callback": state.event.callback,
+                            "message": entry_event.message,  # 使用入口事件的消息
+                            "callback": entry_callback,      # 使用入口事件的回调
                             "isStream": True
                         })
                         print(f"\n[{state.agent.name}] 思考: {state.perceivingOutput.thought}")
@@ -893,13 +899,11 @@ class SPTAProcessor(StateMachineProcessor):
                             source="self",
                             lastEvent=state.event,  # 保存当前事件作为下一个事件的上一个事件
                             lastResult=result,  # 保存当前执行结果
-                            # 关联入口事件：优先使用上一个事件的入口事件，如果没有则使用上一个事件本身（如果是入口事件的话）
-                            entryEvent=state.event.entryEvent or state.event.getEntryEvent()
+                            entryEvent=entry_event  # 保持对原入口事件的引用
                         )
                         state.agent.stemQueue.put(new_event)
                     else:
                         # 如果没有下一步动作，标记入口事件为完成
-                        entry_event = state.event.entryEvent or state.event.getEntryEvent()
                         if entry_event:
                             entry_event.markCompleted()
                     
