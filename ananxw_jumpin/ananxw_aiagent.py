@@ -78,12 +78,18 @@ class AgentSensoryEvent:
     ENV: ClassVar[str] = "ENV"          # 环境事件，如系统命令、环境变化等
     MESSAGE: ClassVar[str] = "MESSAGE"  # 消息事件，如用户输入、对话等
     
+    # 感知反射模式枚举
+    class SensoryReflexMode(str, Enum):
+        AUTOMATIC = "automatic"    # 自动模式：系统根据事件类型和内容自动选择处理方式
+        DIRECTNESS = "directness"  # 直接模式：跳过感知过程，直接执行动作
+        PERCEPTION = "perception"  # 感知模式：完整执行感知-认知-思考-行动流程
+    
     message: str                        # 事件消息内容
     eventType: str = MESSAGE            # 事件类型标识
     source: str = "user"                # 事件来源
     timestamp: datetime = field(default_factory=datetime.now)
-    # 当前暂时 isSensoryReflex  只有MESSAGE类型使用，有对应action。
-    isSensoryReflex: bool = False       # 是否为感觉反射事件，True时是要求跳过perceiving直接执行action
+    # 感知反射模式，默认为自动模式
+    sensoryReflexMode: SensoryReflexMode = field(default=SensoryReflexMode.AUTOMATIC)
     # 入口事件完成标志，只对MESSAGE和ENV类型有意义
     isCompleted: bool = field(default=False)  # 标记事件是否已完成处理
 
@@ -91,7 +97,8 @@ class AgentSensoryEvent:
     lastResult: Optional[str] = field(default=None)  # 上一次执行结果
     # 入口事件，对外部请求的缓存引用
     entryEvent: Optional['AgentSensoryEvent'] = field(default=None)  # 关联的入口事件（MESSAGE或ENV类型）
-    #TODO 当前暂时没想好 perceiving过程如何处理。 （1些细节，如果未被回调如何识别到？做动态代理做切面计数来实现？）
+    #TODO 当前暂时没想好 perceiving过程如何处理。 
+    #   （1些细节，如果未被回调如何识别到？做动态代理做切面计数来实现？）
     callback: Optional[Callable[[str], None]] = field(default=None)  # 流式回调函数
 
     def markCompleted(self):
@@ -151,7 +158,7 @@ class AgentSensoryEvent:
 
 # TODO 考虑增加1st-order-logic的实现；提供1st-order指令的schema
 class PerceivingOutput(BaseModel):
-    """基础动作输出模型"""
+    """基础动作输出模型，并包含图式描述信息。"""
     actionName: str = Field(description="执行的动作名称")
     nextActionName: str = Field(default="", description="下一步建议的动作名称")
     thought: str = Field(description="对当前情况的理解和计划")
@@ -169,12 +176,12 @@ class PerceivingOutput(BaseModel):
 
     @classmethod
     def getFormatInstructions(cls) -> str:
-        """获取输出格式说明"""
+        """获取输出格式说明，可用于LLM prompt中加入的输出格式说明。"""
         return cls.getParser().get_format_instructions()
 
     @classmethod
     def parseOutput(cls, output: str) -> 'PerceivingOutput':
-        """解析LLM的输出"""
+        """解析LLM的输出，用于对实际信息文本解析，形成模型的实例。"""
         return cls.getParser().parse(output)
 
 class BaseAgentAction(BaseTool):
@@ -347,7 +354,7 @@ class BaseAgent(ABC):
     @abstractmethod
     def run(self):
         """运行Agent"""
-        raise NotImplementedError("senseMessageAndCallback 方法需要在子类中实现")
+        raise NotImplementedError("run 方法需要在子类中实现")
 
     def sendMessageToMe(self, message: str):
         """发送消息到Agent"""
@@ -580,7 +587,7 @@ class ReplyUserAction(BaseAgentAction):
 
 
 class DirectReplyAction(BaseAgentAction):
-    """直接回复动作 - 支持流式回调的 LLM 回复"""
+    """直接回复动作 - 支持流式回调的 基于LLM处理的回复"""
     name: str = "直接回复"
     description: str = "与LLM进行直接回复，支持流式响应"
     is_sensory_reflex: bool = True  # 标记为感觉反射动作，不参与perception流程
@@ -722,28 +729,64 @@ class SPTAProcessor(StateMachineProcessor):
         """感知状态处理"""
         try:
             event = state.agent.stemQueue.get_nowait()
-            # print(f"onSensing 当前事件: {event}")
             self.AAXW_CLASS_LOGGER.info(f"onSensing 当前事件: {event}")
             
+            #特殊事件退出。可能需要考虑其他退出逻辑
             if event.getEventType() == AgentSensoryEvent.ENV and event.message == "stop":
                 state.currentState = AgentSPTAState.END
                 return state
             
-            # 处理感觉反射事件 - 跳过perception和thinking，直接转到acting
-            if event.isSensoryReflex:
-                state.event = event  # 保存当前事件到状态
+            # 保存当前事件到状态
+            state.event = event
+            
+            # 根据感知反射模式处理事件
+            if event.sensoryReflexMode == AgentSensoryEvent.SensoryReflexMode.DIRECTNESS:
+                # 直接模式：跳过感知过程，直接转到执行阶段
                 state.currentState = AgentSPTAState.ACTING
                 return state
             
-            # 增加对 INNER、ENV、MESSAGE 事件的统一处理
-            if event.getEventType() in [AgentSensoryEvent.INNER, AgentSensoryEvent.ENV, AgentSensoryEvent.MESSAGE]:
-                state.event = event  # 保存当前事件到状态
+            elif event.sensoryReflexMode == AgentSensoryEvent.SensoryReflexMode.PERCEPTION:
+                # 感知模式：强制执行完整的感知-认知-思考-行动流程
                 state.currentState = AgentSPTAState.PERCEIVING
+                return state
+            
+            elif event.sensoryReflexMode == AgentSensoryEvent.SensoryReflexMode.AUTOMATIC:
+                # 自动模式：根据事件类型和内容自动选择处理方式
+                state=self._handleSensoryReflexAutomatic(state)
                 return state
             
         except queue.Empty:
             state.currentState = AgentSPTAState.END
             return state
+        
+        return state
+    
+    def _handleSensoryReflexAutomatic(self, state: AgentSPTAState) -> AgentSPTAState:
+        """处理自动感知反射模式（临时的简单实现）
+        
+        自动化规则：
+        1. 对于MESSAGE类型事件：
+           - 如果消息长度小于5个字符，采用直接模式（ACTING）
+           - 否则进入完整感知流程（PERCEIVING）
+        2. 其他类型事件默认进入完整感知流程
+        """
+        event = state.event
+        
+        # 对于MESSAGE类型事件，根据消息长度决定处理模式
+        if event.getEventType() == AgentSensoryEvent.MESSAGE:
+            if len(event.message.strip()) < 5:  # 去除空白字符后判断长度
+                self.AAXW_CLASS_LOGGER.debug(
+                    f"消息长度小于5个字符，（直接）进入行动状态模式: {event.message}")
+                state.currentState = AgentSPTAState.ACTING
+            else:
+                self.AAXW_CLASS_LOGGER.debug(
+                    f"消息长度大于等于5个字符，进入知觉状态模式: {event.message}")
+                state.currentState = AgentSPTAState.PERCEIVING
+        else:
+            # 其他类型事件使用完整感知流程
+            self.AAXW_CLASS_LOGGER.debug(
+                f"非MESSAGE类型事件，进入知觉状态模式: {event.eventType}")
+            state.currentState = AgentSPTAState.PERCEIVING
         
         return state
     
@@ -798,69 +841,100 @@ class SPTAProcessor(StateMachineProcessor):
     
     def onActing(self, state: AgentSPTAState) -> AgentSPTAState:
         """行动状态处理"""
-        # 检查是否为感觉反射事件
-        if state.event and state.event.isSensoryReflex:
-            # 处理感觉反射事件 - 直接执行对应的感觉反射动作
-            return self._handleSensoryReflexEvent(state)
-        
-        # 处理常规事件 - 通过perception结果执行动作
-        action = state.agent.actionActuator.getAction(state.currentActionNLRName)
-        if action and state.perceivingOutput:
-            try:
-                # 使用perceivingOutput中的参数执行动作
-                result = action.invoke(state.perceivingOutput.args)
-                
-                # 添加响应消息，包含思考过程和执行结果
-                print(f"\n[{state.agent.name}] 思考: {state.perceivingOutput.thought}")
-                print(f"[{state.agent.name}] 执行: {result}")
-                
-                # 如果当前事件是内部事件, 则将该事件设置为完成
-                if state.event.eventType == AgentSensoryEvent.INNER:
-                    state.event.markCompleted()
-                
-                # 如果有下一步动作信息，将当前执行结果和下一步动作信息一起写入事件
-                if state.nextActionNLRName:
-                    # 创建新的内部事件
-                    new_event = AgentSensoryEvent(
-                        message=f" 需要进行：{state.nextActionNLRName}",
-                        eventType=AgentSensoryEvent.INNER,
-                        source="self",
-                        lastEvent=state.event,  # 保存当前事件作为下一个事件的上一个事件
-                        lastResult=result,  # 保存当前执行结果
-                        # 关联入口事件：优先使用上一个事件的入口事件，如果没有则使用上一个事件本身（如果是入口事件的话）
-                        entryEvent=state.event.entryEvent or state.event.getEntryEvent()
-                    )
-                    state.agent.stemQueue.put(new_event)
-                else:
-                    # 如果没有下一步动作，标记入口事件为完成
+        try:
+            # 检查是否为直接模式
+            if state.event.sensoryReflexMode == AgentSensoryEvent.SensoryReflexMode.DIRECTNESS:
+                # 直接模式 - 使用感知反射事件处理
+                return self._handleSensoryReflexEvent(state)
+            
+            # 处理常规事件 - 通过perceiving阶段后的结果 再执行动作
+            action = state.agent.actionActuator.getAction(state.currentActionNLRName)
+            if action and state.perceivingOutput:
+                try:
+                    # 检查是否需要特殊处理ReplyUserAction
+                    if (isinstance(action, ReplyUserAction) and 
+                        state.event.getEventType() == AgentSensoryEvent.MESSAGE and 
+                        state.event.callback):
+                        
+                        # 获取或创建直接回复动作
+                        direct_reply_action = state.agent.actionActuator.getSensoryReflexAction("直接回复")
+                        if not direct_reply_action:
+                            direct_reply_action = DirectReplyAction(
+                                llm=state.agent.llm, 
+                                agent_name=state.agent.name
+                            )
+                            state.agent.actionActuator.addAction(direct_reply_action)
+                        
+                        # 使用直接回复动作处理
+                        # TODO: 后续可以将perceiving的结果内容加入到message中
+                        result = direct_reply_action.invoke({
+                            "message": state.event.message,
+                            "callback": state.event.callback,
+                            "isStream": True
+                        })
+                        print(f"\n[{state.agent.name}] 思考: {state.perceivingOutput.thought}")
+                        print(f"[{state.agent.name}] 执行(直接回复): {result}")
+                    else:
+                        # 常规动作执行
+                        result = action.invoke(state.perceivingOutput.args)
+                        print(f"\n[{state.agent.name}] 思考: {state.perceivingOutput.thought}")
+                        print(f"[{state.agent.name}] 执行: {result}")
+                    
+                    # 如果当前事件是内部事件, 则将该事件设置为完成
+                    if state.event.eventType == AgentSensoryEvent.INNER:
+                        state.event.markCompleted()
+                    
+                    # 如果有下一步动作信息，将当前执行结果和下一步动作信息一起写入事件
+                    if state.nextActionNLRName:
+                        # 创建新的内部事件
+                        new_event = AgentSensoryEvent(
+                            message=f" 需要进行：{state.nextActionNLRName}",
+                            eventType=AgentSensoryEvent.INNER,
+                            source="self",
+                            lastEvent=state.event,  # 保存当前事件作为下一个事件的上一个事件
+                            lastResult=result,  # 保存当前执行结果
+                            # 关联入口事件：优先使用上一个事件的入口事件，如果没有则使用上一个事件本身（如果是入口事件的话）
+                            entryEvent=state.event.entryEvent or state.event.getEntryEvent()
+                        )
+                        state.agent.stemQueue.put(new_event)
+                    else:
+                        # 如果没有下一步动作，标记入口事件为完成
+                        entry_event = state.event.entryEvent or state.event.getEntryEvent()
+                        if entry_event:
+                            entry_event.markCompleted()
+                    
+                except Exception as e:
+                    print(f"\n[{state.agent.name}] 执行出错: {str(e)}")
+                    # 发生错误时也要标记入口事件为完成
                     entry_event = state.event.entryEvent or state.event.getEntryEvent()
                     if entry_event:
                         entry_event.markCompleted()
-                
-                
-        # @FIXME 之后需要把错误情况也回执给 入口事件？
-            except Exception as e:
-                print(f"\n[{state.agent.name}] 执行出错: {str(e)}")
-                # 发生错误时也要标记入口事件为完成
+                finally:
+                    state.currentState = AgentSPTAState.END
+            else:
+                print(f"\n[{state.agent.name}] 无法执行动作: {state.currentActionNLRName}")
+                # 无法执行动作时也要标记入口事件为完成
                 entry_event = state.event.entryEvent or state.event.getEntryEvent()
                 if entry_event:
                     entry_event.markCompleted()
-            finally:
-                #必然设置为结束
                 state.currentState = AgentSPTAState.END
-        else:
-            print(f"\n[{state.agent.name}] 无法执行动作: {state.currentActionNLRName}")
-            # 无法执行动作时也要标记入口事件为完成
-            entry_event = state.event.entryEvent or state.event.getEntryEvent()
-            if entry_event:
-                entry_event.markCompleted()
-                
+            
+        except Exception as e:
+            self.AAXW_CLASS_LOGGER.error(f"onActing 异常: {str(e)}", exc_info=True)
+            # 异常时也要标记入口事件为完成
+            if state.event:
+                entry_event = state.event.entryEvent or state.event.getEntryEvent()
+                if entry_event:
+                    entry_event.markCompleted()
             state.currentState = AgentSPTAState.END
         
         return state
     
     def _handleSensoryReflexEvent(self, state: AgentSPTAState) -> AgentSPTAState:
-        """处理感觉反射事件"""
+        """处理感知反射事件
+        
+        处理直接模式和自动模式下需要直接执行的事件。
+        """
         try:
             event = state.event
             agent = state.agent
@@ -976,10 +1050,6 @@ class StateMachineAgent(BaseAgent):
         self.stateMachine:CompiledStateGraph = self._createStateMachine()
         self.isReqStop = False
 
-    # @TODO 与其他感知事件的回调方式融合统一。
-    # @TODO 当前要求实现为同步，需要考虑同时提供可异步的方式。至少提供Future模式的异步方式。
-    #   比如用 afSenseMessageAndCallback -> from concurrent.futures.Future
-    #   当前只是简单的写入Queue是纯异步实现。
     @override
     def senseMessageAndCallback(self, message: str, callback: Callable[[str], None]):
         """感知（发送）消息到Agent,并通过回调反馈结果
@@ -996,7 +1066,7 @@ class StateMachineAgent(BaseAgent):
                 eventType=AgentSensoryEvent.MESSAGE,
                 source="user",
                 callback=callback,
-                isSensoryReflex=True  # 标记为感觉反射事件
+                sensoryReflexMode=AgentSensoryEvent.SensoryReflexMode.AUTOMATIC  # 使用改为自适应
             )
             self.stemQueue.put(event)
             
@@ -1134,7 +1204,7 @@ class PromptTemplateProvider:
         template = """# 使命与角色(life goal)
 你是一个综合能力很强的智能主体。根据用户的信息、事件输入、前次思考执行情况，选择合适的动作来执行以及回复用户。
 后续信息或任务事件中"事件内容"是本次具体任务。具体任务的执行时的偏向，需要围绕本"使命与角色"的上层目标来执行。
-你也会根据"用户要求的使命与角色"进行补充角色与使命的补充、增强与偏向。
+你也会根据"用户要求的使命与角色"进行角色与使命的补充、增强与偏向。
 ## 用户要求的使命与角色
 {life_goal_or_role}
 
