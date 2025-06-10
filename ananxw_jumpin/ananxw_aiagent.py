@@ -567,27 +567,24 @@ class AgentSPTAState(BaseModel):
 class ReplyUserAction(BaseAgentAction):
     """回复用户动作"""
     name: str = "回复用户"
-    description: str = "直接回复用户消息"
+    description: str = "回复用户消息"
 
     class ArgumentSchema(BaseModel):
         """回复用户的参数模型"""
         content: str = Field(..., description="回复的内容")
-        memoName: Optional[str] = Field(default="", description="可选的关联备忘录名称")
 
     args_schema: Type[BaseModel] = ArgumentSchema
 
     @override
-    def _run(self, content: str, memoName: str = "") -> str:
-        if memoName:
-            print(f"[模拟] 回复用户(关联备忘录 {memoName}): {content}")
-            return f"已回复用户(关联备忘录 {memoName}): {content}"
-        else:
-            print(f"[模拟] 回复用户: {content}")
-            return f"已回复用户: {content}"
+    def _run(self, content: str) -> str:
+        print(f"[模拟] 回复用户: {content}")
+        return f"已回复用户: {content}"
 
-
+@AAXW_AIAGENT_LOG_MGR.classLogger(level=logging.DEBUG)
 class DirectReplyAction(BaseAgentAction):
     """直接回复动作 - 支持流式回调的 基于LLM处理的回复"""
+    AAXW_CLASS_LOGGER: ClassVar[logging.Logger]
+
     name: str = "直接回复"
     description: str = "与LLM进行直接回复，支持流式响应"
     is_sensory_reflex: bool = True  # 标记为感觉反射动作，不参与perception流程
@@ -599,6 +596,7 @@ class DirectReplyAction(BaseAgentAction):
     class ArgumentSchema(BaseModel):
         """直接回复的参数模型"""
         message: str = Field(..., description="用户消息内容")
+        known_content:str =Field(default="", description="已知信息内容")
         isStream: bool = Field(default=True, description="是否使用流式响应")
         callback: Optional[Callable[[str], None]] = Field(default=None, description="流式响应回调函数")
 
@@ -614,22 +612,32 @@ class DirectReplyAction(BaseAgentAction):
         )
 
     @override
-    def _run(self, message: str, isStream: bool = True, callback: Callable[[str], None] = None) -> str:
+    def _run(self, message: str,known_content:str="",isStream: bool = True, callback: Callable[[str], None] = None) -> str:
         """执行直接回复"""
         if not self.llm:
             error_msg = "LLM实例未配置，无法执行直接回复"
             if callback:
                 callback(f"\n\n[错误] {error_msg}")
             return error_msg
+        
+        if  known_content is None:
+            known_content=""
 
         try:
             # 构建简单的回复提示
-            simple_prompt = f"""你是一个AI助手，名字是{self.agent_name}。
-请根据用户的消息进行友好、准确的回复。
+            simple_prompt = f"""# 使命与角色
+你是一个AI助手，名字是 {self.agent_name}。
+请根据用户的要求以及已知信息，进行友好、准确的回复。
+已知信息是事先经过查询，分析，思考得到的内容，也包含可回复用户的主干内容。
+回复的内容，请符合Markdown格式。
 
-用户消息：{message}
+# 已知信息
+{known_content}
 
-请回复："""
+# 用户要求
+{message}
+
+根据用户要求请回复: """
             
             if isStream and callback:
                 # 流式响应
@@ -637,6 +645,7 @@ class DirectReplyAction(BaseAgentAction):
                 
                 try:
                     # ChatOpenAI 的流式调用
+                    self.AAXW_CLASS_LOGGER.debug(f"DirectReplyAction的最终prompt: {simple_prompt}")
                     for chunk in self.llm.stream(simple_prompt):
                         content = chunk.content if hasattr(chunk, 'content') else str(chunk)
                         if content:
@@ -848,13 +857,24 @@ class SPTAProcessor(StateMachineProcessor):
                 return self._handleSensoryReflexEvent(state)
             
             # 处理常规事件 - 通过perceiving阶段后的结果 再执行动作
+
             action = state.agent.actionActuator.getAction(state.currentActionNLRName)
             if action and state.perceivingOutput:
                 try:
                     # 获取入口事件（如果当前事件没有关联的入口事件，则当前事件就是入口事件）
                     entry_event = state.event.entryEvent or state.event.getEntryEvent()
                     entry_callback = entry_event.callback if entry_event else None
+
+                    #  反馈思考内容（markdown 块内引用格式。）
+                    if entry_callback and state.perceivingOutput.thought:
+                        entry_callback(
+                            "\n".join([f"> {line}" for line in state.perceivingOutput.thought.splitlines()]))
+                        entry_callback(" \n\n")
                     
+                    if entry_callback and state.perceivingOutput.actionName:
+                        entry_callback(f"> 将进行 [{state.perceivingOutput.actionName}] 动作。")
+                        entry_callback(" \n\n")
+
                     # 检查是否需要特殊处理ReplyUserAction
                     if (isinstance(action, ReplyUserAction) and 
                         entry_event and 
@@ -863,6 +883,7 @@ class SPTAProcessor(StateMachineProcessor):
                         
                         # 获取或创建直接回复动作
                         direct_reply_action = state.agent.actionActuator.getSensoryReflexAction("直接回复")
+                        # @FIXME 这里其实不用创建，没有则直接用action来调用。
                         if not direct_reply_action:
                             direct_reply_action = DirectReplyAction(
                                 llm=state.agent.llm, 
@@ -871,10 +892,16 @@ class SPTAProcessor(StateMachineProcessor):
                             state.agent.actionActuator.addAction(direct_reply_action)
                         
                         # 使用直接回复动作处理
-                        # @TODO: 后续可以将perceiving的结果内容加入到message中;
-                        # 而不是简单的给个入口信息。
+                        # @TODO: 完善 前置1次思考或多次思考+动作的结果信息（工作记忆） 转入本次回复的已知内容。
+                        # 构造已知信息内容
+                        if state.perceivingOutput.args:
+                            knownContent = f"## 前述思考回复的主要内容:\n{state.perceivingOutput.args['content']}\n\n"
+                        else:
+                            knownContent = ""
+                        self.AAXW_CLASS_LOGGER.debug(f"已知信息: {knownContent}")
                         result = direct_reply_action.invoke({
                             "message": entry_event.message,  # 使用入口事件的消息
+                            "known_content": knownContent,
                             "callback": entry_callback,      # 使用入口事件的回调
                             "isStream": True
                         })
